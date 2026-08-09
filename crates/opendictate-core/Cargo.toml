@@ -1,0 +1,13 @@
+[package]
+name = "opendictate-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core engine for OpenDictate: capture, VAD, transcription, injection"
+
+[dependencies]
+cpal = "0.15"
+sherpa-onnx = "1.12"
+thiserror = "2"
+log = "0.4"
+ureq = "3"

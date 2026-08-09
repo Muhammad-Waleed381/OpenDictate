@@ -1,0 +1,22 @@
+[package]
+name = "opendictate"
+version.workspace = true
+description = "OpenDictate — local-first voice dictation for Linux"
+authors = ["Muhammad-Waleed381"]
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "opendictate_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+opendictate-core = { path = "../crates/opendictate-core" }
