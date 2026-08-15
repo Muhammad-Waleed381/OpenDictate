@@ -131,9 +131,9 @@ export function GeneralTab() {
             <Button
               onClick={handleApplyHotkey}
               disabled={!hotkey.trim()}
-              className={applied ? "bg-[#10B981] hover:bg-[#10B981]" : ""}
+              variant={applied ? "outline" : "default"}
             >
-              {applied ? "Applied" : "Apply"}
+              {applied ? "✓ Applied" : "Apply"}
             </Button>
           </div>
         </div>

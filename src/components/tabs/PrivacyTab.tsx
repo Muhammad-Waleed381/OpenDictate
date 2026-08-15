@@ -12,9 +12,7 @@ export function PrivacyTab() {
       <CardHeader>
         <div className="flex items-center gap-2">
           <CardTitle>Privacy</CardTitle>
-          <Badge className="bg-[#10B981]/15 text-[#10B981]">
-            No telemetry
-          </Badge>
+          <Badge>No telemetry</Badge>
         </div>
         <CardDescription>
           Zero outbound calls except model downloads. Audio never leaves this
@@ -23,23 +21,23 @@ export function PrivacyTab() {
       </CardHeader>
       <CardContent className="flex flex-col gap-3 text-sm">
         <div className="flex flex-col gap-1.5">
-          <span className="font-medium text-[#F8FAFC]">
+          <span className="font-bold uppercase tracking-wider">
             Network endpoints
           </span>
-          <ul className="flex flex-col gap-1 text-[#64748B]">
+          <ul className="flex flex-col gap-1 text-muted-foreground">
             {ENDPOINTS.map((endpoint) => (
               <li key={endpoint} className="flex items-start gap-2">
-                <span className="mt-1.5 size-1 shrink-0 rounded-full bg-[#3B82F6]" />
+                <span className="mt-1 size-2 shrink-0 border border-black bg-black" />
                 {endpoint}
               </li>
             ))}
           </ul>
         </div>
-        <p className="text-[#64748B]">
+        <p className="text-muted-foreground">
           All transcription runs locally via on-device models. Settings,
           history, and your custom dictionary are stored in a single SQLite
           file on your machine. See{" "}
-          <span className="cursor-pointer text-[#3B82F6] underline underline-offset-2">
+          <span className="cursor-pointer font-bold text-foreground underline underline-offset-2">
             PRIVACY.md
           </span>{" "}
           for details.

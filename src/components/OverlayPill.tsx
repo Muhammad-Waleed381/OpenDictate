@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useStore } from "@/lib/store";
 
 const BAR_COUNT = 24;
-const BAR_WIDTH = 3;
+const BAR_WIDTH = 4;
 const BAR_GAP = 2;
 const BUFFER_SIZE = 32;
 
@@ -26,7 +26,7 @@ function Waveform() {
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = "#3B82F6";
+      ctx.fillStyle = "#000000";
 
       const half = Math.floor(BAR_COUNT / 2);
       for (let i = 0; i < half; i++) {
@@ -62,36 +62,50 @@ export function OverlayPill() {
 
   const { state, message } = overlayState;
 
-  const styles: Record<string, string> = {
-    listening: "border-[#3B82F6]/70 text-[#F8FAFC] shadow-[0_0_24px_rgba(59,130,246,0.45)]",
-    transcribing: "border-[#64748B]/60 text-[#F8FAFC]",
-    inserted: "border-[#10B981]/70 text-[#10B981] shadow-[0_0_24px_rgba(16,185,129,0.4)]",
-    error: "border-[#EF4444]/70 text-[#EF4444] shadow-[0_0_24px_rgba(239,68,68,0.4)]",
-  };
-
   return (
     <div className="pointer-events-none fixed inset-0 flex items-start justify-center pt-5">
-      <div
-        className={`pointer-events-none flex h-[76px] max-w-[360px] items-center justify-center gap-3 rounded-full border bg-[#0F172A]/85 px-6 backdrop-blur-md ${styles[state] ?? ""}`}
-      >
-        {state === "listening" && (
-          <>
-            <span className="text-sm font-medium">Listening…</span>
-            <Waveform />
-          </>
-        )}
-        {state === "transcribing" && (
-          <span className="animate-pulse text-sm font-medium">
-            Transcribing…
+      {state === "listening" && (
+        <div className="animate-od-slide-up pointer-events-none flex h-[64px] max-w-[360px] items-center justify-center gap-4 border-2 border-black bg-white px-7 shadow-[6px_6px_0_0_#000]">
+          <span className="size-3 border-2 border-black bg-black animate-od-blink" />
+          <span className="text-sm font-bold tracking-[0.25em] uppercase">
+            Listening
           </span>
-        )}
-        {state === "inserted" && (
-          <span className="text-sm font-medium">Inserted</span>
-        )}
-        {state === "error" && (
-          <span className="text-sm font-medium">{message ?? "Error"}</span>
-        )}
-      </div>
+          <Waveform />
+        </div>
+      )}
+      {state === "transcribing" && (
+        <div className="animate-od-slide-up pointer-events-none relative flex h-[64px] max-w-[360px] items-center justify-center gap-3 overflow-hidden border-2 border-black bg-black px-7 shadow-[6px_6px_0_0_#000]">
+          <span className="animate-od-shimmer absolute inset-0" />
+          <span className="relative text-sm font-bold tracking-[0.25em] text-white uppercase">
+            Transcribing
+          </span>
+          <span className="relative flex gap-1">
+            {[0, 1, 2].map((i) => (
+              <span
+                key={i}
+                className="size-1.5 animate-od-bounce-y bg-white"
+                style={{ animationDelay: `${i * 0.15}s` }}
+              />
+            ))}
+          </span>
+        </div>
+      )}
+      {state === "inserted" && (
+        <div className="animate-od-pop pointer-events-none flex h-[64px] max-w-[360px] items-center justify-center gap-3 border-2 border-black bg-black px-7 shadow-[6px_6px_0_0_#000]">
+          <span className="text-sm font-bold tracking-[0.25em] text-white uppercase">
+            Inserted
+          </span>
+          <span className="text-base font-bold text-white">✓</span>
+        </div>
+      )}
+      {state === "error" && (
+        <div className="animate-od-slide-up pointer-events-none flex h-[64px] max-w-[360px] items-center justify-center gap-3 border-2 border-black bg-white px-7 shadow-[6px_6px_0_0_#000]">
+          <span className="size-3 border-2 border-black bg-black animate-od-blink" />
+          <span className="text-sm font-bold tracking-[0.25em] uppercase">
+            {message ?? "Error"}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

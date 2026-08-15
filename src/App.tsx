@@ -55,12 +55,8 @@ function RecordingButton() {
   };
 
   return (
-    <Button
-      onClick={handleClick}
-      variant={recording ? "destructive" : "default"}
-      size="sm"
-    >
-      {recording ? "Stop" : "Record"}
+    <Button onClick={handleClick} variant={recording ? "outline" : "default"} size="sm">
+      {recording ? "■ STOP" : "● RECORD"}
     </Button>
   );
 }
@@ -70,19 +66,21 @@ function Header() {
   const recording = useStore((s) => s.recording);
 
   return (
-    <header className="flex items-center gap-3 border-b border-border px-6 py-4">
-      <span className="size-2.5 rounded-full bg-[#3B82F6]" />
-      <h1 className="text-sm font-semibold tracking-wide text-[#F8FAFC]">
-        OpenDictate
-      </h1>
-      <Badge variant="outline" className="ml-auto font-mono">
+    <header className="flex items-center gap-3 border-b-2 border-black bg-black px-6 py-3 text-white">
+      <div className="flex items-center gap-2.5">
+        <span className="flex size-5 items-center justify-center border-2 border-white bg-white text-[10px] font-bold text-black">
+          OD
+        </span>
+        <h1 className="text-sm font-bold tracking-[0.2em] uppercase">
+          OpenDictate
+        </h1>
+      </div>
+      <Badge variant="outline" className="ml-auto border-white text-white shadow-none">
         {formatHotkey(settings?.hotkey ?? "ctrl+alt+space")}
       </Badge>
-      <span
-        className={`flex items-center gap-1.5 text-xs ${recording ? "text-[#3B82F6]" : "text-[#64748B]"}`}
-      >
+      <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider">
         <span
-          className={`size-2 rounded-full ${recording ? "animate-pulse bg-[#3B82F6]" : "bg-[#334155]"}`}
+          className={`size-2.5 border border-white ${recording ? "animate-od-blink bg-white" : "bg-transparent"}`}
         />
         {recording ? "Recording" : "Idle"}
       </span>
@@ -97,14 +95,14 @@ function LastResult() {
   if (!lastResult) return null;
 
   return (
-    <div className="border-b border-border px-6 py-2 text-xs text-[#64748B]">
-      <span className="text-[#10B981]">Inserted</span>{" "}
-      <span className="line-clamp-2 text-[#F8FAFC]">
-        “{lastResult.text}”
-      </span>{" "}
+    <div className="animate-od-slide-up flex items-center gap-3 border-b-2 border-black px-6 py-2.5">
+      <span className="flex h-5 shrink-0 items-center border-2 border-black bg-black px-1.5 text-[10px] font-bold tracking-wider text-white">
+        INSERTED ✓
+      </span>
+      <span className="truncate text-sm font-medium">“{lastResult.text}”</span>
       {lastResult.duration_ms > 0 && (
-        <span className="tabular-nums">
-          ({(lastResult.duration_ms / 1000).toFixed(1)}s)
+        <span className="ml-auto shrink-0 text-xs font-bold text-muted-foreground tabular-nums">
+          {(lastResult.duration_ms / 1000).toFixed(1)}s
         </span>
       )}
     </div>
@@ -130,7 +128,7 @@ export function MainApp() {
   }, []);
 
   return (
-    <div className="flex h-screen flex-col bg-[#0F172A] text-[#F8FAFC]">
+    <div className="flex h-screen flex-col bg-background text-foreground">
       <Header />
       <LastResult />
       <main className="flex-1 overflow-y-auto px-6 py-5">
@@ -141,22 +139,26 @@ export function MainApp() {
             <TabsTrigger value="history">History</TabsTrigger>
             <TabsTrigger value="privacy">Privacy</TabsTrigger>
           </TabsList>
-          <TabsContent value="general" className="pt-5">
+          <TabsContent value="general" className="animate-od-slide-up pt-5">
             <GeneralTab />
           </TabsContent>
-          <TabsContent value="dictionary" className="pt-5">
+          <TabsContent value="dictionary" className="animate-od-slide-up pt-5">
             <DictionaryTab />
           </TabsContent>
-          <TabsContent value="history" className="pt-5">
+          <TabsContent value="history" className="animate-od-slide-up pt-5">
             <HistoryTab />
           </TabsContent>
-          <TabsContent value="privacy" className="pt-5">
+          <TabsContent value="privacy" className="animate-od-slide-up pt-5">
             <PrivacyTab />
           </TabsContent>
         </Tabs>
       </main>
-      <footer className="border-t border-border px-6 py-3 text-xs text-[#64748B]">
-        v0.1.0 · Local-first · zero telemetry · MIT
+      <footer className="flex items-center gap-3 border-t-2 border-black bg-black px-6 py-2.5 text-[11px] font-bold tracking-wider text-white uppercase">
+        <span>Speak. Don't type.</span>
+        <span className="ml-auto hidden text-white/60 sm:inline">
+          Local-first · zero telemetry · MIT
+        </span>
+        <span className="text-white/60 tabular-nums">v0.1.0</span>
       </footer>
       {settings && !settings.onboarded && <Onboarding />}
     </div>

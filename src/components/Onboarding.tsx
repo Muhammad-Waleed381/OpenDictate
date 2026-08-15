@@ -4,7 +4,6 @@ import * as api from "@/lib/api";
 import { formatHotkey } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { MicTest } from "@/components/MicTest";
 import { ModelCard } from "@/components/ModelCard";
 
@@ -43,41 +42,65 @@ export function Onboarding() {
     <Dialog open={!done} onOpenChange={() => {}} modal>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Welcome to OpenDictate</DialogTitle>
+          <div className="flex items-center gap-2">
+            <span className="flex size-6 items-center justify-center border-2 border-black bg-black text-xs font-bold text-white">
+              OD
+            </span>
+            <DialogTitle>Setup — 3 steps</DialogTitle>
+          </div>
           <DialogDescription>
-            A few quick steps before you can start dictating.
+            A few quick checks before you can start dictating.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-0">
           {STEPS.map((label, i) => {
             const n = i + 1;
             const active = n === step;
             const complete = n < step;
             return (
-              <div key={label} className="flex flex-1 flex-col gap-1">
-                <div
-                  className={`h-1 rounded-full ${complete ? "bg-[#3B82F6]" : active ? "bg-[#3B82F6]/60" : "bg-[#334155]"}`}
-                />
-                <span
-                  className={`text-[11px] ${active ? "text-[#F8FAFC]" : complete ? "text-[#64748B]" : "text-[#64748B]/70"}`}
-                >
-                  {n}. {label}
-                </span>
+              <div key={label} className="flex flex-1 items-center">
+                <div className="flex flex-col items-center gap-1.5">
+                  <span
+                    className={`flex size-8 items-center justify-center border-2 border-black text-xs font-bold transition-all duration-200 ease-spring ${
+                      complete
+                        ? "bg-black text-white"
+                        : active
+                          ? "bg-black text-white shadow-[3px_3px_0_0_#E8E8E8]"
+                          : "bg-white text-muted-foreground"
+                    }`}
+                  >
+                    {complete ? "✓" : `0${n}`}
+                  </span>
+                  <span
+                    className={`text-[10px] font-bold uppercase tracking-wider ${
+                      active ? "text-foreground" : "text-muted-foreground"
+                    }`}
+                  >
+                    {label}
+                  </span>
+                </div>
+                {i < STEPS.length - 1 && (
+                  <span
+                    className={`mx-2 mb-5 h-0.5 flex-1 ${
+                      complete || (active && n === step) ? "bg-black" : "bg-muted-foreground/40"
+                    }`}
+                  />
+                )}
               </div>
             );
           })}
         </div>
 
-        <div className="flex flex-col gap-4 py-2">
+        <div className="flex flex-col gap-4 border-2 border-black bg-white p-4 shadow-[4px_4px_0_0_#E8E8E8]">
           {step === 1 && <MicTest />}
           {step === 2 && <ModelCard />}
           {step === 3 && (
-            <div className="flex flex-col items-center gap-3 py-2">
-              <Badge className="bg-[#3B82F6]/15 px-3 py-1 text-sm text-[#3B82F6]">
+            <div className="flex flex-col items-center gap-4 py-2">
+              <span className="border-2 border-black bg-black px-4 py-2 text-lg font-bold tracking-widest text-white uppercase shadow-[4px_4px_0_0_#E8E8E8]">
                 {formatHotkey(settings?.hotkey ?? "ctrl+alt+space")}
-              </Badge>
-              <p className="text-center text-sm text-[#64748B]">
+              </span>
+              <p className="text-center text-sm">
                 Press this combination anywhere to start dictating. Press it
                 again to stop, transcribe, and insert the text into whatever
                 app is focused.
@@ -92,14 +115,14 @@ export function Onboarding() {
             onClick={() => setStep((s) => Math.max(1, s - 1))}
             disabled={step === 1}
           >
-            Back
+            ← Back
           </Button>
           {step < STEPS.length ? (
             <Button
               onClick={() => setStep((s) => Math.min(STEPS.length, s + 1))}
               disabled={step === 2 && !(sttReady && vadReady)}
             >
-              Next
+              Next →
             </Button>
           ) : (
             <Button onClick={handleDone} disabled={done}>

@@ -38,14 +38,18 @@ export function DictionaryTab() {
           placeholder="Add a word…"
         />
         <Button onClick={handleAdd} disabled={!word.trim()}>
-          Add
+          + Add
         </Button>
       </div>
       {dictionary.length === 0 ? (
-        <p className="text-sm text-[#64748B]">
-          No custom words yet. Add words to improve recognition for names,
-          jargon, and acronyms.
-        </p>
+        <div className="border-2 border-dashed border-black p-6 text-center">
+          <p className="text-sm font-bold uppercase tracking-wider">
+            No custom words yet
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Add words to improve recognition for names, jargon, and acronyms.
+          </p>
+        </div>
       ) : (
         <div className="flex flex-wrap gap-2">
           {dictionary.map((entry) => (
@@ -53,7 +57,7 @@ export function DictionaryTab() {
               {entry.word}
               <button
                 onClick={() => handleRemove(entry.word)}
-                className="flex size-4 items-center justify-center rounded-full text-[#64748B] transition-colors hover:bg-[#334155] hover:text-[#F8FAFC]"
+                className="flex size-4 items-center justify-center border border-black bg-white text-xs font-bold transition-colors hover:bg-black hover:text-white"
                 aria-label={`Remove ${entry.word}`}
               >
                 ×

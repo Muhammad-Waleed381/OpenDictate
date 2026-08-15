@@ -13,9 +13,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-function formatDate(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
+function formatDate(value: string): string {
+  const num = Number(value);
+  const date = new Date(Number.isFinite(num) && num < 1e12 ? num * 1000 : value);
+  if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
 }
 
@@ -58,18 +59,25 @@ export function HistoryTab() {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search history…"
         />
-        <Button variant="destructive" onClick={handleClearAll}>
+        <Button variant="outline" onClick={handleClearAll}>
           Clear all
         </Button>
       </div>
       {filtered.length === 0 ? (
-        <p className="text-sm text-[#64748B]">
-          {history.length === 0
-            ? "No dictations yet. Press the hotkey and speak."
-            : "No entries match your search."}
-        </p>
+        <div className="border-2 border-dashed border-black p-6 text-center">
+          <p className="text-sm font-bold uppercase tracking-wider">
+            {history.length === 0
+              ? "No dictations yet"
+              : "No entries match your search"}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {history.length === 0
+              ? "Press the hotkey and speak."
+              : "Try a different query."}
+          </p>
+        </div>
       ) : (
-        <div className="rounded-xl border border-border">
+        <div className="border-2 border-black shadow-[6px_6px_0_0_#E8E8E8]">
           <Table>
             <TableHeader>
               <TableRow>
@@ -83,11 +91,11 @@ export function HistoryTab() {
               {filtered.map((entry) => (
                 <TableRow key={entry.id}>
                   <TableCell className="max-w-0 truncate whitespace-nowrap">
-                    <span className="block max-w-[280px] truncate text-[#F8FAFC]">
+                    <span className="block max-w-[280px] truncate font-medium">
                       {entry.text}
                     </span>
                   </TableCell>
-                  <TableCell className="text-[#64748B]">
+                  <TableCell className="text-muted-foreground tabular-nums">
                     {formatDate(entry.created_at)}
                   </TableCell>
                   <TableCell>

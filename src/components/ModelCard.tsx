@@ -40,42 +40,33 @@ export function ModelCard() {
   }, [modelProgress]);
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium text-[#F8FAFC]">Models</span>
-        <Badge
-          variant={sttReady ? "default" : "destructive"}
-          className={sttReady ? "bg-[#10B981]/15 text-[#10B981]" : ""}
-        >
-          STT {sttReady ? "ready" : "missing"}
+        <span className="text-sm font-bold uppercase tracking-wider">Models</span>
+        <Badge variant={sttReady ? "default" : "outline"}>
+          STT {sttReady ? "✓ ready" : "missing"}
         </Badge>
-        <Badge
-          variant={vadReady ? "default" : "destructive"}
-          className={vadReady ? "bg-[#10B981]/15 text-[#10B981]" : ""}
-        >
-          VAD {vadReady ? "ready" : "missing"}
+        <Badge variant={vadReady ? "default" : "outline"}>
+          VAD {vadReady ? "✓ ready" : "missing"}
         </Badge>
       </div>
       {allReady ? (
-        <p className="text-sm text-[#64748B]">
-          Speech-to-text and voice-activity models are installed locally.
+        <p className="text-sm">
+          Speech-to-text and voice-activity models are installed locally.{" "}
+          <span className="font-bold">0 bytes leave your machine.</span>
         </p>
       ) : (
-        <div className="flex flex-col gap-2">
-          <Button
-            onClick={handleDownload}
-            disabled={downloading}
-            className="w-fit"
-          >
+        <div className="flex flex-col gap-3">
+          <Button onClick={handleDownload} disabled={downloading} className="w-fit">
             {downloading ? "Downloading…" : "Download models"}
           </Button>
           {modelProgress.length > 0 && (
             <div className="flex flex-col gap-2">
               {modelProgress.map((p) => (
                 <div key={p.file} className="flex flex-col gap-1">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-[#64748B]">{fileName(p.file)}</span>
-                    <span className="text-[#64748B]">
+                  <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider">
+                    <span>{fileName(p.file)}</span>
+                    <span className="tabular-nums">
                       {formatBytes(p.received)} / {formatBytes(p.total)}
                     </span>
                   </div>

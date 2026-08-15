@@ -59,31 +59,42 @@ export function MicTest() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm text-[#64748B]">
-          {testing ? "Speak into the microphone…" : "Test your microphone"}
+        <span className="text-sm font-bold uppercase tracking-wider">
+          {testing ? "Speak into the mic…" : "Test your microphone"}
         </span>
         <Button
           onClick={testing ? handleStop : handleStart}
-          variant={testing ? "destructive" : "default"}
+          variant={testing ? "outline" : "default"}
           size="sm"
         >
-          {testing ? "Stop test" : "Start test"}
+          {testing ? "■ Stop" : "● Start"}
         </Button>
       </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-[#334155]">
-        <div
-          className="h-full rounded-full bg-[#3B82F6] transition-[width] duration-75"
-          style={{ width: `${Math.min(100, Math.max(0, level * 100))}%` }}
-        />
+      <div className="flex h-8 items-end gap-[3px] border-2 border-black bg-white p-1.5">
+        {Array.from({ length: 24 }, (_, i) => {
+          const sample = i / 23;
+          const lit = level > sample;
+          return (
+            <span
+              key={i}
+              className={`flex-1 transition-colors duration-75 ${lit ? "bg-black" : "bg-muted"}`}
+            />
+          );
+        })}
       </div>
-      <div className="flex items-center justify-between text-xs text-[#64748B]">
-        <span>Peak: {(peak * 100).toFixed(0)}%</span>
+      <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider">
+        <span className="tabular-nums">Peak {(peak * 100).toFixed(0)}%</span>
         {verdict === "working" && (
-          <span className="font-medium text-[#10B981]">Mic working</span>
+          <span className="flex items-center gap-1.5 border-2 border-black bg-black px-2 py-0.5 text-white">
+            ✓ Mic working
+          </span>
         )}
         {verdict === "quiet" && (
-          <span className="font-medium text-[#EF4444]">Too quiet</span>
+          <span className="flex animate-od-blink items-center gap-1.5 border-2 border-black bg-white px-2 py-0.5">
+            ✕ Too quiet
+          </span>
         )}
+        {testing && <span className="animate-od-blink text-muted-foreground">Listening…</span>}
       </div>
     </div>
   );
