@@ -6,9 +6,11 @@ license.workspace = true
 description = "Core engine for OpenDictate: capture, VAD, transcription, injection"
 
 [dependencies]
+bzip2 = "0.5"
 cpal = "0.15"
 env_logger = "0.11"
 sherpa-onnx = "1.12"
+tar = "0.4"
 thiserror = "2"
 log = "0.4"
 ureq = "3"
