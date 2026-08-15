@@ -55,7 +55,6 @@ impl SttEngine {
             model_config: OfflineModelConfig {
                 nemo_ctc: OfflineNemoEncDecCtcModelConfig {
                     model: Some(model_file.to_string_lossy().to_string()),
-                    ..Default::default()
                 },
                 tokens: Some(tokens_file.to_string_lossy().to_string()),
                 num_threads: n_threads,

@@ -77,8 +77,7 @@ pub fn is_vad_ready() -> bool {
 
 pub fn download_to(url: &str, dest: &Path) -> Result<()> {
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| CoreError::Io(e))?;
+        std::fs::create_dir_all(parent).map_err(CoreError::Io)?;
     }
 
     let response = ureq::get(url)
@@ -99,7 +98,7 @@ pub fn download_to(url: &str, dest: &Path) -> Result<()> {
         }
         file.write_all(&chunk[..n])?;
         total += n as u64;
-        if total % (4 * 1024 * 1024) == 0 {
+        if total.is_multiple_of(4 * 1024 * 1024) {
             log::info!("downloaded {total} bytes -> {}", dest.display());
         }
     }
