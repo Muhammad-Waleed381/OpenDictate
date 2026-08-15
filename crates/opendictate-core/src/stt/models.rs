@@ -3,12 +3,29 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use bzip2::read::BzDecoder;
+use serde::Serialize;
 use tar::Archive;
 
 use crate::error::{CoreError, Result};
 
 pub const DEFAULT_MODEL: &str = "parakeet-tdt-ctc-110m";
 pub const VAD_FILENAME: &str = "silero_vad.onnx";
+
+pub const STT_MODEL_ID: &str = "parakeet-tdt-ctc-110m-int8";
+pub const VAD_MODEL_ID: &str = "silero-vad-v4";
+pub const WHISPER_MODEL_ID: &str = "whisper-tiny";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub engine_key: Option<String>,
+    pub size_bytes: u64,
+    pub installed: bool,
+    pub available: bool,
+}
 
 const PARAKEET_INT8_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8.tar.bz2";
 const PARAKEET_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000.tar.bz2";
@@ -56,6 +73,38 @@ pub fn is_stt_model_ready() -> bool {
 
 pub fn is_vad_ready() -> bool {
     valid_file_size(&vad_model_path(), VAD_MIN_BYTES).is_some()
+}
+
+pub fn catalog() -> Vec<ModelInfo> {
+    vec![
+        ModelInfo {
+            id: STT_MODEL_ID.to_string(),
+            name: "Parakeet TDT 110M (int8)".to_string(),
+            kind: "stt".to_string(),
+            engine_key: Some("parakeet".to_string()),
+            size_bytes: 104_857_600,
+            installed: is_stt_model_ready(),
+            available: true,
+        },
+        ModelInfo {
+            id: VAD_MODEL_ID.to_string(),
+            name: "Silero VAD v4".to_string(),
+            kind: "vad".to_string(),
+            engine_key: None,
+            size_bytes: 1_700_000,
+            installed: is_vad_ready(),
+            available: true,
+        },
+        ModelInfo {
+            id: WHISPER_MODEL_ID.to_string(),
+            name: "Whisper Tiny".to_string(),
+            kind: "stt".to_string(),
+            engine_key: Some("whisper".to_string()),
+            size_bytes: 40_000_000,
+            installed: false,
+            available: false,
+        },
+    ]
 }
 
 pub fn download_to(url: &str, dest: &Path) -> Result<()> {
@@ -135,7 +184,7 @@ fn install_stt_model(
     for url in model_archive_urls() {
         log::info!("downloading {url} -> {}", archive_path.display());
         if download_to_with_progress(url, &archive_path, &mut |received, total| {
-            on_progress("parakeet model", received, total)
+            on_progress(STT_MODEL_ID, received, total)
         })
         .is_err()
         {
@@ -181,28 +230,46 @@ pub fn ensure_models() -> Result<()> {
     ensure_models_with_progress(&mut |_, _, _| {})
 }
 
+pub fn ensure_model(
+    id: &str,
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+) -> Result<()> {
+    match id {
+        STT_MODEL_ID => {
+            if !is_stt_model_ready() && !install_stt_model(on_progress)? {
+                return Err(CoreError::Download(
+                    "failed to download a usable STT model from any archive".to_string(),
+                ));
+            }
+            Ok(())
+        }
+        VAD_MODEL_ID => {
+            if !is_vad_ready() {
+                log::info!("downloading silero VAD -> {}", vad_model_path().display());
+                download_to_with_progress(SILERO_VAD_URL, &vad_model_path(), &mut |received, total| {
+                    on_progress(VAD_MODEL_ID, received, total)
+                })?;
+                if !is_vad_ready() {
+                    return Err(CoreError::Download(format!(
+                        "downloaded VAD file is too small: {}",
+                        vad_model_path().display()
+                    )));
+                }
+            }
+            Ok(())
+        }
+        WHISPER_MODEL_ID => Err(CoreError::Download(format!(
+            "model '{id}' is not available yet"
+        ))),
+        other => Err(CoreError::Download(format!("unknown model '{other}'"))),
+    }
+}
+
 pub fn ensure_models_with_progress(
     on_progress: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<()> {
-    if !is_stt_model_ready() && !install_stt_model(on_progress)? {
-        return Err(CoreError::Download(
-            "failed to download a usable STT model from any archive".to_string(),
-        ));
-    }
-
-    if !is_vad_ready() {
-        log::info!("downloading silero VAD -> {}", vad_model_path().display());
-        download_to_with_progress(SILERO_VAD_URL, &vad_model_path(), &mut |received, total| {
-            on_progress("silero VAD", received, total)
-        })?;
-        if !is_vad_ready() {
-            return Err(CoreError::Download(format!(
-                "downloaded VAD file is too small: {}",
-                vad_model_path().display()
-            )));
-        }
-    }
-
+    ensure_model(STT_MODEL_ID, on_progress)?;
+    ensure_model(VAD_MODEL_ID, on_progress)?;
     Ok(())
 }
 
@@ -224,5 +291,21 @@ mod tests {
     fn model_archive_urls_are_ordered() {
         let urls = model_archive_urls();
         assert!(urls[0].contains("int8"));
+    }
+
+    #[test]
+    fn catalog_lists_known_models() {
+        let catalog = catalog();
+        assert!(catalog.iter().any(|m| m.id == STT_MODEL_ID));
+        assert!(catalog.iter().any(|m| m.id == VAD_MODEL_ID));
+        assert!(catalog.iter().any(|m| m.id == WHISPER_MODEL_ID));
+        assert!(!catalog.iter().any(|m| m.id.is_empty()));
+        assert_eq!(
+            catalog
+                .iter()
+                .find(|m| m.id == STT_MODEL_ID)
+                .and_then(|m| m.engine_key.as_deref()),
+            Some("parakeet")
+        );
     }
 }

@@ -30,7 +30,8 @@ Frontend routing: `main.tsx` reads `location.search` — if `window=overlay` ren
 | `get_mic` | — | `string \| null` |
 | `set_mic` | `name: string` | `()` |
 | `models_status` | — | `{ stt_ready: boolean, vad_ready: boolean }` |
-| `ensure_models` | — | `()` (emits `model-progress`; errors throw) |
+| `models_catalog` | — | `{ id, name, kind: "stt" \| "vad", engine_key: string \| null, size_bytes, installed, available }[]` — downloadable/installed model list |
+| `ensure_model` | `id: string` | `()` (emits `model-progress` with `file` = model id; emits `models-ready` on success; errors throw) |
 | `start_recording` | `mode: "dictate" \| "test"` | `()` |
 | `stop_recording` | — | `{ text: string, duration_ms: number }` — "test" mode returns raw text only, no inject; "dictate" mode injects into focused app and emits `transcript` |
 | `cancel_recording` | — | `()` |

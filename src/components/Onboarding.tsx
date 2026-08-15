@@ -21,6 +21,7 @@ export function Onboarding() {
   useEffect(() => {
     const unlistenPromise = api.onModelsReady(() => {
       useStore.getState().refreshModels();
+      useStore.getState().refreshCatalog();
       setStep((s) => (s === 2 ? 3 : s));
     });
     return () => {

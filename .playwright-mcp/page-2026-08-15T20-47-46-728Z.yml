@@ -1,0 +1,51 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: OD
+      - heading "OpenDictate" [level=1] [ref=e7]
+    - generic [ref=e8]: Ctrl+Alt+Space
+    - generic [ref=e9]: Idle
+    - button "● RECORD" [ref=e11]
+  - main [ref=e12]:
+    - generic [ref=e13]:
+      - tablist [ref=e14]:
+        - tab "General" [selected] [ref=e15]
+        - tab "Dictionary" [ref=e16]
+        - tab "History" [ref=e17]
+        - tab "Privacy" [ref=e18]
+      - tabpanel "General" [ref=e19]:
+        - generic [ref=e20]:
+          - generic [ref=e21]:
+            - generic [ref=e22]:
+              - generic [ref=e23]: Microphone
+              - combobox "Microphone" [ref=e24]:
+                - img: ▼
+              - textbox [ref=e25]
+            - generic [ref=e26]:
+              - generic [ref=e27]: Engine
+              - combobox "Engine" [ref=e28]:
+                - generic [ref=e29]: parakeet
+                - img: ▼
+              - textbox [ref=e30]: parakeet
+            - generic [ref=e31]:
+              - generic [ref=e32]: Language
+              - combobox "Language" [ref=e33]:
+                - generic [ref=e34]: auto
+                - img: ▼
+              - textbox [ref=e35]: auto
+            - generic [ref=e36]:
+              - generic [ref=e37]: Global hotkey
+              - generic [ref=e38]:
+                - textbox "Global hotkey" [ref=e39]:
+                  - /placeholder: Ctrl+Alt+Space
+                - button "Apply" [disabled]
+          - generic [ref=e40]:
+            - generic [ref=e41]:
+              - generic [ref=e42]: Models
+              - generic [ref=e43]: STT missing
+              - generic [ref=e44]: VAD missing
+            - button "Download models" [ref=e46]
+  - contentinfo [ref=e47]:
+    - generic [ref=e48]: Speak. Don't type.
+    - generic [ref=e49]: Local-first · zero telemetry · MIT
+    - generic [ref=e50]: v0.1.0

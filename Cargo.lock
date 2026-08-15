@@ -2961,6 +2961,7 @@ dependencies = [
  "cpal",
  "env_logger",
  "log",
+ "serde",
  "sherpa-onnx",
  "tar",
  "thiserror 2.0.20",

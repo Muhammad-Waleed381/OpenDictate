@@ -13,7 +13,8 @@ use crate::state::{AppState, HistoryEntry, TranscriptResult};
 
 pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String> {
     if state.recorder.is_recording() {
-        return Err("recording already in progress".to_string());
+        log::warn!("recording already in progress; cancelling stale recording");
+        state.recorder.cancel().map_err(|e| e.to_string())?;
     }
 
     state.set_test_mode(test);

@@ -22,14 +22,6 @@ export function GeneralTab() {
     } catch {}
   };
 
-  const handleEngineChange = async (engine: string | null) => {
-    if (!engine) return;
-    try {
-      await api.setSettings({ engine });
-      useStore.getState().refreshAll();
-    } catch {}
-  };
-
   const handleLanguageChange = async (language: string | null) => {
     if (!language) return;
     try {
@@ -70,24 +62,6 @@ export function GeneralTab() {
                   </SelectItem>
                 ))
               )}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="engine">Engine</Label>
-          <Select
-            value={settings?.engine ?? "parakeet"}
-            onValueChange={handleEngineChange}
-          >
-            <SelectTrigger className="w-full" id="engine">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="w-full">
-              <SelectItem value="parakeet">Parakeet</SelectItem>
-              <SelectItem value="whisper" disabled>
-                Whisper (coming soon)
-              </SelectItem>
             </SelectContent>
           </Select>
         </div>

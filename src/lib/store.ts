@@ -11,6 +11,7 @@ interface OpenDictateStore {
   level: number;
   overlayState: api.OverlayState | null;
   models: api.ModelsStatus | null;
+  catalog: api.ModelInfo[];
   settings: api.Settings | null;
   history: api.HistoryEntry[];
   dictionary: api.DictEntry[];
@@ -23,6 +24,7 @@ interface OpenDictateStore {
   setLevel: (level: number) => void;
   setOverlayState: (overlayState: api.OverlayState) => void;
   setModels: (models: api.ModelsStatus) => void;
+  setCatalog: (catalog: api.ModelInfo[]) => void;
   setSettings: (settings: api.Settings) => void;
   setHistory: (history: api.HistoryEntry[]) => void;
   setDictionary: (dictionary: api.DictEntry[]) => void;
@@ -33,6 +35,7 @@ interface OpenDictateStore {
   addModelProgress: (progress: ModelProgress) => void;
 
   refreshModels: () => Promise<void>;
+  refreshCatalog: () => Promise<void>;
   refreshAll: () => Promise<void>;
 }
 
@@ -40,6 +43,7 @@ export const useStore = create<OpenDictateStore>()((set) => ({
   level: 0,
   overlayState: null,
   models: null,
+  catalog: [],
   settings: null,
   history: [],
   dictionary: [],
@@ -52,6 +56,7 @@ export const useStore = create<OpenDictateStore>()((set) => ({
   setLevel: (level) => set({ level }),
   setOverlayState: (overlayState) => set({ overlayState }),
   setModels: (models) => set({ models }),
+  setCatalog: (catalog) => set({ catalog }),
   setSettings: (settings) => set({ settings }),
   setHistory: (history) => set({ history }),
   setDictionary: (dictionary) => set({ dictionary }),
@@ -73,17 +78,23 @@ export const useStore = create<OpenDictateStore>()((set) => ({
     set({ models });
   },
 
+  refreshCatalog: async () => {
+    const catalog = await api.getModelsCatalog();
+    set({ catalog });
+  },
+
   refreshAll: async () => {
-    const [settings, models, history, dictionary, mics, mic, recording] =
+    const [settings, models, catalog, history, dictionary, mics, mic, recording] =
       await Promise.all([
         api.getSettings(),
         api.getModelsStatus(),
+        api.getModelsCatalog(),
         api.getHistory(),
         api.getDictionary(),
         api.listMics(),
         api.getMic(),
         api.isRecording(),
       ]);
-    set({ settings, models, history, dictionary, mics, mic, recording });
+    set({ settings, models, catalog, history, dictionary, mics, mic, recording });
   },
 }));

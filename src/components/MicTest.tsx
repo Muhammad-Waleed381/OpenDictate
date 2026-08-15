@@ -7,23 +7,29 @@ export function MicTest() {
   const [testing, setTesting] = useState(false);
   const [peak, setPeak] = useState(0);
   const [verdict, setVerdict] = useState<"working" | "quiet" | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const peakRef = useRef(0);
 
   const handleStart = async () => {
     peakRef.current = 0;
     setPeak(0);
     setVerdict(null);
+    setError(null);
     setTesting(true);
     try {
+      await api.cancelRecording().catch(() => {});
       await api.startRecording("test");
-    } catch {
+    } catch (e) {
       setTesting(false);
+      setError(String(e));
     }
   };
 
   const handleStop = async () => {
     try {
       await api.stopRecording();
+    } catch (e) {
+      setError(String(e));
     } finally {
       setTesting(false);
       setVerdict(peakRef.current > 0.05 ? "working" : "quiet");
@@ -96,6 +102,11 @@ export function MicTest() {
         )}
         {testing && <span className="animate-od-blink text-muted-foreground">Listening…</span>}
       </div>
+      {error && (
+        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
+          ✕ {error}
+        </div>
+      )}
     </div>
   );
 }

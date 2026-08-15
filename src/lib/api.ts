@@ -6,6 +6,16 @@ export interface ModelsStatus {
   vad_ready: boolean;
 }
 
+export interface ModelInfo {
+  id: string;
+  name: string;
+  kind: "stt" | "vad";
+  engine_key: string | null;
+  size_bytes: number;
+  installed: boolean;
+  available: boolean;
+}
+
 export interface Settings {
   hotkey: string;
   mic: string | null;
@@ -82,8 +92,12 @@ export function getModelsStatus(): Promise<ModelsStatus> {
   return invoke<ModelsStatus>("models_status");
 }
 
-export function ensureModels(): Promise<void> {
-  return invoke<void>("ensure_models");
+export function getModelsCatalog(): Promise<ModelInfo[]> {
+  return invoke<ModelInfo[]>("models_catalog");
+}
+
+export function ensureModel(id: string): Promise<void> {
+  return invoke<void>("ensure_model", { id });
 }
 
 export function startRecording(mode: RecordingMode): Promise<void> {

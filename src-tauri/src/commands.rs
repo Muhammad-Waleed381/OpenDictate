@@ -35,9 +35,14 @@ pub fn models_status() -> ModelsStatus {
 }
 
 #[tauri::command]
-pub fn ensure_models(app: AppHandle) -> Result<(), String> {
+pub fn models_catalog() -> Vec<models::ModelInfo> {
+    models::catalog()
+}
+
+#[tauri::command]
+pub fn ensure_model(id: String, app: AppHandle) -> Result<(), String> {
     std::thread::spawn(move || {
-        let result = models::ensure_models_with_progress(&mut |file, received, total| {
+        let result = models::ensure_model(&id, &mut |file, received, total| {
             let _ = app.emit(
                 "model-progress",
                 serde_json::json!({ "file": file, "received": received, "total": total }),
