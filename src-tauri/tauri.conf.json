@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "opendictate",
+  "productName": "OpenDictate",
   "version": "0.1.0",
   "identifier": "com.opendictate.app",
   "build": {
@@ -12,9 +12,28 @@
   "app": {
     "windows": [
       {
-        "title": "opendictate",
+        "label": "main",
+        "title": "OpenDictate",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "minWidth": 640,
+        "minHeight": 480,
+        "backgroundColor": "#0F172A"
+      },
+      {
+        "label": "overlay",
+        "title": "OpenDictate",
+        "url": "index.html?window=overlay",
+        "width": 360,
+        "height": 76,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focusable": false,
+        "resizable": false,
+        "shadow": false,
+        "visible": false
       }
     ],
     "security": {

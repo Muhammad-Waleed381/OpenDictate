@@ -55,6 +55,21 @@ impl AudioRecorder {
         self.start_with_device(device)
     }
 
+    pub fn start_with_name(&self, name: &str) -> Result<()> {
+        let host = cpal::default_host();
+        let device = host
+            .input_devices()
+            .map_err(|e| CoreError::Audio(format!("failed to list input devices: {e}")))?
+            .find(|d| d.name().is_ok_and(|n| n == name));
+        match device {
+            Some(device) => self.start_with_device(device),
+            None => {
+                log::warn!("mic '{name}' not found, falling back to default device");
+                self.start()
+            }
+        }
+    }
+
     pub fn list_input_devices() -> Vec<String> {
         cpal::default_host()
             .input_devices()
@@ -64,6 +79,17 @@ impl AudioRecorder {
                     .collect::<Vec<String>>()
             })
             .unwrap_or_default()
+    }
+
+    pub fn current_rms(&self) -> f32 {
+        let buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        if buffer.is_empty() {
+            return 0.0;
+        }
+        let start = buffer.len().saturating_sub(SAMPLE_RATE as usize / 10);
+        let window = &buffer[start..];
+        let sum_sq: f32 = window.iter().map(|&s| s * s).sum();
+        (sum_sq / window.len() as f32).sqrt()
     }
 
     fn start_with_device(&self, device: cpal::Device) -> Result<()> {

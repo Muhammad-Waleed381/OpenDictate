@@ -59,6 +59,14 @@ pub fn is_vad_ready() -> bool {
 }
 
 pub fn download_to(url: &str, dest: &Path) -> Result<()> {
+    download_to_with_progress(url, dest, &mut |_, _| {})
+}
+
+pub fn download_to_with_progress(
+    url: &str,
+    dest: &Path,
+    on_progress: &mut dyn FnMut(u64, u64),
+) -> Result<()> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(CoreError::Io)?;
     }
@@ -67,10 +75,17 @@ pub fn download_to(url: &str, dest: &Path) -> Result<()> {
         .call()
         .map_err(|e| CoreError::Download(format!("failed to fetch {url}: {e}")))?;
 
+    let total = response
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+
     let mut body = response.into_body().into_reader();
 
     let mut file = File::create(dest)?;
-    let mut total = 0u64;
+    let mut received = 0u64;
     let mut chunk = [0u8; 64 * 1024];
     loop {
         let n = std::io::Read::read(&mut body, &mut chunk)?;
@@ -78,12 +93,13 @@ pub fn download_to(url: &str, dest: &Path) -> Result<()> {
             break;
         }
         file.write_all(&chunk[..n])?;
-        total += n as u64;
-        if total.is_multiple_of(4 * 1024 * 1024) {
-            log::info!("downloaded {total} bytes -> {}", dest.display());
+        received += n as u64;
+        on_progress(received, total);
+        if received.is_multiple_of(4 * 1024 * 1024) {
+            log::info!("downloaded {received} bytes -> {}", dest.display());
         }
     }
-    log::info!("downloaded {} bytes -> {}", dest.display(), total);
+    log::info!("downloaded {received} bytes -> {}", dest.display());
     Ok(())
 }
 
@@ -108,7 +124,9 @@ fn extract_archive(archive_path: &Path, dest: &Path) -> Result<()> {
         .map_err(|e| CoreError::Download(format!("failed to extract {}: {e}", archive_path.display())))
 }
 
-fn install_stt_model() -> Result<bool> {
+fn install_stt_model(
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+) -> Result<bool> {
     let base = models_dir();
     std::fs::create_dir_all(&base).map_err(CoreError::Io)?;
     let archive_path = base.join("parakeet-tdt-ctc-110m.tar.bz2");
@@ -116,7 +134,11 @@ fn install_stt_model() -> Result<bool> {
 
     for url in model_archive_urls() {
         log::info!("downloading {url} -> {}", archive_path.display());
-        if download_to(url, &archive_path).is_err() {
+        if download_to_with_progress(url, &archive_path, &mut |received, total| {
+            on_progress("parakeet model", received, total)
+        })
+        .is_err()
+        {
             log::warn!("download failed for {url}, trying next archive");
             continue;
         }
@@ -156,7 +178,13 @@ fn install_stt_model() -> Result<bool> {
 }
 
 pub fn ensure_models() -> Result<()> {
-    if !is_stt_model_ready() && !install_stt_model()? {
+    ensure_models_with_progress(&mut |_, _, _| {})
+}
+
+pub fn ensure_models_with_progress(
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+) -> Result<()> {
+    if !is_stt_model_ready() && !install_stt_model(on_progress)? {
         return Err(CoreError::Download(
             "failed to download a usable STT model from any archive".to_string(),
         ));
@@ -164,7 +192,9 @@ pub fn ensure_models() -> Result<()> {
 
     if !is_vad_ready() {
         log::info!("downloading silero VAD -> {}", vad_model_path().display());
-        download_to(SILERO_VAD_URL, &vad_model_path())?;
+        download_to_with_progress(SILERO_VAD_URL, &vad_model_path(), &mut |received, total| {
+            on_progress("silero VAD", received, total)
+        })?;
         if !is_vad_ready() {
             return Err(CoreError::Download(format!(
                 "downloaded VAD file is too small: {}",
@@ -182,7 +212,12 @@ mod tests {
 
     #[test]
     fn model_ready_requires_files() {
-        assert!(!is_stt_model_ready());
+        let tmp = std::env::temp_dir().join("opendictate-test-models");
+        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let result = is_stt_model_ready();
+        std::env::remove_var("XDG_DATA_HOME");
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(!result);
     }
 
     #[test]

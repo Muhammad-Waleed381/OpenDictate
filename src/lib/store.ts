@@ -1,0 +1,89 @@
+import { create } from "zustand";
+import * as api from "@/lib/api";
+
+export interface ModelProgress {
+  file: string;
+  received: number;
+  total: number;
+}
+
+interface OpenDictateStore {
+  level: number;
+  overlayState: api.OverlayState | null;
+  models: api.ModelsStatus | null;
+  settings: api.Settings | null;
+  history: api.HistoryEntry[];
+  dictionary: api.DictEntry[];
+  recording: boolean;
+  mic: string | null;
+  mics: string[];
+  modelProgress: ModelProgress[];
+  lastResult: api.TranscriptResult | null;
+
+  setLevel: (level: number) => void;
+  setOverlayState: (overlayState: api.OverlayState) => void;
+  setModels: (models: api.ModelsStatus) => void;
+  setSettings: (settings: api.Settings) => void;
+  setHistory: (history: api.HistoryEntry[]) => void;
+  setDictionary: (dictionary: api.DictEntry[]) => void;
+  setRecording: (recording: boolean) => void;
+  setMic: (mic: string | null) => void;
+  setMics: (mics: string[]) => void;
+  setModelProgress: (modelProgress: ModelProgress[]) => void;
+  addModelProgress: (progress: ModelProgress) => void;
+
+  refreshModels: () => Promise<void>;
+  refreshAll: () => Promise<void>;
+}
+
+export const useStore = create<OpenDictateStore>()((set) => ({
+  level: 0,
+  overlayState: null,
+  models: null,
+  settings: null,
+  history: [],
+  dictionary: [],
+  recording: false,
+  mic: null,
+  mics: [],
+  modelProgress: [],
+  lastResult: null,
+
+  setLevel: (level) => set({ level }),
+  setOverlayState: (overlayState) => set({ overlayState }),
+  setModels: (models) => set({ models }),
+  setSettings: (settings) => set({ settings }),
+  setHistory: (history) => set({ history }),
+  setDictionary: (dictionary) => set({ dictionary }),
+  setRecording: (recording) => set({ recording }),
+  setMic: (mic) => set({ mic }),
+  setMics: (mics) => set({ mics }),
+  setModelProgress: (modelProgress) => set({ modelProgress }),
+  addModelProgress: (progress) =>
+    set((state) => {
+      const rest = state.modelProgress.filter((p) => p.file !== progress.file);
+      if (progress.total > 0 && progress.received >= progress.total) {
+        return { modelProgress: rest };
+      }
+      return { modelProgress: [...rest, progress] };
+    }),
+
+  refreshModels: async () => {
+    const models = await api.getModelsStatus();
+    set({ models });
+  },
+
+  refreshAll: async () => {
+    const [settings, models, history, dictionary, mics, mic, recording] =
+      await Promise.all([
+        api.getSettings(),
+        api.getModelsStatus(),
+        api.getHistory(),
+        api.getDictionary(),
+        api.listMics(),
+        api.getMic(),
+        api.isRecording(),
+      ]);
+    set({ settings, models, history, dictionary, mics, mic, recording });
+  },
+}));
