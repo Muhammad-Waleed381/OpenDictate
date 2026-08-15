@@ -12,6 +12,7 @@ export interface ModelInfo {
   kind: "stt" | "vad";
   engine_key: string | null;
   size_bytes: number;
+  disk_bytes: number;
   installed: boolean;
   available: boolean;
 }
@@ -22,9 +23,12 @@ export interface Settings {
   engine: string;
   language: string;
   onboarded: boolean;
+  stt_model: string;
 }
 
-export type SettingsPatch = Partial<Pick<Settings, "hotkey" | "engine" | "language">>;
+export type SettingsPatch = Partial<
+  Pick<Settings, "hotkey" | "engine" | "language" | "stt_model">
+>;
 
 export interface HistoryEntry {
   id: number;
@@ -98,6 +102,10 @@ export function getModelsCatalog(): Promise<ModelInfo[]> {
 
 export function ensureModel(id: string): Promise<void> {
   return invoke<void>("ensure_model", { id });
+}
+
+export function removeModel(id: string): Promise<void> {
+  return invoke<void>("remove_model", { id });
 }
 
 export function startRecording(mode: RecordingMode): Promise<void> {

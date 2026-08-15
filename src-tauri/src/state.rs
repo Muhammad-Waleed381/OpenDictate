@@ -5,6 +5,15 @@ use opendictate_core::audio::capture::AudioRecorder;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsPatch {
+    pub hotkey: Option<String>,
+    pub engine: Option<String>,
+    pub language: Option<String>,
+    pub stt_model: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -13,6 +22,12 @@ pub struct Settings {
     pub engine: String,
     pub language: String,
     pub onboarded: bool,
+    #[serde(default = "default_stt_model")]
+    pub stt_model: String,
+}
+
+fn default_stt_model() -> String {
+    opendictate_core::stt::models::STT_MODEL_ID.to_string()
 }
 
 impl Default for Settings {
@@ -23,6 +38,7 @@ impl Default for Settings {
             engine: "parakeet".to_string(),
             language: "auto".to_string(),
             onboarded: false,
+            stt_model: default_stt_model(),
         }
     }
 }

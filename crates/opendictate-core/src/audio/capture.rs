@@ -62,7 +62,13 @@ impl AudioRecorder {
             .map_err(|e| CoreError::Audio(format!("failed to list input devices: {e}")))?
             .find(|d| d.name().is_ok_and(|n| n == name));
         match device {
-            Some(device) => self.start_with_device(device),
+            Some(device) => match self.start_with_device(device) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    log::warn!("mic '{name}' failed to start ({e}), falling back to default device");
+                    self.start()
+                }
+            },
             None => {
                 log::warn!("mic '{name}' not found, falling back to default device");
                 self.start()
@@ -71,11 +77,29 @@ impl AudioRecorder {
     }
 
     pub fn list_input_devices() -> Vec<String> {
+        const NON_INPUT_PREFIXES: &[&str] = &[
+            "dsnoop",
+            "surround",
+            "front",
+            "rear",
+            "center_lfe",
+            "side",
+            "dmix",
+            "hw:",
+            "plughw",
+            "iec958",
+            "null",
+            "jack",
+            "multi",
+            "usbstream",
+            "sysdefault",
+        ];
         cpal::default_host()
             .input_devices()
             .map(|devices| {
                 devices
                     .filter_map(|d| d.name().ok())
+                    .filter(|name| !NON_INPUT_PREFIXES.iter().any(|p| name.starts_with(p)))
                     .collect::<Vec<String>>()
             })
             .unwrap_or_default()

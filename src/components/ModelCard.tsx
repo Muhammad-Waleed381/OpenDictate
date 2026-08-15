@@ -36,9 +36,19 @@ export function ModelCard() {
     }
   };
 
-  const handleUse = async (engineKey: string) => {
+  const handleUse = async (modelId: string, engineKey: string) => {
     try {
-      await api.setSettings({ engine: engineKey });
+      await api.setSettings({ engine: engineKey, stt_model: modelId });
+      await useStore.getState().refreshAll();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm(`Delete ${id} from disk?`)) return;
+    try {
+      await api.removeModel(id);
       await useStore.getState().refreshAll();
     } catch (e) {
       setError(String(e));
@@ -48,11 +58,15 @@ export function ModelCard() {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-col">
-        {catalog.map((model) => {
+        {catalog.map((model, i) => {
           const progress = modelProgress.find((p) => p.file === model.id);
           const isActive =
-            model.engine_key != null && settings?.engine === model.engine_key;
+            model.kind === "stt" &&
+            model.engine_key != null &&
+            settings?.engine === model.engine_key &&
+            settings?.stt_model === model.id;
           const busy = downloading === model.id;
+          const size = model.installed && model.disk_bytes > 0 ? model.disk_bytes : model.size_bytes;
           return (
             <div
               key={model.id}
@@ -62,7 +76,7 @@ export function ModelCard() {
                     ? "border-black bg-black text-white"
                     : "border-black bg-white"
                   : "border-muted bg-muted"
-              } ${model.id !== catalog[0]?.id ? "border-t-0" : ""}`}
+              } ${i > 0 ? "border-t-0" : ""}`}
             >
               <div className="flex items-center gap-2">
                 <span
@@ -84,29 +98,36 @@ export function ModelCard() {
                     isActive ? "text-white/70" : "text-muted-foreground"
                   }`}
                 >
-                  {formatBytes(model.size_bytes)}
+                  {formatBytes(size)}
+                  {model.installed && model.disk_bytes > 0 ? " on disk" : " download"}
                 </span>
               </div>
               <div className="flex items-center gap-2">
                 {model.installed ? (
-                  <span
-                    className={`border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
-                      isActive
-                        ? "border-white text-black bg-white"
-                        : "border-black bg-black text-white"
-                    }`}
-                  >
-                    ✓ Installed
-                  </span>
+                  <>
+                    <span
+                      className={`border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
+                        isActive
+                          ? "border-white text-black bg-white"
+                          : "border-black bg-black text-white"
+                      }`}
+                    >
+                      ✓ Installed
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className={isActive ? "text-white hover:bg-white/20 hover:text-white" : "text-muted-foreground"}
+                      onClick={() => handleDelete(model.id)}
+                    >
+                      Delete
+                    </Button>
+                  </>
                 ) : model.available ? (
                   <Button
                     size="sm"
                     variant={isActive ? "outline" : "default"}
-                    className={
-                      isActive
-                        ? "border-white text-white shadow-none"
-                        : ""
-                    }
+                    className={isActive ? "border-white text-white shadow-none" : ""}
                     onClick={() => handleDownload(model.id)}
                     disabled={busy}
                   >
@@ -117,8 +138,9 @@ export function ModelCard() {
                     Coming soon
                   </span>
                 )}
-                {model.installed &&
+                {model.kind === "stt" &&
                   model.engine_key != null &&
+                  model.installed &&
                   (isActive ? (
                     <span className="ml-auto animate-od-blink border border-white px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
                       In use
@@ -128,7 +150,7 @@ export function ModelCard() {
                       size="sm"
                       variant={isActive ? "outline" : "ghost"}
                       className="ml-auto"
-                      onClick={() => handleUse(model.engine_key!)}
+                      onClick={() => handleUse(model.id, model.engine_key!)}
                     >
                       Use
                     </Button>
@@ -168,9 +190,10 @@ export function ModelCard() {
         </div>
       )}
       <p className="text-xs text-muted-foreground">
-        STT models do speech-to-text. VAD detects when you start and stop
-        speaking. Pick a model, download it, and hit{" "}
-        <span className="font-bold">Use</span> to switch engines.
+        Download a model, then hit{" "}
+        <span className="font-bold">Use</span> to make it the active engine.
+        Installed models show their real size on disk and can be deleted.
+        Everything runs 100% offline.
       </p>
     </div>
   );

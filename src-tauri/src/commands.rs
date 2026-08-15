@@ -64,6 +64,11 @@ pub fn ensure_model(id: String, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn remove_model(id: String) -> Result<(), String> {
+    models::remove_model(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn start_recording(mode: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
     dictation::start(&app, &state, mode == "test")
 }
@@ -94,33 +99,47 @@ pub fn get_settings(state: State<AppState>) -> Result<crate::state::Settings, St
 
 #[tauri::command]
 pub fn set_settings(
-    settings: crate::state::Settings,
+    settings: crate::state::SettingsPatch,
     app: AppHandle,
     state: State<AppState>,
 ) -> Result<(), String> {
     let mut current = state.settings.lock().map_err(|e| e.to_string())?;
-    if settings.hotkey.trim().is_empty() {
-        return Err("hotkey cannot be empty".to_string());
+    if let Some(hotkey) = &settings.hotkey {
+        if hotkey.trim().is_empty() {
+            return Err("hotkey cannot be empty".to_string());
+        }
     }
-    let hotkey_changed = current.hotkey != settings.hotkey;
-    current.hotkey = settings.hotkey.clone();
-    if !settings.engine.is_empty() {
-        current.engine = settings.engine;
+    let hotkey_changed = settings
+        .hotkey
+        .as_ref()
+        .is_some_and(|h| h != &current.hotkey);
+    if let Some(hotkey) = &settings.hotkey {
+        current.hotkey = hotkey.clone();
     }
-    if !settings.language.is_empty() {
-        current.language = settings.language;
+    if let Some(engine) = &settings.engine {
+        if !engine.is_empty() {
+            current.engine = engine.clone();
+        }
+    }
+    if let Some(language) = &settings.language {
+        if !language.is_empty() {
+            current.language = language.clone();
+        }
+    }
+    if let Some(stt_model) = &settings.stt_model {
+        if !stt_model.is_empty() {
+            current.stt_model = stt_model.clone();
+        }
     }
     let settings = current.clone();
     drop(current);
 
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::save_settings(&conn, &settings).map_err(|e| e.to_string())?;
-    drop(conn);
-
     if hotkey_changed {
         crate::hotkey::register(&app, &state, &settings.hotkey)?;
     }
-    Ok(())
+
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::save_settings(&conn, &settings).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

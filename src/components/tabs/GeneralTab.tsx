@@ -1,18 +1,146 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
+import { formatHotkey } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ModelCard } from "@/components/ModelCard";
+
+const KEY_NAMES: Record<string, string> = {
+  " ": "space",
+  Enter: "enter",
+  Tab: "tab",
+  ArrowUp: "up",
+  ArrowDown: "down",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  Home: "home",
+  End: "end",
+  PageUp: "pageup",
+  PageDown: "pagedown",
+  Insert: "insert",
+  Delete: "delete",
+  Backspace: "backspace",
+  PrintScreen: "printscreen",
+};
+
+function comboFromEvent(e: KeyboardEvent): string | null {
+  e.preventDefault();
+  const mods: string[] = [];
+  if (e.metaKey) mods.push("super");
+  if (e.ctrlKey) mods.push("ctrl");
+  if (e.altKey) mods.push("alt");
+  if (e.shiftKey) mods.push("shift");
+
+  const key = e.key;
+  let name: string | null = null;
+  if (/^F([1-9]|1\d|2[0-4])$/.test(key)) {
+    name = key.toLowerCase();
+  } else if (/^[a-z0-9]$/i.test(key)) {
+    name = key.toLowerCase();
+  } else {
+    name = KEY_NAMES[key] ?? null;
+  }
+  if (!name) return null;
+  if (mods.length === 0 && !/^f(1[3-9]|2[0-4])$/.test(name)) return null;
+  return [...mods, name].join("+");
+}
+
+function HotkeyCapture() {
+  const settings = useStore((s) => s.settings);
+  const [capturing, setCapturing] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [applied, setApplied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const current = formatHotkey(settings?.hotkey ?? "ctrl+alt+space");
+
+  useEffect(() => {
+    if (capturing) inputRef.current?.focus();
+  }, [capturing]);
+
+  const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      setCapturing(false);
+      setPreview(null);
+      setError(null);
+      return;
+    }
+    const combo = comboFromEvent(e);
+    if (!combo) {
+      setError("Unsupported key — try letters, digits, F1-F24, or arrows with a modifier");
+      return;
+    }
+    setError(null);
+    setPreview(combo);
+    try {
+      await api.setSettings({ hotkey: combo });
+      await useStore.getState().refreshAll();
+      setCapturing(false);
+      setApplied(true);
+      setTimeout(() => setApplied(false), 1500);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor="hotkey">Global hotkey</Label>
+      <div className="flex items-center gap-2">
+        <div
+          className={`flex h-10 flex-1 items-center border-2 border-black bg-white px-3 font-bold tracking-widest uppercase ${
+            capturing ? "animate-od-blink" : ""
+          }`}
+          onClick={() => setCapturing(true)}
+        >
+          {capturing ? (preview ?? "Press your combination…") : current}
+          <input
+            ref={inputRef}
+            id="hotkey"
+            className="sr-only"
+            value=""
+            readOnly
+            onKeyDown={handleKeyDown}
+            onBlur={(e) => {
+              if (capturing && e.relatedTarget === null) inputRef.current?.focus();
+            }}
+            aria-label="Press a key combination"
+          />
+        </div>
+        {capturing ? (
+          <Button variant="outline" onClick={() => { setCapturing(false); setPreview(null); setError(null); }}>
+            Cancel
+          </Button>
+        ) : (
+          <Button onClick={() => { setCapturing(true); setError(null); }}>
+            {applied ? "✓ Captured" : "Capture"}
+          </Button>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {capturing
+          ? "Press the keys now — Escape cancels."
+          : applied
+            ? "Hotkey saved. Works anywhere, even when the app is in the tray."
+            : "Click Capture, then press your combination."}
+      </p>
+      {error && (
+        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
+          ✕ {error}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function GeneralTab() {
   const mics = useStore((s) => s.mics);
   const mic = useStore((s) => s.mic);
   const settings = useStore((s) => s.settings);
-  const [hotkey, setHotkey] = useState(settings?.hotkey ?? "");
-  const [applied, setApplied] = useState(false);
 
   const handleMicChange = async (name: string | null) => {
     if (!name) return;
@@ -27,17 +155,6 @@ export function GeneralTab() {
     try {
       await api.setSettings({ language });
       useStore.getState().refreshAll();
-    } catch {}
-  };
-
-  const handleApplyHotkey = async () => {
-    const trimmed = hotkey.trim().toLowerCase();
-    if (!trimmed) return;
-    try {
-      await api.setSettings({ hotkey: trimmed });
-      await useStore.getState().refreshAll();
-      setApplied(true);
-      setTimeout(() => setApplied(false), 1500);
     } catch {}
   };
 
@@ -93,23 +210,8 @@ export function GeneralTab() {
           </Select>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="hotkey">Global hotkey</Label>
-          <div className="flex items-center gap-2">
-            <Input
-              id="hotkey"
-              value={hotkey}
-              onChange={(e) => setHotkey(e.target.value)}
-              placeholder="Ctrl+Alt+Space"
-            />
-            <Button
-              onClick={handleApplyHotkey}
-              disabled={!hotkey.trim()}
-              variant={applied ? "outline" : "default"}
-            >
-              {applied ? "✓ Applied" : "Apply"}
-            </Button>
-          </div>
+        <div className="sm:col-span-2">
+          <HotkeyCapture />
         </div>
       </div>
 

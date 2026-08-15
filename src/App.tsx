@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
@@ -36,28 +36,41 @@ function useOpenDictateEvents() {
 
 function RecordingButton() {
   const recording = useStore((s) => s.recording);
+  const [error, setError] = useState<string | null>(null);
 
   const handleClick = async () => {
+    setError(null);
     if (recording) {
       try {
         const result = await api.stopRecording();
         if (result.text) {
           useStore.setState({ lastResult: result });
         }
-      } catch {}
+      } catch (e) {
+        setError(String(e));
+      }
       useStore.getState().setRecording(false);
     } else {
       try {
         await api.startRecording("dictate");
         useStore.getState().setRecording(true);
-      } catch {}
+      } catch (e) {
+        setError(String(e));
+      }
     }
   };
 
   return (
-    <Button onClick={handleClick} variant={recording ? "outline" : "default"} size="sm">
-      {recording ? "■ STOP" : "● RECORD"}
-    </Button>
+    <>
+      <Button onClick={handleClick} variant={recording ? "outline" : "default"} size="sm">
+        {recording ? "■ STOP" : "● RECORD"}
+      </Button>
+      {error && (
+        <span className="absolute right-6 top-full z-10 mt-1 max-w-xs border-2 border-white bg-black px-2 py-1 text-[10px] font-bold tracking-wider text-white uppercase">
+          ✕ {error}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -66,7 +79,7 @@ function Header() {
   const recording = useStore((s) => s.recording);
 
   return (
-    <header className="flex items-center gap-3 border-b-2 border-black bg-black px-6 py-3 text-white">
+    <header className="relative flex items-center gap-3 border-b-2 border-black bg-black px-6 py-3 text-white">
       <div className="flex items-center gap-2.5">
         <span className="flex size-5 items-center justify-center border-2 border-white bg-white text-[10px] font-bold text-black">
           OD

@@ -5,13 +5,13 @@ use crate::dictation;
 use crate::state::AppState;
 
 pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), String> {
-    if let Ok(mut current) = state.hotkey.lock() {
-        if current.as_deref() == Some(key) {
-            return Ok(());
-        }
-        if let Some(old) = current.take() {
-            let _ = app.global_shortcut().unregister(old.as_str());
-        }
+    let current = state
+        .hotkey
+        .lock()
+        .map(|h| h.clone())
+        .unwrap_or(None);
+    if current.as_deref() == Some(key) {
+        return Ok(());
     }
 
     app.global_shortcut()
@@ -21,6 +21,10 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
             }
         })
         .map_err(|e| format!("failed to register hotkey '{key}': {e}"))?;
+
+    if let Some(old) = current {
+        let _ = app.global_shortcut().unregister(old.as_str());
+    }
 
     if let Ok(mut current) = state.hotkey.lock() {
         *current = Some(key.to_string());

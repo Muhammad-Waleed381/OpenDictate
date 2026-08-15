@@ -13,7 +13,22 @@ pub const VAD_FILENAME: &str = "silero_vad.onnx";
 
 pub const STT_MODEL_ID: &str = "parakeet-tdt-ctc-110m-int8";
 pub const VAD_MODEL_ID: &str = "silero-vad-v4";
-pub const WHISPER_MODEL_ID: &str = "whisper-tiny";
+pub const WHISPER_TINY_MODEL_ID: &str = "whisper-tiny-en";
+pub const WHISPER_BASE_MODEL_ID: &str = "whisper-base-en";
+pub const WHISPER_SMALL_MODEL_ID: &str = "whisper-small-en";
+
+const PARAKEET_INT8_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8.tar.bz2";
+const PARAKEET_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000.tar.bz2";
+const SILERO_VAD_URL: &str =
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
+const WHISPER_TINY_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2";
+const WHISPER_BASE_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.en.tar.bz2";
+const WHISPER_SMALL_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.en.tar.bz2";
+
+const MODEL_MIN_BYTES: u64 = 1_000_000;
+const TOKENS_MIN_BYTES: u64 = 100;
+const VAD_MIN_BYTES: u64 = 100_000;
+const WHISPER_PART_MIN_BYTES: u64 = 5_000_000;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,21 +38,71 @@ pub struct ModelInfo {
     pub kind: String,
     pub engine_key: Option<String>,
     pub size_bytes: u64,
+    pub disk_bytes: u64,
     pub installed: bool,
     pub available: bool,
 }
 
-const PARAKEET_INT8_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8.tar.bz2";
-const PARAKEET_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000.tar.bz2";
-const SILERO_VAD_URL: &str =
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
+struct ModelDef {
+    id: &'static str,
+    name: &'static str,
+    kind: &'static str,
+    engine_key: Option<&'static str>,
+    size_bytes: u64,
+    url: &'static str,
+    available: bool,
+}
 
-const MODEL_MIN_BYTES: u64 = 1_000_000;
-const TOKENS_MIN_BYTES: u64 = 100;
-const VAD_MIN_BYTES: u64 = 100_000;
+const MODELS: &[ModelDef] = &[
+    ModelDef {
+        id: STT_MODEL_ID,
+        name: "Parakeet TDT 110M (int8)",
+        kind: "stt",
+        engine_key: Some("parakeet"),
+        size_bytes: 104_857_600,
+        url: PARAKEET_INT8_ARCHIVE,
+        available: true,
+    },
+    ModelDef {
+        id: VAD_MODEL_ID,
+        name: "Silero VAD v4",
+        kind: "vad",
+        engine_key: None,
+        size_bytes: 1_700_000,
+        url: SILERO_VAD_URL,
+        available: true,
+    },
+    ModelDef {
+        id: WHISPER_TINY_MODEL_ID,
+        name: "Whisper Tiny (en)",
+        kind: "stt",
+        engine_key: Some("whisper"),
+        size_bytes: 118_071_777,
+        url: WHISPER_TINY_ARCHIVE,
+        available: true,
+    },
+    ModelDef {
+        id: WHISPER_BASE_MODEL_ID,
+        name: "Whisper Base (en)",
+        kind: "stt",
+        engine_key: Some("whisper"),
+        size_bytes: 208_576_005,
+        url: WHISPER_BASE_ARCHIVE,
+        available: true,
+    },
+    ModelDef {
+        id: WHISPER_SMALL_MODEL_ID,
+        name: "Whisper Small (en)",
+        kind: "stt",
+        engine_key: Some("whisper"),
+        size_bytes: 635_693_775,
+        url: WHISPER_SMALL_ARCHIVE,
+        available: true,
+    },
+];
 
-fn model_archive_urls() -> [&'static str; 2] {
-    [PARAKEET_INT8_ARCHIVE, PARAKEET_ARCHIVE]
+fn model_def(id: &str) -> Option<&'static ModelDef> {
+    MODELS.iter().find(|m| m.id == id)
 }
 
 pub fn models_dir() -> PathBuf {
@@ -59,52 +124,106 @@ pub fn vad_model_path() -> PathBuf {
     models_dir().join(VAD_FILENAME)
 }
 
+pub fn model_dir_for(id: &str) -> PathBuf {
+    if id == STT_MODEL_ID {
+        stt_model_dir()
+    } else {
+        models_dir().join(id)
+    }
+}
+
+pub fn is_whisper_model(id: &str) -> bool {
+    matches!(
+        id,
+        WHISPER_TINY_MODEL_ID | WHISPER_BASE_MODEL_ID | WHISPER_SMALL_MODEL_ID
+    )
+}
+
 fn valid_file_size(path: &Path, min_bytes: u64) -> Option<u64> {
     let size = std::fs::metadata(path).ok()?.len();
     (size >= min_bytes).then_some(size)
 }
 
-pub fn is_stt_model_ready() -> bool {
+fn is_parakeet_ready() -> bool {
     let dir = stt_model_dir();
     let model = valid_file_size(&dir.join("model.int8.onnx"), MODEL_MIN_BYTES)
         .or_else(|| valid_file_size(&dir.join("model.onnx"), MODEL_MIN_BYTES));
     model.is_some() && valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
 }
 
+fn is_whisper_ready(id: &str) -> bool {
+    let dir = model_dir_for(id);
+    valid_file_size(&dir.join("encoder.onnx"), WHISPER_PART_MIN_BYTES).is_some()
+        && valid_file_size(&dir.join("decoder.onnx"), WHISPER_PART_MIN_BYTES).is_some()
+        && valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
+}
+
 pub fn is_vad_ready() -> bool {
     valid_file_size(&vad_model_path(), VAD_MIN_BYTES).is_some()
 }
 
+pub fn is_stt_model_ready() -> bool {
+    is_parakeet_ready()
+        || is_whisper_ready(WHISPER_TINY_MODEL_ID)
+        || is_whisper_ready(WHISPER_BASE_MODEL_ID)
+        || is_whisper_ready(WHISPER_SMALL_MODEL_ID)
+}
+
+pub fn is_model_installed(id: &str) -> bool {
+    match id {
+        STT_MODEL_ID => is_parakeet_ready(),
+        VAD_MODEL_ID => is_vad_ready(),
+        WHISPER_TINY_MODEL_ID | WHISPER_BASE_MODEL_ID | WHISPER_SMALL_MODEL_ID => {
+            is_whisper_ready(id)
+        }
+        _ => false,
+    }
+}
+
+fn dir_size(path: &Path, out: &mut u64) {
+    if let Ok(rd) = std::fs::read_dir(path) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                dir_size(&p, out);
+            } else if let Ok(meta) = std::fs::metadata(&p) {
+                *out += meta.len();
+            }
+        }
+    }
+}
+
+pub fn model_disk_bytes(id: &str) -> u64 {
+    let path = if id == VAD_MODEL_ID {
+        vad_model_path()
+    } else {
+        model_dir_for(id)
+    };
+    if path.is_file() {
+        valid_file_size(&path, 0).unwrap_or(0)
+    } else if path.is_dir() {
+        let mut total = 0u64;
+        dir_size(&path, &mut total);
+        total
+    } else {
+        0
+    }
+}
+
 pub fn catalog() -> Vec<ModelInfo> {
-    vec![
-        ModelInfo {
-            id: STT_MODEL_ID.to_string(),
-            name: "Parakeet TDT 110M (int8)".to_string(),
-            kind: "stt".to_string(),
-            engine_key: Some("parakeet".to_string()),
-            size_bytes: 104_857_600,
-            installed: is_stt_model_ready(),
-            available: true,
-        },
-        ModelInfo {
-            id: VAD_MODEL_ID.to_string(),
-            name: "Silero VAD v4".to_string(),
-            kind: "vad".to_string(),
-            engine_key: None,
-            size_bytes: 1_700_000,
-            installed: is_vad_ready(),
-            available: true,
-        },
-        ModelInfo {
-            id: WHISPER_MODEL_ID.to_string(),
-            name: "Whisper Tiny".to_string(),
-            kind: "stt".to_string(),
-            engine_key: Some("whisper".to_string()),
-            size_bytes: 40_000_000,
-            installed: false,
-            available: false,
-        },
-    ]
+    MODELS
+        .iter()
+        .map(|def| ModelInfo {
+            id: def.id.to_string(),
+            name: def.name.to_string(),
+            kind: def.kind.to_string(),
+            engine_key: def.engine_key.map(|s| s.to_string()),
+            size_bytes: def.size_bytes,
+            disk_bytes: model_disk_bytes(def.id),
+            installed: is_model_installed(def.id),
+            available: def.available,
+        })
+        .collect()
 }
 
 pub fn download_to(url: &str, dest: &Path) -> Result<()> {
@@ -173,6 +292,11 @@ fn extract_archive(archive_path: &Path, dest: &Path) -> Result<()> {
         .map_err(|e| CoreError::Download(format!("failed to extract {}: {e}", archive_path.display())))
 }
 
+fn clean_after(archive_path: &Path, extract_dir: &Path) {
+    let _ = std::fs::remove_file(archive_path);
+    let _ = std::fs::remove_dir_all(extract_dir);
+}
+
 fn install_stt_model(
     on_progress: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<bool> {
@@ -181,7 +305,7 @@ fn install_stt_model(
     let archive_path = base.join("parakeet-tdt-ctc-110m.tar.bz2");
     let extract_dir = base.join(".extract");
 
-    for url in model_archive_urls() {
+    for url in [PARAKEET_INT8_ARCHIVE, PARAKEET_ARCHIVE] {
         log::info!("downloading {url} -> {}", archive_path.display());
         if download_to_with_progress(url, &archive_path, &mut |received, total| {
             on_progress(STT_MODEL_ID, received, total)
@@ -216,8 +340,7 @@ fn install_stt_model(
             std::fs::copy(model, model_dir.join(model_name)).map_err(CoreError::Io)?;
             std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
             log::info!("installed {} + tokens.txt -> {}", model_name.to_string_lossy(), model_dir.display());
-            let _ = std::fs::remove_file(&archive_path);
-            let _ = std::fs::remove_dir_all(&extract_dir);
+            clean_after(&archive_path, &extract_dir);
             return Ok(true);
         }
         log::warn!("archive {} has no recognizer files, trying next", url);
@@ -226,17 +349,70 @@ fn install_stt_model(
     Ok(false)
 }
 
-pub fn ensure_models() -> Result<()> {
-    ensure_models_with_progress(&mut |_, _, _| {})
+fn install_whisper_model(
+    id: &str,
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+) -> Result<()> {
+    let def = model_def(id).ok_or_else(|| CoreError::Download(format!("unknown model '{id}'")))?;
+    let base = models_dir();
+    std::fs::create_dir_all(&base).map_err(CoreError::Io)?;
+    let archive_path = base.join(format!("{id}.tar.bz2"));
+    let extract_dir = base.join(format!(".extract-{id}"));
+
+    log::info!("downloading {} -> {}", def.url, archive_path.display());
+    download_to_with_progress(def.url, &archive_path, &mut |received, total| {
+        on_progress(id, received, total)
+    })?;
+    if extract_dir.exists() {
+        std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
+    }
+    extract_archive(&archive_path, &extract_dir)?;
+
+    let mut files = Vec::new();
+    collect_files(&extract_dir, &mut files);
+    let encoder = files.iter().find(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("encoder.onnx"))
+    });
+    let decoder = files.iter().find(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("decoder.onnx"))
+    });
+    let tokens = files.iter().find(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("tokens.txt"))
+    });
+
+    let (Some(encoder), Some(decoder), Some(tokens)) = (encoder, decoder, tokens) else {
+        clean_after(&archive_path, &extract_dir);
+        return Err(CoreError::Download(format!(
+            "archive {id} has no encoder/decoder/tokens files"
+        )));
+    };
+
+    let model_dir = model_dir_for(id);
+    std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
+    std::fs::copy(encoder, model_dir.join("encoder.onnx")).map_err(CoreError::Io)?;
+    std::fs::copy(decoder, model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
+    std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+    log::info!("installed {id} -> {}", model_dir.display());
+    clean_after(&archive_path, &extract_dir);
+    Ok(())
 }
 
 pub fn ensure_model(
     id: &str,
     on_progress: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<()> {
+    if is_model_installed(id) {
+        return Ok(());
+    }
     match id {
         STT_MODEL_ID => {
-            if !is_stt_model_ready() && !install_stt_model(on_progress)? {
+            if !install_stt_model(on_progress)? {
                 return Err(CoreError::Download(
                     "failed to download a usable STT model from any archive".to_string(),
                 ));
@@ -244,25 +420,45 @@ pub fn ensure_model(
             Ok(())
         }
         VAD_MODEL_ID => {
+            log::info!("downloading silero VAD -> {}", vad_model_path().display());
+            download_to_with_progress(SILERO_VAD_URL, &vad_model_path(), &mut |received, total| {
+                on_progress(VAD_MODEL_ID, received, total)
+            })?;
             if !is_vad_ready() {
-                log::info!("downloading silero VAD -> {}", vad_model_path().display());
-                download_to_with_progress(SILERO_VAD_URL, &vad_model_path(), &mut |received, total| {
-                    on_progress(VAD_MODEL_ID, received, total)
-                })?;
-                if !is_vad_ready() {
-                    return Err(CoreError::Download(format!(
-                        "downloaded VAD file is too small: {}",
-                        vad_model_path().display()
-                    )));
-                }
+                return Err(CoreError::Download(format!(
+                    "downloaded VAD file is too small: {}",
+                    vad_model_path().display()
+                )));
             }
             Ok(())
         }
-        WHISPER_MODEL_ID => Err(CoreError::Download(format!(
-            "model '{id}' is not available yet"
-        ))),
+        WHISPER_TINY_MODEL_ID | WHISPER_BASE_MODEL_ID | WHISPER_SMALL_MODEL_ID => {
+            install_whisper_model(id, on_progress)
+        }
         other => Err(CoreError::Download(format!("unknown model '{other}'"))),
     }
+}
+
+pub fn remove_model(id: &str) -> Result<()> {
+    let path = if id == VAD_MODEL_ID {
+        vad_model_path()
+    } else {
+        model_dir_for(id)
+    };
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        std::fs::remove_dir_all(&path).map_err(CoreError::Io)?;
+    } else {
+        std::fs::remove_file(&path).map_err(CoreError::Io)?;
+    }
+    log::info!("removed model {id} ({})", path.display());
+    Ok(())
+}
+
+pub fn ensure_models() -> Result<()> {
+    ensure_models_with_progress(&mut |_, _, _| {})
 }
 
 pub fn ensure_models_with_progress(
@@ -279,7 +475,7 @@ mod tests {
 
     #[test]
     fn model_ready_requires_files() {
-        let tmp = std::env::temp_dir().join("opendictate-test-models");
+        let tmp = std::env::temp_dir().join("opendictate-test-ready");
         std::env::set_var("XDG_DATA_HOME", &tmp);
         let result = is_stt_model_ready();
         std::env::remove_var("XDG_DATA_HOME");
@@ -288,17 +484,13 @@ mod tests {
     }
 
     #[test]
-    fn model_archive_urls_are_ordered() {
-        let urls = model_archive_urls();
-        assert!(urls[0].contains("int8"));
-    }
-
-    #[test]
     fn catalog_lists_known_models() {
         let catalog = catalog();
         assert!(catalog.iter().any(|m| m.id == STT_MODEL_ID));
         assert!(catalog.iter().any(|m| m.id == VAD_MODEL_ID));
-        assert!(catalog.iter().any(|m| m.id == WHISPER_MODEL_ID));
+        assert!(catalog.iter().any(|m| m.id == WHISPER_TINY_MODEL_ID));
+        assert!(catalog.iter().any(|m| m.id == WHISPER_BASE_MODEL_ID));
+        assert!(catalog.iter().any(|m| m.id == WHISPER_SMALL_MODEL_ID));
         assert!(!catalog.iter().any(|m| m.id.is_empty()));
         assert_eq!(
             catalog
@@ -307,5 +499,33 @@ mod tests {
                 .and_then(|m| m.engine_key.as_deref()),
             Some("parakeet")
         );
+    }
+
+    #[test]
+    fn whisper_models_are_flagged() {
+        assert!(is_whisper_model(WHISPER_TINY_MODEL_ID));
+        assert!(is_whisper_model(WHISPER_BASE_MODEL_ID));
+        assert!(is_whisper_model(WHISPER_SMALL_MODEL_ID));
+        assert!(!is_whisper_model(STT_MODEL_ID));
+        assert!(!is_whisper_model("bogus"));
+    }
+
+    #[test]
+    fn installed_state_matches_disk() {
+        let tmp = std::env::temp_dir().join("opendictate-test-installed");
+        let model_dir = tmp.join("opendictate").join("models").join(DEFAULT_MODEL);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("model.int8.onnx"), vec![0u8; 2_000_000]).unwrap();
+        std::fs::write(model_dir.join("tokens.txt"), vec![0u8; 200]).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let catalog = catalog();
+        let parakeet = catalog.iter().find(|m| m.id == STT_MODEL_ID).unwrap();
+        assert!(parakeet.installed);
+        assert_eq!(parakeet.disk_bytes, 2_000_200);
+        let whisper = catalog.iter().find(|m| m.id == WHISPER_TINY_MODEL_ID).unwrap();
+        assert!(!whisper.installed);
+        assert_eq!(whisper.disk_bytes, 0);
+        std::env::remove_var("XDG_DATA_HOME");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

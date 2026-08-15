@@ -30,14 +30,15 @@ Frontend routing: `main.tsx` reads `location.search` — if `window=overlay` ren
 | `get_mic` | — | `string \| null` |
 | `set_mic` | `name: string` | `()` |
 | `models_status` | — | `{ stt_ready: boolean, vad_ready: boolean }` |
-| `models_catalog` | — | `{ id, name, kind: "stt" \| "vad", engine_key: string \| null, size_bytes, installed, available }[]` — downloadable/installed model list |
+| `models_catalog` | — | `{ id, name, kind: "stt" \| "vad", engine_key: string \| null, size_bytes, disk_bytes, installed, available }[]` — every downloadable/installed model with real on-disk size |
 | `ensure_model` | `id: string` | `()` (emits `model-progress` with `file` = model id; emits `models-ready` on success; errors throw) |
+| `remove_model` | `id: string` | `()` — deletes model files from disk |
 | `start_recording` | `mode: "dictate" \| "test"` | `()` |
 | `stop_recording` | — | `{ text: string, duration_ms: number }` — "test" mode returns raw text only, no inject; "dictate" mode injects into focused app and emits `transcript` |
 | `cancel_recording` | — | `()` |
 | `is_recording` | — | `boolean` |
-| `get_settings` | — | `{ hotkey: string, mic: string \| null, engine: string, language: string, onboarded: boolean }` |
-| `set_settings` | `settings` (partial: hotkey, engine, language) | `()` — re-registers hotkey if changed |
+| `get_settings` | — | `{ hotkey: string, mic: string \| null, engine: string, language: string, onboarded: boolean, stt_model: string }` |
+| `set_settings` | `settings` (partial: hotkey, engine, language, stt_model) | `()` — re-registers hotkey if changed (new key registered first; old stays live on failure) |
 | `get_history` | — | `{ id: number, text: string, created_at: string, duration_ms: number, source: string }[]` |
 | `delete_history` | `id: number` | `()` |
 | `clear_history` | — | `()` |

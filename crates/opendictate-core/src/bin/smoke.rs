@@ -84,7 +84,7 @@ fn run(record_secs: u64, countdown_secs: u64) -> Result<String, String> {
         vad_result.trimmed_audio.len()
     );
 
-    let engine = SttEngine::new(&stt_model_dir()).map_err(|e| e.to_string())?;
+    let engine = SttEngine::new(&stt_model_dir(), false).map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     let text = engine
         .transcribe(&vad_result.trimmed_audio)

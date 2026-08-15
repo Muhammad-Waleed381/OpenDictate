@@ -31,6 +31,7 @@ pub fn run() {
             commands::models_status,
             commands::models_catalog,
             commands::ensure_model,
+            commands::remove_model,
             commands::start_recording,
             commands::stop_recording,
             commands::cancel_recording,

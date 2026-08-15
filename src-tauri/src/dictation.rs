@@ -50,7 +50,7 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
         });
     }
 
-    let engine = load_engine()?;
+    let engine = load_engine(state)?;
     let text = engine
         .transcribe(&speech.trimmed_audio)
         .map_err(|e| e.to_string())?;
@@ -130,10 +130,20 @@ fn run_vad(
     Ok(apply_vad(audio, silero.as_ref()))
 }
 
-fn load_engine() -> Result<SttEngine, String> {
-    let dir = models::stt_model_dir();
-    if !dir.exists() {
-        return Err(format!("STT model not found in {}", dir.display()));
+fn load_engine(state: &AppState) -> Result<SttEngine, String> {
+    let model_id = {
+        let settings = state.settings.lock().map_err(|e| e.to_string())?;
+        if settings.stt_model.is_empty() {
+            models::STT_MODEL_ID.to_string()
+        } else {
+            settings.stt_model.clone()
+        }
+    };
+    if !models::is_model_installed(&model_id) {
+        return Err(format!(
+            "STT model '{model_id}' is not installed — download it in Settings → Models"
+        ));
     }
-    SttEngine::new(&dir).map_err(|e| e.to_string())
+    let dir = models::model_dir_for(&model_id);
+    SttEngine::new(&dir, models::is_whisper_model(&model_id)).map_err(|e| e.to_string())
 }
