@@ -74,15 +74,27 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                match window.label() {
-                    "main" => {
+            match window.label() {
+                "main" => {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         let _ = window.hide();
+                        let app = window.app_handle();
+                        dock::ensure_on_main(app);
                     }
-                    "dock" => api.prevent_close(),
-                    _ => {}
                 }
+                "dock" => match event {
+                    WindowEvent::CloseRequested { api, .. } => api.prevent_close(),
+                    WindowEvent::Moved(_)
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::ScaleFactorChanged { .. }
+                    | WindowEvent::Focused(_) => {
+                        let app = window.app_handle();
+                        dock::ensure_on_main(app);
+                    }
+                    _ => {}
+                },
+                _ => {}
             }
         })
         .run(tauri::generate_context!())
