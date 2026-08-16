@@ -195,3 +195,7 @@ export function onTranscript(
 ): Promise<UnlistenFn> {
   return listen<TranscriptPayload>("transcript", (event) => cb(event.payload));
 }
+
+export function onHistoryUpdated(cb: () => void): Promise<UnlistenFn> {
+  return listen<unknown>("history-updated", () => cb());
+}

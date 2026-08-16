@@ -21,6 +21,9 @@ function useOpenDictateEvents() {
       api.onAudioLevel((payload) => store.setLevel(payload.rms)),
       api.onModelProgress((payload) => store.addModelProgress(payload)),
       api.onModelsReady(() => store.refreshModels()),
+      api.onHistoryUpdated(() =>
+        api.getHistory().then((history) => useStore.setState({ history })),
+      ),
     ];
     let cancelled = false;
     subs.forEach((sub) => {

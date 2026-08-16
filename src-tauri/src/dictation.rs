@@ -68,11 +68,6 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
     let _ = app.emit("overlay-state", serde_json::json!({ "state": "inserted", "message": null }));
 
     if !text.is_empty() {
-        if let Err(e) = inject::inject_text(app, &text) {
-            dock::set_state(app, "error", Some(&format!("failed to paste: {e}")));
-            return Ok(TranscriptResult { text, duration_ms });
-        }
-
         let entry = HistoryEntry {
             id: 0,
             text: text.clone(),
@@ -81,7 +76,14 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
             source: "hotkey".to_string(),
         };
         if let Ok(conn) = state.db.lock() {
-            let _ = db::insert_history(&conn, &entry);
+            if db::insert_history(&conn, &entry).is_ok() {
+                let _ = app.emit("history-updated", serde_json::json!({}));
+            }
+        }
+
+        if let Err(e) = inject::inject_text(app, &text) {
+            dock::set_state(app, "error", Some(&format!("failed to paste: {e}")));
+            return Ok(TranscriptResult { text, duration_ms });
         }
     }
 
