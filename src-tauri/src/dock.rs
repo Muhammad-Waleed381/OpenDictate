@@ -1,13 +1,13 @@
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Size, WebviewWindow};
 
-pub const DOCK_SIZE: f64 = 30.0;
+pub const DOCK_SIZE: f64 = 12.0;
 const MARGIN: f64 = 16.0;
 
 pub fn window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("dock")
 }
 
-fn top_right(app: &AppHandle) -> PhysicalPosition<i32> {
+fn top_right(app: &AppHandle, width: u32) -> PhysicalPosition<i32> {
     let default = PhysicalPosition { x: 100, y: 16 };
     let Some(win) = window(app) else {
         return default;
@@ -16,17 +16,81 @@ fn top_right(app: &AppHandle) -> PhysicalPosition<i32> {
         return default;
     };
     let size = monitor.size();
-    let x = (size.width as f64 - DOCK_SIZE - MARGIN).max(0.0) as i32;
+    let x = (size.width.saturating_sub(width) as f64 - MARGIN).max(0.0) as i32;
     PhysicalPosition { x, y: MARGIN as i32 }
 }
 
 pub fn init(app: &AppHandle) {
     if let Some(win) = window(app) {
-        let _ = win.set_position(top_right(app));
         let _ = win.set_always_on_top(true);
         let _ = win.show();
+        enforce_size(app);
     }
 }
+
+fn enforce_size(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        for _ in 0..6 {
+            let app_for_main = app.clone();
+            let _ = app.run_on_main_thread(move || shrink_to_min(&app_for_main));
+            if let Some(win) = window(&app) {
+                let _ = win.set_min_size(Some(PhysicalSize {
+                    width: DOCK_SIZE as u32,
+                    height: DOCK_SIZE as u32,
+                }));
+                let _ = win.set_size(Size::Physical(PhysicalSize {
+                    width: DOCK_SIZE as u32,
+                    height: DOCK_SIZE as u32,
+                }));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
+        if let Some(win) = window(&app) {
+            let size = win.outer_size().ok().unwrap_or(PhysicalSize {
+                width: DOCK_SIZE as u32,
+                height: DOCK_SIZE as u32,
+            });
+            let monitor = win
+                .current_monitor()
+                .ok()
+                .flatten()
+                .map(|m| *m.size());
+            let pos = top_right(&app, size.width);
+            let _ = win.set_position(pos);
+            log::info!("dock window: size={size:?} pos={pos:?} monitor={monitor:?}");
+        }
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn shrink_to_min(app: &AppHandle) {
+    use gtk::prelude::*;
+
+    let Some(win) = window(app) else { return };
+    let Ok(vbox) = win.default_vbox() else { return };
+
+    fn find_webview(widget: &gtk::Widget) -> Option<gtk::Widget> {
+        if widget.type_().name().contains("WebKitWebView") {
+            return Some(widget.clone());
+        }
+        let Ok(container) = widget.clone().downcast::<gtk::Container>() else {
+            return None;
+        };
+        container
+            .children()
+            .iter()
+            .find_map(find_webview)
+    }
+
+    let vbox_widget: gtk::Widget = vbox.upcast();
+    if let Some(webview) = find_webview(&vbox_widget) {
+        webview.set_size_request(DOCK_SIZE as i32, DOCK_SIZE as i32);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn shrink_to_min(_app: &AppHandle) {}
 
 pub fn set_state(app: &AppHandle, status: &str, message: Option<&str>) {
     let _ = app.emit(

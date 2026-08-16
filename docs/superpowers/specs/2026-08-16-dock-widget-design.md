@@ -17,7 +17,7 @@ Make OpenDictate a true background utility: closing the window keeps it running;
 
 ### Architecture
 
-The transient `overlay` window becomes a **persistent `dock` window** (top-right corner, **30×30 round dot**, always-on-top, skip-taskbar, **non-focusable** — `focusable: false` in the window config). It never hides. It is the record button. (Revision per user feedback: originally 140×40 pill; user wanted "round, very very small".)
+The transient `overlay` window becomes a **persistent `dock` window** (top-right corner, **12×12 round dot**, always-on-top, skip-taskbar, **non-focusable** — `focusable: false` in the window config). It never hides. It is the record button. (Revisions per user feedback: 140×40 pill → 30px dot → **12px dot**; WebKitGTK clamps tiny windows to 200×294, so `dock.rs` overrides the WebView's GTK size-request to 12×12 and right-docks by measured size.)
 
 - Rust: `overlay.rs` → `dock.rs`. `set_state` keeps emitting the `overlay-state` event (drives dock visuals) but no longer show/hides the window. `init()` positions the window at the top-right of the primary monitor at startup.
 - Frontend: `OverlayPill.tsx` → `DockButton.tsx`. Rendered by `OverlayApp` (same window routing, `?window=dock`). Click = toggle record (same backend commands as the hotkey). Visuals driven by `overlay-state` + `audio-level` events:
