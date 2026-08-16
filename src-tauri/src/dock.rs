@@ -158,4 +158,5 @@ pub fn set_state(app: &AppHandle, status: &str, message: Option<&str>) {
             "message": message,
         }),
     );
+    crate::tray::apply_state_icon(app, status);
 }

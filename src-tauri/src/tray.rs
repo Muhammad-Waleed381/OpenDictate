@@ -48,3 +48,9 @@ pub fn show_main(app: &AppHandle) {
         let _ = win.set_focus();
     }
 }
+
+pub fn apply_state_icon(app: &AppHandle, status: &str) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_icon(Some(crate::tray_icon::icon_for_status(status)));
+    }
+}

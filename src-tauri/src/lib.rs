@@ -6,6 +6,7 @@ mod hotkey;
 mod inject;
 mod state;
 mod tray;
+pub mod tray_icon;
 
 use std::sync::{Arc, Mutex};
 
