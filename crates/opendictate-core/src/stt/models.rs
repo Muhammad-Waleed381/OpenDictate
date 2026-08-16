@@ -16,6 +16,8 @@ pub const VAD_MODEL_ID: &str = "silero-vad-v4";
 pub const WHISPER_TINY_MODEL_ID: &str = "whisper-tiny-en";
 pub const WHISPER_BASE_MODEL_ID: &str = "whisper-base-en";
 pub const WHISPER_SMALL_MODEL_ID: &str = "whisper-small-en";
+pub const WHISPER_TURBO_MODEL_ID: &str = "whisper-turbo-en";
+pub const WHISPER_MEDIUM_MODEL_ID: &str = "whisper-medium-en";
 
 const PARAKEET_INT8_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8.tar.bz2";
 const PARAKEET_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000.tar.bz2";
@@ -24,6 +26,8 @@ const SILERO_VAD_URL: &str =
 const WHISPER_TINY_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2";
 const WHISPER_BASE_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.en.tar.bz2";
 const WHISPER_SMALL_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.en.tar.bz2";
+const WHISPER_TURBO_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-turbo.tar.bz2";
+const WHISPER_MEDIUM_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-medium.en.tar.bz2";
 
 const MODEL_MIN_BYTES: u64 = 1_000_000;
 const TOKENS_MIN_BYTES: u64 = 100;
@@ -59,7 +63,7 @@ const MODELS: &[ModelDef] = &[
         name: "Parakeet TDT 110M (int8)",
         kind: "stt",
         engine_key: Some("parakeet"),
-        size_bytes: 104_857_600,
+        size_bytes: 104_337_827,
         url: PARAKEET_INT8_ARCHIVE,
         available: true,
     },
@@ -91,12 +95,30 @@ const MODELS: &[ModelDef] = &[
         available: true,
     },
     ModelDef {
+        id: WHISPER_TURBO_MODEL_ID,
+        name: "Whisper Turbo (Large v3)",
+        kind: "stt",
+        engine_key: Some("whisper"),
+        size_bytes: 563_790_207,
+        url: WHISPER_TURBO_ARCHIVE,
+        available: true,
+    },
+    ModelDef {
         id: WHISPER_SMALL_MODEL_ID,
         name: "Whisper Small (en)",
         kind: "stt",
         engine_key: Some("whisper"),
         size_bytes: 635_693_775,
         url: WHISPER_SMALL_ARCHIVE,
+        available: true,
+    },
+    ModelDef {
+        id: WHISPER_MEDIUM_MODEL_ID,
+        name: "Whisper Medium (en)",
+        kind: "stt",
+        engine_key: Some("whisper"),
+        size_bytes: 1_905_872_689,
+        url: WHISPER_MEDIUM_ARCHIVE,
         available: true,
     },
 ];
@@ -135,7 +157,11 @@ pub fn model_dir_for(id: &str) -> PathBuf {
 pub fn is_whisper_model(id: &str) -> bool {
     matches!(
         id,
-        WHISPER_TINY_MODEL_ID | WHISPER_BASE_MODEL_ID | WHISPER_SMALL_MODEL_ID
+        WHISPER_TINY_MODEL_ID
+            | WHISPER_BASE_MODEL_ID
+            | WHISPER_SMALL_MODEL_ID
+            | WHISPER_TURBO_MODEL_ID
+            | WHISPER_MEDIUM_MODEL_ID
     )
 }
 
@@ -163,19 +189,18 @@ pub fn is_vad_ready() -> bool {
 }
 
 pub fn is_stt_model_ready() -> bool {
-    is_parakeet_ready()
-        || is_whisper_ready(WHISPER_TINY_MODEL_ID)
-        || is_whisper_ready(WHISPER_BASE_MODEL_ID)
-        || is_whisper_ready(WHISPER_SMALL_MODEL_ID)
+    MODELS.iter().any(|m| m.kind == "stt" && is_model_installed(m.id))
 }
 
 pub fn is_model_installed(id: &str) -> bool {
     match id {
         STT_MODEL_ID => is_parakeet_ready(),
         VAD_MODEL_ID => is_vad_ready(),
-        WHISPER_TINY_MODEL_ID | WHISPER_BASE_MODEL_ID | WHISPER_SMALL_MODEL_ID => {
-            is_whisper_ready(id)
-        }
+        WHISPER_TINY_MODEL_ID
+        | WHISPER_BASE_MODEL_ID
+        | WHISPER_SMALL_MODEL_ID
+        | WHISPER_TURBO_MODEL_ID
+        | WHISPER_MEDIUM_MODEL_ID => is_whisper_ready(id),
         _ => false,
     }
 }
@@ -432,7 +457,11 @@ pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Re
             }
             Ok(())
         }
-        WHISPER_TINY_MODEL_ID | WHISPER_BASE_MODEL_ID | WHISPER_SMALL_MODEL_ID => {
+        WHISPER_TINY_MODEL_ID
+        | WHISPER_BASE_MODEL_ID
+        | WHISPER_SMALL_MODEL_ID
+        | WHISPER_TURBO_MODEL_ID
+        | WHISPER_MEDIUM_MODEL_ID => {
             install_whisper_model(id, on_progress)
         }
         other => Err(CoreError::Download(format!("unknown model '{other}'"))),
@@ -484,11 +513,17 @@ mod tests {
     #[test]
     fn catalog_lists_known_models() {
         let catalog = catalog();
-        assert!(catalog.iter().any(|m| m.id == STT_MODEL_ID));
-        assert!(catalog.iter().any(|m| m.id == VAD_MODEL_ID));
-        assert!(catalog.iter().any(|m| m.id == WHISPER_TINY_MODEL_ID));
-        assert!(catalog.iter().any(|m| m.id == WHISPER_BASE_MODEL_ID));
-        assert!(catalog.iter().any(|m| m.id == WHISPER_SMALL_MODEL_ID));
+        for id in [
+            STT_MODEL_ID,
+            VAD_MODEL_ID,
+            WHISPER_TINY_MODEL_ID,
+            WHISPER_BASE_MODEL_ID,
+            WHISPER_SMALL_MODEL_ID,
+            WHISPER_TURBO_MODEL_ID,
+            WHISPER_MEDIUM_MODEL_ID,
+        ] {
+            assert!(catalog.iter().any(|m| m.id == id), "{id} missing");
+        }
         assert!(!catalog.iter().any(|m| m.id.is_empty()));
         assert_eq!(
             catalog
@@ -497,13 +532,20 @@ mod tests {
                 .and_then(|m| m.engine_key.as_deref()),
             Some("parakeet")
         );
+        assert!(catalog.iter().all(|m| m.size_bytes > 0));
     }
 
     #[test]
     fn whisper_models_are_flagged() {
-        assert!(is_whisper_model(WHISPER_TINY_MODEL_ID));
-        assert!(is_whisper_model(WHISPER_BASE_MODEL_ID));
-        assert!(is_whisper_model(WHISPER_SMALL_MODEL_ID));
+        for id in [
+            WHISPER_TINY_MODEL_ID,
+            WHISPER_BASE_MODEL_ID,
+            WHISPER_SMALL_MODEL_ID,
+            WHISPER_TURBO_MODEL_ID,
+            WHISPER_MEDIUM_MODEL_ID,
+        ] {
+            assert!(is_whisper_model(id), "{id}");
+        }
         assert!(!is_whisper_model(STT_MODEL_ID));
         assert!(!is_whisper_model("bogus"));
     }

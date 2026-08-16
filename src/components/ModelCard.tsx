@@ -200,9 +200,10 @@ export function ModelCard() {
         </div>
       )}
       <p className="text-xs text-muted-foreground">
-        Download a model, then hit <span className="font-bold">Use</span> to make
-        it the active engine. Installed models show their real size on disk and
-        can be deleted. Everything runs 100% offline.
+        Sizes are the exact download bytes. Download a model, then hit{" "}
+        <span className="font-bold">Use</span> to make it the active engine.
+        Installed models show their real size on disk and can be deleted.
+        Everything runs 100% offline.
       </p>
     </div>
   );
