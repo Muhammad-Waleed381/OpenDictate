@@ -6,7 +6,6 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SettingsPatch {
     pub hotkey: Option<String>,
     pub engine: Option<String>,
@@ -15,14 +14,13 @@ pub struct SettingsPatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub hotkey: String,
     pub mic: Option<String>,
     pub engine: String,
     pub language: String,
     pub onboarded: bool,
-    #[serde(default = "default_stt_model")]
+    #[serde(default = "default_stt_model", alias = "sttModel")]
     pub stt_model: String,
 }
 
@@ -44,7 +42,6 @@ impl Default for Settings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct HistoryEntry {
     pub id: i64,
     pub text: String,
@@ -54,7 +51,6 @@ pub struct HistoryEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DictEntry {
     pub id: i64,
     pub word: String,
@@ -62,14 +58,12 @@ pub struct DictEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ModelsStatus {
     pub stt_ready: bool,
     pub vad_ready: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TranscriptResult {
     pub text: String,
     pub duration_ms: u64,

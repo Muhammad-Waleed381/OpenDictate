@@ -119,3 +119,32 @@ pub fn now_timestamp() -> String {
         .as_secs()
         .to_string()
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_roundtrip_and_camelcase_migration() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('app', ?1)",
+            [r#"{"hotkey":"ctrl+k","mic":"default","engine":"parakeet","language":"auto","onboarded":true,"sttModel":"parakeet-tdt-ctc-110m-int8"}"#],
+        )
+        .unwrap();
+        let s = load_settings(&conn);
+        assert_eq!(s.hotkey, "ctrl+k");
+        assert!(s.onboarded);
+        assert_eq!(s.stt_model, "parakeet-tdt-ctc-110m-int8");
+
+        save_settings(&conn, &s).unwrap();
+        let raw: String = conn
+            .query_row("SELECT value FROM settings WHERE key='app'", [], |r| r.get(0))
+            .unwrap();
+        assert!(raw.contains("\"stt_model\""));
+        assert!(!raw.contains("sttModel"));
+    }
+}

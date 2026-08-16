@@ -35,7 +35,6 @@ const VAD_MIN_BYTES: u64 = 100_000;
 const WHISPER_PART_MIN_BYTES: u64 = 5_000_000;
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
@@ -548,6 +547,17 @@ mod tests {
         }
         assert!(!is_whisper_model(STT_MODEL_ID));
         assert!(!is_whisper_model("bogus"));
+    }
+
+    #[test]
+    fn catalog_serializes_snake_case_keys() {
+        let json = serde_json::to_string(&catalog()).unwrap();
+        assert!(json.contains("\"size_bytes\""));
+        assert!(json.contains("\"disk_bytes\""));
+        assert!(json.contains("\"engine_key\""));
+        assert!(!json.contains("sizeBytes"));
+        assert!(!json.contains("diskBytes"));
+        assert!(!json.contains("engineKey"));
     }
 
     #[test]

@@ -2962,6 +2962,7 @@ dependencies = [
  "env_logger",
  "log",
  "serde",
+ "serde_json",
  "sherpa-onnx",
  "tar",
  "thiserror 2.0.20",
