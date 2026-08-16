@@ -26,11 +26,12 @@ Frontend routing: `main.tsx` reads `location.search` — if `window=overlay` ren
 
 | Command | Args | Returns |
 |---|---|---|
-| `list_mics` | — | `string[]` |
+| `list_mics` | — | `string[]` — real microphone names only; ALSA plugin/remap devices (lavrate, pipewire, pulse, dsnoop:…, hw:…, …) are filtered out; `"default"` is kept and labeled "System default (built-in)" by the UI |
+| `get_mic` | — | current mic device name (or `null`) |
 | `get_mic` | — | `string \| null` |
 | `set_mic` | `name: string` | `()` |
 | `models_status` | — | `{ stt_ready: boolean, vad_ready: boolean }` |
-| `models_catalog` | — | `{ id, name, kind: "stt" \| "vad", engine_key: string \| null, size_bytes, disk_bytes, installed, available }[]` — every downloadable/installed model with real on-disk size |
+| `models_catalog` | — | `{ id, name, kind: "stt" \| "vad", engine_key: string \| null, size_bytes, disk_bytes, installed, available }[]` — every downloadable/installed model with real on-disk size. The UI shows STT models only; VAD is auto-managed (installed at startup, never user-configurable) |
 | `ensure_model` | `id: string` | `()` (emits `model-progress` with `file` = model id; emits `models-ready` on success; errors throw) |
 | `remove_model` | `id: string` | `()` — deletes model files from disk |
 | `start_recording` | `mode: "dictate" \| "test"` | `()` |

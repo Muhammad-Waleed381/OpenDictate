@@ -287,9 +287,9 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
 fn extract_archive(archive_path: &Path, dest: &Path) -> Result<()> {
     let file = File::open(archive_path).map_err(CoreError::Io)?;
     let mut archive = Archive::new(BzDecoder::new(file));
-    archive
-        .unpack(dest)
-        .map_err(|e| CoreError::Download(format!("failed to extract {}: {e}", archive_path.display())))
+    archive.unpack(dest).map_err(|e| {
+        CoreError::Download(format!("failed to extract {}: {e}", archive_path.display()))
+    })
 }
 
 fn clean_after(archive_path: &Path, extract_dir: &Path) {
@@ -297,9 +297,7 @@ fn clean_after(archive_path: &Path, extract_dir: &Path) {
     let _ = std::fs::remove_dir_all(extract_dir);
 }
 
-fn install_stt_model(
-    on_progress: &mut dyn FnMut(&str, u64, u64),
-) -> Result<bool> {
+fn install_stt_model(on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<bool> {
     let base = models_dir();
     std::fs::create_dir_all(&base).map_err(CoreError::Io)?;
     let archive_path = base.join("parakeet-tdt-ctc-110m.tar.bz2");
@@ -331,7 +329,9 @@ fn install_stt_model(
                 Some("model.int8.onnx") | Some("model.onnx")
             )
         });
-        let tokens_file = files.iter().find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"));
+        let tokens_file = files
+            .iter()
+            .find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"));
 
         if let (Some(model), Some(tokens)) = (model_file, tokens_file) {
             let model_dir = stt_model_dir();
@@ -339,7 +339,11 @@ fn install_stt_model(
             let model_name = model.file_name().unwrap_or_default();
             std::fs::copy(model, model_dir.join(model_name)).map_err(CoreError::Io)?;
             std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
-            log::info!("installed {} + tokens.txt -> {}", model_name.to_string_lossy(), model_dir.display());
+            log::info!(
+                "installed {} + tokens.txt -> {}",
+                model_name.to_string_lossy(),
+                model_dir.display()
+            );
             clean_after(&archive_path, &extract_dir);
             return Ok(true);
         }
@@ -349,10 +353,7 @@ fn install_stt_model(
     Ok(false)
 }
 
-fn install_whisper_model(
-    id: &str,
-    on_progress: &mut dyn FnMut(&str, u64, u64),
-) -> Result<()> {
+fn install_whisper_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<()> {
     let def = model_def(id).ok_or_else(|| CoreError::Download(format!("unknown model '{id}'")))?;
     let base = models_dir();
     std::fs::create_dir_all(&base).map_err(CoreError::Io)?;
@@ -403,10 +404,7 @@ fn install_whisper_model(
     Ok(())
 }
 
-pub fn ensure_model(
-    id: &str,
-    on_progress: &mut dyn FnMut(&str, u64, u64),
-) -> Result<()> {
+pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<()> {
     if is_model_installed(id) {
         return Ok(());
     }
@@ -421,9 +419,11 @@ pub fn ensure_model(
         }
         VAD_MODEL_ID => {
             log::info!("downloading silero VAD -> {}", vad_model_path().display());
-            download_to_with_progress(SILERO_VAD_URL, &vad_model_path(), &mut |received, total| {
-                on_progress(VAD_MODEL_ID, received, total)
-            })?;
+            download_to_with_progress(
+                SILERO_VAD_URL,
+                &vad_model_path(),
+                &mut |received, total| on_progress(VAD_MODEL_ID, received, total),
+            )?;
             if !is_vad_ready() {
                 return Err(CoreError::Download(format!(
                     "downloaded VAD file is too small: {}",
@@ -461,9 +461,7 @@ pub fn ensure_models() -> Result<()> {
     ensure_models_with_progress(&mut |_, _, _| {})
 }
 
-pub fn ensure_models_with_progress(
-    on_progress: &mut dyn FnMut(&str, u64, u64),
-) -> Result<()> {
+pub fn ensure_models_with_progress(on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<()> {
     ensure_model(STT_MODEL_ID, on_progress)?;
     ensure_model(VAD_MODEL_ID, on_progress)?;
     Ok(())
@@ -522,7 +520,10 @@ mod tests {
         let parakeet = catalog.iter().find(|m| m.id == STT_MODEL_ID).unwrap();
         assert!(parakeet.installed);
         assert_eq!(parakeet.disk_bytes, 2_000_200);
-        let whisper = catalog.iter().find(|m| m.id == WHISPER_TINY_MODEL_ID).unwrap();
+        let whisper = catalog
+            .iter()
+            .find(|m| m.id == WHISPER_TINY_MODEL_ID)
+            .unwrap();
         assert!(!whisper.installed);
         assert_eq!(whisper.disk_bytes, 0);
         std::env::remove_var("XDG_DATA_HOME");

@@ -9,14 +9,8 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args: Vec<String> = std::env::args().collect();
-    let record_secs: u64 = args
-        .get(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(5);
-    let countdown_secs: u64 = args
-        .get(2)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(3);
+    let record_secs: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5);
+    let countdown_secs: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(3);
 
     println!("OpenDictate smoke test — record {record_secs}s, transcribe locally");
 
@@ -35,7 +29,10 @@ fn main() {
 }
 
 fn run(record_secs: u64, countdown_secs: u64) -> Result<String, String> {
-    println!("Models dir: {}", opendictate_core::stt::models::models_dir().display());
+    println!(
+        "Models dir: {}",
+        opendictate_core::stt::models::models_dir().display()
+    );
     ensure_models().map_err(|e| format!("model setup failed: {e}"))?;
 
     println!("Input devices:");

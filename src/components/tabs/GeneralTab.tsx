@@ -137,6 +137,13 @@ function HotkeyCapture() {
   );
 }
 
+const MIC_LABELS: Record<string, string> = {
+  default: "System default (built-in)",
+};
+
+const micLabel = (name: string | null): string =>
+  name === null ? "Select microphone" : (MIC_LABELS[name] ?? name);
+
 export function GeneralTab() {
   const mics = useStore((s) => s.mics);
   const mic = useStore((s) => s.mic);
@@ -165,7 +172,7 @@ export function GeneralTab() {
           <Label htmlFor="mic">Microphone</Label>
           <Select value={mic ?? ""} onValueChange={handleMicChange}>
             <SelectTrigger className="w-full" id="mic">
-              <SelectValue />
+              <SelectValue>{micLabel(mic)}</SelectValue>
             </SelectTrigger>
             <SelectContent className="w-full">
               {mics.length === 0 ? (
@@ -175,7 +182,7 @@ export function GeneralTab() {
               ) : (
                 mics.map((name) => (
                   <SelectItem key={name} value={name}>
-                    {name}
+                    {micLabel(name)}
                   </SelectItem>
                 ))
               )}
@@ -190,7 +197,11 @@ export function GeneralTab() {
             onValueChange={handleLanguageChange}
           >
             <SelectTrigger className="w-full" id="language">
-              <SelectValue />
+              <SelectValue>
+                {settings?.language === "auto" || settings?.language == null
+                  ? "Auto (system default)"
+                  : settings.language}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent className="w-full">
               <SelectItem value="auto">Auto (system default)</SelectItem>

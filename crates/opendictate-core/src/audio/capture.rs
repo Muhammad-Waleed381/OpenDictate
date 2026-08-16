@@ -36,6 +36,88 @@ impl Default for AudioRecorder {
     }
 }
 
+/// ALSA plugin/remap PCM names that cpal exposes as "input devices" but that
+/// are not real microphones (rate converters, mixers, routing endpoints, ...).
+const ALSA_PLUGIN_NAMES: &[&str] = &[
+    "a52",
+    "adsrs",
+    "alaw",
+    "asym",
+    "autoconvert",
+    "ctl",
+    "dav",
+    "dboss",
+    "dshare",
+    "dsnoop",
+    "dsp",
+    "dtable",
+    "dup",
+    "empty",
+    "extplug",
+    "file",
+    "files",
+    "hooks",
+    "hw",
+    "ioplug",
+    "jack",
+    "ladspa",
+    "lfloat",
+    "linear",
+    "loop",
+    "maflo",
+    "mchmap",
+    "mix",
+    "mulaw",
+    "multi",
+    "null",
+    "oss",
+    "pipewire",
+    "plug",
+    "pulse",
+    "rate",
+    "route",
+    "share",
+    "shm",
+    "softvol",
+    "speex",
+    "speexrate",
+    "samplerate",
+    "lavrate",
+    "tee",
+    "upmix",
+    "usbstream",
+    "vdownmix",
+    "dmix",
+    "sysdefault",
+];
+
+const NON_INPUT_PREFIXES: &[&str] = &[
+    "dsnoop",
+    "surround",
+    "front",
+    "rear",
+    "center_lfe",
+    "side",
+    "dmix",
+    "hw:",
+    "plughw",
+    "iec958",
+    "null",
+    "jack",
+    "multi",
+    "usbstream",
+    "sysdefault",
+];
+
+pub fn is_usable_mic_name(name: &str) -> bool {
+    let n = name.trim();
+    !n.is_empty()
+        && !n.contains(':')
+        && !n.contains('=')
+        && !ALSA_PLUGIN_NAMES.contains(&n)
+        && !NON_INPUT_PREFIXES.iter().any(|p| n.starts_with(p))
+}
+
 impl AudioRecorder {
     pub fn new() -> Self {
         Self {
@@ -65,7 +147,9 @@ impl AudioRecorder {
             Some(device) => match self.start_with_device(device) {
                 Ok(()) => Ok(()),
                 Err(e) => {
-                    log::warn!("mic '{name}' failed to start ({e}), falling back to default device");
+                    log::warn!(
+                        "mic '{name}' failed to start ({e}), falling back to default device"
+                    );
                     self.start()
                 }
             },
@@ -77,29 +161,12 @@ impl AudioRecorder {
     }
 
     pub fn list_input_devices() -> Vec<String> {
-        const NON_INPUT_PREFIXES: &[&str] = &[
-            "dsnoop",
-            "surround",
-            "front",
-            "rear",
-            "center_lfe",
-            "side",
-            "dmix",
-            "hw:",
-            "plughw",
-            "iec958",
-            "null",
-            "jack",
-            "multi",
-            "usbstream",
-            "sysdefault",
-        ];
         cpal::default_host()
             .input_devices()
             .map(|devices| {
                 devices
                     .filter_map(|d| d.name().ok())
-                    .filter(|name| !NON_INPUT_PREFIXES.iter().any(|p| name.starts_with(p)))
+                    .filter(|name| is_usable_mic_name(name))
                     .collect::<Vec<String>>()
             })
             .unwrap_or_default()
@@ -118,7 +185,9 @@ impl AudioRecorder {
 
     fn start_with_device(&self, device: cpal::Device) -> Result<()> {
         if self.state.load(Ordering::SeqCst) != STATE_IDLE {
-            return Err(CoreError::Audio("recording already in progress".to_string()));
+            return Err(CoreError::Audio(
+                "recording already in progress".to_string(),
+            ));
         }
 
         self.stop_signal.store(false, Ordering::SeqCst);
@@ -170,9 +239,8 @@ impl AudioRecorder {
                     let resampled = if native_rate == SAMPLE_RATE {
                         mono
                     } else {
-                        let mut out = Vec::with_capacity(
-                            (mono.len() as f64 * resample_ratio) as usize + 1,
-                        );
+                        let mut out =
+                            Vec::with_capacity((mono.len() as f64 * resample_ratio) as usize + 1);
                         let mut pos = resample_pos.lock().unwrap_or_else(|e| e.into_inner());
                         while (pos.floor() as usize) < mono.len().saturating_sub(1) {
                             let idx = pos.floor() as usize;
@@ -209,10 +277,7 @@ impl AudioRecorder {
             .play()
             .map_err(|e| CoreError::Audio(format!("failed to start stream: {e}")))?;
 
-        self.stream
-            .lock()
-            .map(|mut s| s.0 = Some(stream))
-            .unwrap();
+        self.stream.lock().map(|mut s| s.0 = Some(stream)).unwrap();
         self.started_at
             .lock()
             .map(|mut t| *t = Some(Instant::now()))
@@ -227,19 +292,13 @@ impl AudioRecorder {
             return Err(CoreError::Audio("no recording in progress".to_string()));
         }
         self.stop_signal.store(true, Ordering::SeqCst);
-        self.stream
-            .lock()
-            .map(|mut s| s.0 = None)
-            .unwrap();
+        self.stream.lock().map(|mut s| s.0 = None).unwrap();
         let audio = self
             .buffer
             .lock()
             .map(|mut b| std::mem::take(&mut *b))
             .unwrap_or_default();
-        self.started_at
-            .lock()
-            .map(|mut t| *t = None)
-            .unwrap();
+        self.started_at.lock().map(|mut t| *t = None).unwrap();
         self.state.store(STATE_IDLE, Ordering::SeqCst);
         log::info!("recording stopped: {} samples", audio.len());
         Ok(audio)
@@ -250,18 +309,9 @@ impl AudioRecorder {
             return Err(CoreError::Audio("no recording in progress".to_string()));
         }
         self.stop_signal.store(true, Ordering::SeqCst);
-        self.stream
-            .lock()
-            .map(|mut s| s.0 = None)
-            .unwrap();
-        self.buffer
-            .lock()
-            .map(|mut b| *b = Vec::new())
-            .unwrap();
-        self.started_at
-            .lock()
-            .map(|mut t| *t = None)
-            .unwrap();
+        self.stream.lock().map(|mut s| s.0 = None).unwrap();
+        self.buffer.lock().map(|mut b| *b = Vec::new()).unwrap();
+        self.started_at.lock().map(|mut t| *t = None).unwrap();
         self.state.store(STATE_IDLE, Ordering::SeqCst);
         Ok(())
     }
@@ -287,5 +337,45 @@ mod tests {
     fn stop_without_start_errors() {
         let recorder = AudioRecorder::new();
         assert!(recorder.stop().is_err());
+    }
+
+    #[test]
+    fn rejects_alsa_plugin_junk() {
+        for junk in [
+            "lavrate",
+            "samplerate",
+            "speexrate",
+            "pipewire",
+            "pulse",
+            "speex",
+            "upmix",
+            "vdownmix",
+            "dsnoop:CARD=PCH,DEV=0",
+            "hw:0,0",
+            "surround21",
+            "dmix",
+            "sysdefault",
+            "jack",
+            "multi",
+            "usbstream",
+            "plughw:0",
+        ] {
+            assert!(!is_usable_mic_name(junk), "{junk} should be rejected");
+        }
+    }
+
+    #[test]
+    fn accepts_real_mics_and_default() {
+        for mic in [
+            "default",
+            "HDA Intel PCH",
+            "USB Audio",
+            "HD Webcam C270",
+            "Jabra Evolve 20",
+            "sof-hda-dsp",
+            "Built-in Microphone",
+        ] {
+            assert!(is_usable_mic_name(mic), "{mic} should be accepted");
+        }
     }
 }

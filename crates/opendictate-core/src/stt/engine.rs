@@ -99,7 +99,9 @@ impl SttEngine {
         };
 
         let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| {
-            CoreError::Transcription("failed to create STT recognizer; check model files".to_string())
+            CoreError::Transcription(
+                "failed to create STT recognizer; check model files".to_string(),
+            )
         })?;
 
         log::info!(
@@ -119,9 +121,9 @@ impl SttEngine {
         stream.accept_waveform(16000, audio);
         self.recognizer.decode(&stream);
 
-        let result = stream.get_result().ok_or_else(|| {
-            CoreError::Transcription("no result from STT recognizer".to_string())
-        })?;
+        let result = stream
+            .get_result()
+            .ok_or_else(|| CoreError::Transcription("no result from STT recognizer".to_string()))?;
 
         Ok(result.text.trim().to_string())
     }

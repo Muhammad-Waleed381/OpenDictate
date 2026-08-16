@@ -45,9 +45,8 @@ impl SileroVad {
             ..Default::default()
         };
 
-        VoiceActivityDetector::create(&config, 0.5).ok_or_else(|| {
-            CoreError::Audio("failed to initialize silero VAD".to_string())
-        })?;
+        VoiceActivityDetector::create(&config, 0.5)
+            .ok_or_else(|| CoreError::Audio("failed to initialize silero VAD".to_string()))?;
 
         log::info!("silero VAD loaded from {}", model_path.display());
         Ok(Self { config })
