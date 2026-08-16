@@ -4,11 +4,18 @@ use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 pub fn inject_text(app: &AppHandle, text: &str) -> Result<(), String> {
-    if has_active_x11_window() {
+    let x11_active = has_active_x11_window();
+    log::info!(
+        "inject: active_x11={x11_active} text={} chars",
+        text.chars().count()
+    );
+    let result = if x11_active {
         paste_via_clipboard(app, text)
     } else {
         type_via_ydotool(app, text)
-    }
+    };
+    log::info!("inject: result={result:?}");
+    result
 }
 
 fn paste_via_clipboard(app: &AppHandle, text: &str) -> Result<(), String> {
@@ -33,18 +40,43 @@ fn paste_via_clipboard(app: &AppHandle, text: &str) -> Result<(), String> {
 }
 
 fn type_via_ydotool(app: &AppHandle, text: &str) -> Result<(), String> {
-    if run("ydotool", &["type", "-d", "15", text]).is_ok() {
-        return Ok(());
+    match run("ydotool", &["type", text]) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            log::info!("inject: ydotool type failed ({e}); falling back to clipboard paste");
+            paste_via_clipboard(app, text)
+        }
     }
-    paste_via_clipboard(app, text)
 }
 
 fn has_active_x11_window() -> bool {
-    std::process::Command::new("xdotool")
+    let out = std::process::Command::new("xdotool")
         .arg("getactivewindow")
-        .output()
-        .map(|o| o.status.success() && !o.stdout.is_empty())
-        .unwrap_or(false)
+        .output();
+    match out {
+        Ok(o) => {
+            let ok = o.status.success() && !o.stdout.is_empty();
+            let name = if ok {
+                std::process::Command::new("xdotool")
+                    .args(["getwindowname"])
+                    .arg(std::str::from_utf8(&o.stdout).unwrap_or("").trim())
+                    .output()
+                    .ok()
+                    .and_then(|n| {
+                        String::from_utf8(n.stdout).ok().map(|s| s.trim().to_string())
+                    })
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            log::info!("inject: active x11 window={ok} name={name:?}");
+            ok
+        }
+        Err(e) => {
+            log::info!("inject: xdotool getactivewindow failed: {e}");
+            false
+        }
+    }
 }
 
 fn run(program: &str, args: &[&str]) -> Result<(), String> {
