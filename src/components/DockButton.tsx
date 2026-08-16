@@ -67,9 +67,9 @@ export function DockButton() {
 
   let content: ReactNode;
   if (flash === "inserted") {
-    content = <Check className="size-3.5 text-green-400" strokeWidth={3} />;
+    content = <Check className="size-[17px] text-green-400" strokeWidth={3} />;
   } else if (flash === "error" || error) {
-    content = <X className="size-3.5 text-red-400" strokeWidth={3} />;
+    content = <X className="size-[17px] text-red-400" strokeWidth={3} />;
   } else if (state === "transcribing") {
     content = (
       <span className="flex items-end gap-[1.5px]">
@@ -78,7 +78,7 @@ export function DockButton() {
             key={i}
             className="w-[2px] animate-od-eq origin-bottom bg-white"
             style={{
-              height: 10,
+              height: 12,
               animationDelay: `${i * 0.15}s`,
               animationDuration: "0.8s",
             }}
@@ -88,13 +88,13 @@ export function DockButton() {
     );
   } else if (active) {
     content = (
-      <span className="flex h-3 items-end gap-[1.5px]">
+      <span className="flex h-[14px] items-end gap-[1.5px]">
         {[0, 1, 2, 3].map((i) => (
           <span
             key={i}
             className="w-[2px] animate-od-eq origin-bottom bg-white"
             style={{
-              height: 10,
+              height: 12,
               animationDelay: `${i * 0.18}s`,
               animationDuration: `${0.75 + (i % 2) * 0.2}s`,
             }}
@@ -103,7 +103,7 @@ export function DockButton() {
       </span>
     );
   } else {
-    content = <Mic className="size-3.5 text-slate-900" strokeWidth={2.5} />;
+    content = <Mic className="size-[17px] text-slate-900" strokeWidth={2.5} />;
   }
 
   return (
