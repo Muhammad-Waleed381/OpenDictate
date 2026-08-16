@@ -2,13 +2,20 @@ use std::path::Path;
 
 use sherpa_onnx::{
     OfflineModelConfig, OfflineNemoEncDecCtcModelConfig, OfflineRecognizer,
-    OfflineRecognizerConfig, OfflineWhisperModelConfig,
+    OfflineRecognizerConfig, OfflineTransducerModelConfig, OfflineWhisperModelConfig,
 };
 
 use crate::error::{CoreError, Result};
 
 const MIN_AUDIO_SAMPLES: usize = 3_200;
 const MAX_STT_THREADS: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelKind {
+    Whisper,
+    NemoCtc,
+    NemoTransducer,
+}
 
 pub struct SttEngine {
     recognizer: OfflineRecognizer,
@@ -20,7 +27,7 @@ unsafe impl Send for SttEngine {}
 unsafe impl Sync for SttEngine {}
 
 impl SttEngine {
-    pub fn new(model_dir: &Path, whisper: bool) -> Result<Self> {
+    pub fn new(model_dir: &Path, kind: ModelKind) -> Result<Self> {
         if !model_dir.exists() {
             return Err(CoreError::Transcription(format!(
                 "STT model directory not found at {}",
@@ -32,7 +39,8 @@ impl SttEngine {
             .map(|p| p.get().clamp(1, MAX_STT_THREADS) as i32)
             .unwrap_or(2);
 
-        let config = if whisper {
+        let config = match kind {
+            ModelKind::Whisper => {
             let encoder = model_dir.join("encoder.onnx");
             let decoder = model_dir.join("decoder.onnx");
             let tokens = model_dir.join("tokens.txt");
@@ -61,7 +69,36 @@ impl SttEngine {
                 decoding_method: Some("greedy_search".to_string()),
                 ..Default::default()
             }
-        } else {
+        }
+        ModelKind::NemoTransducer => {
+            let encoder = model_dir.join("encoder.onnx");
+            let decoder = model_dir.join("decoder.onnx");
+            let joiner = model_dir.join("joiner.onnx");
+            let tokens = model_dir.join("tokens.txt");
+            if !encoder.exists() || !decoder.exists() || !joiner.exists() || !tokens.exists() {
+                return Err(CoreError::Transcription(format!(
+                    "transducer model incomplete in {} (need encoder.onnx, decoder.onnx, joiner.onnx, tokens.txt)",
+                    model_dir.display()
+                )));
+            }
+            OfflineRecognizerConfig {
+                model_config: OfflineModelConfig {
+                    transducer: OfflineTransducerModelConfig {
+                        encoder: Some(encoder.to_string_lossy().to_string()),
+                        decoder: Some(decoder.to_string_lossy().to_string()),
+                        joiner: Some(joiner.to_string_lossy().to_string()),
+                    },
+                    tokens: Some(tokens.to_string_lossy().to_string()),
+                    num_threads: n_threads,
+                    provider: Some("cpu".to_string()),
+                    debug: false,
+                    ..Default::default()
+                },
+                decoding_method: Some("greedy_search".to_string()),
+                ..Default::default()
+            }
+        }
+        ModelKind::NemoCtc => {
             let model_file = if model_dir.join("model.int8.onnx").exists() {
                 model_dir.join("model.int8.onnx")
             } else if model_dir.join("model.onnx").exists() {
@@ -96,6 +133,7 @@ impl SttEngine {
                 blank_penalty: 1.2,
                 ..Default::default()
             }
+        }
         };
 
         let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| {
@@ -105,8 +143,9 @@ impl SttEngine {
         })?;
 
         log::info!(
-            "STT engine loaded from {} ({n_threads} threads, whisper={whisper})",
-            model_dir.display()
+            "STT engine loaded from {} ({n_threads} threads, {:?})",
+            model_dir.display(),
+            kind
         );
 
         Ok(Self { recognizer })
@@ -136,7 +175,8 @@ mod tests {
     #[test]
     fn engine_requires_existing_model_dir() {
         let missing = std::env::temp_dir().join("opendictate-no-such-dir");
-        assert!(SttEngine::new(&missing, false).is_err());
-        assert!(SttEngine::new(&missing, true).is_err());
+        assert!(SttEngine::new(&missing, ModelKind::NemoCtc).is_err());
+        assert!(SttEngine::new(&missing, ModelKind::Whisper).is_err());
+        assert!(SttEngine::new(&missing, ModelKind::NemoTransducer).is_err());
     }
 }

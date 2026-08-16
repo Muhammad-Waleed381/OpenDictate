@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use opendictate_core::audio::capture::AudioRecorder;
 use opendictate_core::audio::vad::{apply_vad, compute_rms, SileroVad};
-use opendictate_core::stt::engine::SttEngine;
+use opendictate_core::stt::engine::{ModelKind, SttEngine};
 use opendictate_core::stt::models::{ensure_models, is_vad_ready, stt_model_dir, vad_model_path};
 
 fn main() {
@@ -81,7 +81,7 @@ fn run(record_secs: u64, countdown_secs: u64) -> Result<String, String> {
         vad_result.trimmed_audio.len()
     );
 
-    let engine = SttEngine::new(&stt_model_dir(), false).map_err(|e| e.to_string())?;
+    let engine = SttEngine::new(&stt_model_dir(), ModelKind::NemoCtc).map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     let text = engine
         .transcribe(&vad_result.trimmed_audio)

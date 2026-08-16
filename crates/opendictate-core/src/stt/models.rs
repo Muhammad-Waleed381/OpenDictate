@@ -13,6 +13,8 @@ pub const VAD_FILENAME: &str = "silero_vad.onnx";
 
 pub const STT_MODEL_ID: &str = "parakeet-tdt-ctc-110m-int8";
 pub const VAD_MODEL_ID: &str = "silero-vad-v4";
+pub const PARAKEET_TDT_06B_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
+pub const PARAKEET_UNIFIED_EN_MODEL_ID: &str = "parakeet-unified-en-0.6b";
 pub const WHISPER_TINY_MODEL_ID: &str = "whisper-tiny-en";
 pub const WHISPER_BASE_MODEL_ID: &str = "whisper-base-en";
 pub const WHISPER_SMALL_MODEL_ID: &str = "whisper-small-en";
@@ -21,6 +23,8 @@ pub const WHISPER_MEDIUM_MODEL_ID: &str = "whisper-medium-en";
 
 const PARAKEET_INT8_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8.tar.bz2";
 const PARAKEET_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000.tar.bz2";
+const PARAKEET_TDT_06B_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2";
+const PARAKEET_UNIFIED_EN_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming.tar.bz2";
 const SILERO_VAD_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
 const WHISPER_TINY_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2";
@@ -94,6 +98,24 @@ const MODELS: &[ModelDef] = &[
         available: true,
     },
     ModelDef {
+        id: PARAKEET_TDT_06B_MODEL_ID,
+        name: "Parakeet TDT 0.6B (Multilingual)",
+        kind: "stt",
+        engine_key: Some("parakeet"),
+        size_bytes: 487_170_055,
+        url: PARAKEET_TDT_06B_ARCHIVE,
+        available: true,
+    },
+    ModelDef {
+        id: PARAKEET_UNIFIED_EN_MODEL_ID,
+        name: "Parakeet Unified En 0.6B",
+        kind: "stt",
+        engine_key: Some("parakeet"),
+        size_bytes: 501_350_460,
+        url: PARAKEET_UNIFIED_EN_ARCHIVE,
+        available: true,
+    },
+    ModelDef {
         id: WHISPER_TURBO_MODEL_ID,
         name: "Whisper Turbo (Large v3)",
         kind: "stt",
@@ -164,6 +186,13 @@ pub fn is_whisper_model(id: &str) -> bool {
     )
 }
 
+pub fn is_transducer_model(id: &str) -> bool {
+    matches!(
+        id,
+        PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID
+    )
+}
+
 fn valid_file_size(path: &Path, min_bytes: u64) -> Option<u64> {
     let size = std::fs::metadata(path).ok()?.len();
     (size >= min_bytes).then_some(size)
@@ -183,6 +212,14 @@ fn is_whisper_ready(id: &str) -> bool {
         && valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
 }
 
+fn is_transducer_ready(id: &str) -> bool {
+    let dir = model_dir_for(id);
+    valid_file_size(&dir.join("encoder.onnx"), MODEL_MIN_BYTES).is_some()
+        && valid_file_size(&dir.join("decoder.onnx"), MODEL_MIN_BYTES).is_some()
+        && valid_file_size(&dir.join("joiner.onnx"), MODEL_MIN_BYTES).is_some()
+        && valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
+}
+
 pub fn is_vad_ready() -> bool {
     valid_file_size(&vad_model_path(), VAD_MIN_BYTES).is_some()
 }
@@ -195,6 +232,7 @@ pub fn is_model_installed(id: &str) -> bool {
     match id {
         STT_MODEL_ID => is_parakeet_ready(),
         VAD_MODEL_ID => is_vad_ready(),
+        PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => is_transducer_ready(id),
         WHISPER_TINY_MODEL_ID
         | WHISPER_BASE_MODEL_ID
         | WHISPER_SMALL_MODEL_ID
@@ -428,6 +466,53 @@ fn install_whisper_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) 
     Ok(())
 }
 
+fn install_transducer_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<()> {
+    let def = model_def(id).ok_or_else(|| CoreError::Download(format!("unknown model '{id}'")))?;
+    let base = models_dir();
+    std::fs::create_dir_all(&base).map_err(CoreError::Io)?;
+    let archive_path = base.join(format!("{id}.tar.bz2"));
+    let extract_dir = base.join(format!(".extract-{id}"));
+
+    log::info!("downloading {} -> {}", def.url, archive_path.display());
+    download_to_with_progress(def.url, &archive_path, &mut |received, total| {
+        on_progress(id, received, total)
+    })?;
+    if extract_dir.exists() {
+        std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
+    }
+    extract_archive(&archive_path, &extract_dir)?;
+
+    let mut files = Vec::new();
+    collect_files(&extract_dir, &mut files);
+    let part = |suffix: &str| {
+        files
+            .iter()
+            .find(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n == suffix))
+            .cloned()
+    };
+    let (Some(encoder), Some(decoder), Some(joiner), Some(tokens)) = (
+        part("encoder.onnx").or_else(|| part("encoder.int8.onnx")),
+        part("decoder.onnx").or_else(|| part("decoder.int8.onnx")),
+        part("joiner.onnx").or_else(|| part("joiner.int8.onnx")),
+        part("tokens.txt"),
+    ) else {
+        clean_after(&archive_path, &extract_dir);
+        return Err(CoreError::Download(format!(
+            "archive {id} has no encoder/decoder/joiner/tokens files"
+        )));
+    };
+
+    let model_dir = model_dir_for(id);
+    std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
+    std::fs::copy(encoder, model_dir.join("encoder.onnx")).map_err(CoreError::Io)?;
+    std::fs::copy(decoder, model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
+    std::fs::copy(joiner, model_dir.join("joiner.onnx")).map_err(CoreError::Io)?;
+    std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+    log::info!("installed {id} -> {}", model_dir.display());
+    clean_after(&archive_path, &extract_dir);
+    Ok(())
+}
+
 pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<()> {
     if is_model_installed(id) {
         return Ok(());
@@ -440,6 +525,9 @@ pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Re
                 ));
             }
             Ok(())
+        }
+        PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => {
+            install_transducer_model(id, on_progress)
         }
         VAD_MODEL_ID => {
             log::info!("downloading silero VAD -> {}", vad_model_path().display());
@@ -515,6 +603,8 @@ mod tests {
         for id in [
             STT_MODEL_ID,
             VAD_MODEL_ID,
+            PARAKEET_TDT_06B_MODEL_ID,
+            PARAKEET_UNIFIED_EN_MODEL_ID,
             WHISPER_TINY_MODEL_ID,
             WHISPER_BASE_MODEL_ID,
             WHISPER_SMALL_MODEL_ID,
@@ -547,6 +637,40 @@ mod tests {
         }
         assert!(!is_whisper_model(STT_MODEL_ID));
         assert!(!is_whisper_model("bogus"));
+    }
+
+    #[test]
+    fn transducer_models_are_flagged() {
+        for id in [PARAKEET_TDT_06B_MODEL_ID, PARAKEET_UNIFIED_EN_MODEL_ID] {
+            assert!(is_transducer_model(id), "{id}");
+            assert!(!is_whisper_model(id), "{id}");
+        }
+        assert!(!is_transducer_model(STT_MODEL_ID));
+        assert!(!is_transducer_model(WHISPER_TINY_MODEL_ID));
+        assert!(!is_transducer_model("bogus"));
+    }
+
+    #[test]
+    fn transducer_install_state_detects_files() {
+        let tmp = std::env::temp_dir().join("opendictate-test-transducer");
+        let model_dir = tmp.join("opendictate").join("models").join(PARAKEET_TDT_06B_MODEL_ID);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("encoder.onnx"), vec![0u8; 2_000_000]).unwrap();
+        std::fs::write(model_dir.join("decoder.onnx"), vec![0u8; 2_000_000]).unwrap();
+        std::fs::write(model_dir.join("joiner.onnx"), vec![0u8; 2_000_000]).unwrap();
+        std::fs::write(model_dir.join("tokens.txt"), vec![0u8; 200]).unwrap();
+        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let catalog = catalog();
+        let tdt = catalog.iter().find(|m| m.id == PARAKEET_TDT_06B_MODEL_ID).unwrap();
+        assert!(tdt.installed);
+        assert_eq!(tdt.disk_bytes, 6_000_200);
+        let unified = catalog
+            .iter()
+            .find(|m| m.id == PARAKEET_UNIFIED_EN_MODEL_ID)
+            .unwrap();
+        assert!(!unified.installed);
+        std::env::remove_var("XDG_DATA_HOME");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use opendictate_core::audio::vad::{apply_vad, SileroVad};
-use opendictate_core::stt::engine::SttEngine;
+use opendictate_core::stt::engine::{ModelKind, SttEngine};
 use opendictate_core::stt::models;
 use tauri::{AppHandle, Emitter};
 
@@ -145,5 +145,12 @@ fn load_engine(state: &AppState) -> Result<SttEngine, String> {
         ));
     }
     let dir = models::model_dir_for(&model_id);
-    SttEngine::new(&dir, models::is_whisper_model(&model_id)).map_err(|e| e.to_string())
+    let kind = if models::is_whisper_model(&model_id) {
+        ModelKind::Whisper
+    } else if models::is_transducer_model(&model_id) {
+        ModelKind::NemoTransducer
+    } else {
+        ModelKind::NemoCtc
+    };
+    SttEngine::new(&dir, kind).map_err(|e| e.to_string())
 }
