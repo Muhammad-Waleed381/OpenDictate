@@ -64,7 +64,7 @@ export function DockButton() {
 
   const state = overlayState?.state ?? "hidden";
   const active = state === "listening" || recording;
-  const canStop = state === "listening";
+  const canStop = active && state !== "transcribing";
 
   useEffect(() => {
     if (state === "inserted") {
