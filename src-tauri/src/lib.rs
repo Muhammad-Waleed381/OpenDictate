@@ -58,6 +58,12 @@ pub fn run() {
                 .expect("app data dir must exist");
             std::fs::create_dir_all(&data_dir)?;
 
+            let socket_path = data_dir.join("toggle.sock");
+            if hotkey::is_another_instance(&socket_path) {
+                log::info!("another instance is running; exiting");
+                std::process::exit(0);
+            }
+
             let conn = db::open(&data_dir.join("opendictate.db"))
                 .map_err(|e| std::io::Error::other(format!("failed to open db: {e}")))?;
             let settings = db::load_settings(&conn);
@@ -79,6 +85,7 @@ pub fn run() {
                 }
             }
             let _ = hotkey::register(handle, &handle.state::<AppState>(), &settings.hotkey);
+            hotkey::install_socket_toggle(handle.clone(), socket_path);
             dock::init(handle);
             Ok(())
         })
