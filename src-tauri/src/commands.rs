@@ -5,7 +5,6 @@ use opendictate_core::stt::models;
 
 use crate::db;
 use crate::dictation;
-use crate::overlay;
 use crate::state::{AppState, ModelsStatus, TranscriptResult};
 
 #[tauri::command]
@@ -197,9 +196,4 @@ pub fn remove_dictionary_word(word: String, state: State<AppState>) -> Result<()
 #[tauri::command]
 pub fn paste_clipboard(text: String, app: AppHandle) -> Result<(), String> {
     crate::inject::inject_text(&app, &text)
-}
-
-#[tauri::command]
-pub fn show_overlay(app: AppHandle) {
-    overlay::set_state(&app, "listening", None);
 }

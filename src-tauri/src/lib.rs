@@ -1,9 +1,9 @@
 mod commands;
 mod db;
 mod dictation;
+mod dock;
 mod hotkey;
 mod inject;
-mod overlay;
 mod state;
 mod tray;
 
@@ -46,7 +46,6 @@ pub fn run() {
             commands::add_dictionary_word,
             commands::remove_dictionary_word,
             commands::paste_clipboard,
-            commands::show_overlay,
         ])
         .setup(|app| {
             let data_dir = app
@@ -71,14 +70,18 @@ pub fn run() {
             let handle = app.handle();
             tray::build(handle)?;
             let _ = hotkey::register(handle, &handle.state::<AppState>(), &settings.hotkey);
-            overlay::hide(handle);
+            dock::init(handle);
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "main" {
-                if let WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = window.hide();
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                match window.label() {
+                    "main" => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    "dock" => api.prevent_close(),
+                    _ => {}
                 }
             }
         })

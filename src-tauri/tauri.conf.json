@@ -21,11 +21,11 @@
         "backgroundColor": "#0F172A"
       },
       {
-        "label": "overlay",
+        "label": "dock",
         "title": "OpenDictate",
-        "url": "index.html?window=overlay",
-        "width": 360,
-        "height": 76,
+        "url": "index.html?window=dock",
+        "width": 140,
+        "height": 40,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
@@ -33,7 +33,7 @@
         "focusable": false,
         "resizable": false,
         "shadow": false,
-        "visible": false
+        "visible": true
       }
     ],
     "security": {

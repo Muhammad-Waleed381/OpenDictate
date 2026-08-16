@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::db;
 use crate::inject;
-use crate::overlay;
+use crate::dock;
 use crate::state::{AppState, HistoryEntry, TranscriptResult};
 
 pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String> {
@@ -25,7 +25,7 @@ pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String
     }
     .map_err(|e| e.to_string())?;
 
-    overlay::set_state(app, "listening", None);
+    dock::set_state(app, "listening", None);
 
     spawn_level_emitter(app, state);
     Ok(())
@@ -39,11 +39,11 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
     let audio = state.recorder.stop().map_err(|e| e.to_string())?;
     let test = state.is_test_mode();
 
-    overlay::set_state(app, "transcribing", None);
+    dock::set_state(app, "transcribing", None);
 
     let speech = run_vad(&audio).map_err(|e| e.to_string())?;
     if !speech.has_speech {
-        overlay::set_state(app, "hidden", None);
+        dock::set_state(app, "hidden", None);
         return Ok(TranscriptResult {
             text: String::new(),
             duration_ms: 0,
@@ -57,7 +57,7 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
     let duration_ms = speech.speech_duration_ms;
 
     if test {
-        overlay::set_state(app, "hidden", None);
+        dock::set_state(app, "hidden", None);
         return Ok(TranscriptResult {
             text,
             duration_ms,
@@ -69,7 +69,7 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
 
     if !text.is_empty() {
         if let Err(e) = inject::inject_text(app, &text) {
-            overlay::set_state(app, "error", Some(&format!("failed to paste: {e}")));
+            dock::set_state(app, "error", Some(&format!("failed to paste: {e}")));
             return Ok(TranscriptResult { text, duration_ms });
         }
 
@@ -85,11 +85,11 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
         }
     }
 
-    overlay::set_state(app, "inserted", None);
+    dock::set_state(app, "inserted", None);
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(1200));
-        overlay::set_state(&app, "hidden", None);
+        dock::set_state(&app, "hidden", None);
     });
 
     Ok(TranscriptResult { text, duration_ms })
@@ -101,7 +101,7 @@ pub fn cancel(app: &AppHandle, state: &AppState) -> Result<(), String> {
     }
     state.recorder.cancel().map_err(|e| e.to_string())?;
     state.set_test_mode(false);
-    overlay::set_state(app, "hidden", None);
+    dock::set_state(app, "hidden", None);
     Ok(())
 }
 
