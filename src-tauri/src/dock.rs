@@ -11,7 +11,7 @@ pub fn window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("dock")
 }
 
-fn top_right(app: &AppHandle, width: u32) -> PhysicalPosition<i32> {
+fn bottom_right(app: &AppHandle, width: u32, height: u32) -> PhysicalPosition<i32> {
     let default = PhysicalPosition { x: 100, y: 16 };
     let Some(win) = window(app) else {
         return default;
@@ -21,7 +21,8 @@ fn top_right(app: &AppHandle, width: u32) -> PhysicalPosition<i32> {
     };
     let size = monitor.size();
     let x = (size.width.saturating_sub(width) as f64 - MARGIN).max(0.0) as i32;
-    PhysicalPosition { x, y: MARGIN as i32 }
+    let y = (size.height.saturating_sub(height) as f64 - MARGIN).max(0.0) as i32;
+    PhysicalPosition { x, y }
 }
 
 pub fn init(app: &AppHandle) {
@@ -55,7 +56,7 @@ pub fn ensure(app: &AppHandle) {
             width: DOCK_SIZE as u32,
             height: DOCK_SIZE as u32,
         });
-        let target = top_right(app, size.width);
+        let target = bottom_right(app, size.width, size.height);
         let placed = win
             .outer_position()
             .ok()
