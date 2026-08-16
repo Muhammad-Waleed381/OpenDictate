@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Size, WebviewWindow};
 
-pub const DOCK_SIZE: f64 = 12.0;
+pub const DOCK_SIZE: f64 = 24.0;
 const MARGIN: f64 = 16.0;
 const TOLERANCE: i32 = 2;
 
