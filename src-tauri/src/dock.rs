@@ -71,7 +71,10 @@ pub fn ensure(app: &AppHandle) {
 
 pub fn ensure_on_main(app: &AppHandle) {
     #[cfg(target_os = "linux")]
-    shrink_to_min(app);
+    {
+        shrink_to_min(app);
+        stick_to_all_workspaces(app);
+    }
     ensure(app);
 }
 
@@ -102,6 +105,23 @@ fn enforce(app: &AppHandle) {
             log::info!("dock window: size={size:?} pos={pos:?} monitor={monitor:?}");
         }
     });
+}
+
+#[cfg(target_os = "linux")]
+fn stick_to_all_workspaces(app: &AppHandle) {
+    use gtk::prelude::*;
+
+    let Some(win) = window(app) else { return };
+    let Ok(vbox) = win.default_vbox() else { return };
+
+    let mut widget: Option<gtk::Widget> = Some(vbox.upcast());
+    while let Some(current) = widget {
+        if let Ok(gtk_window) = current.clone().downcast::<gtk::Window>() {
+            gtk_window.stick();
+            return;
+        }
+        widget = current.parent();
+    }
 }
 
 #[cfg(target_os = "linux")]
