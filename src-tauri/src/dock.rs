@@ -78,7 +78,7 @@ pub fn ensure_on_main(app: &AppHandle) {
 fn enforce(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
-        for i in 0..8 {
+        for i in 0..12 {
             let app_for_main = app.clone();
             let _ = app.run_on_main_thread(move || {
                 #[cfg(target_os = "linux")]
@@ -124,7 +124,7 @@ fn shrink_to_min(app: &AppHandle) {
             .find_map(find_webview)
     }
 
-    let vbox_widget: gtk::Widget = vbox.upcast();
+    let vbox_widget: gtk::Widget = vbox.clone().upcast();
     if let Some(webview) = find_webview(&vbox_widget) {
         webview.set_size_request(DOCK_SIZE as i32, DOCK_SIZE as i32);
     }

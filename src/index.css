@@ -133,6 +133,11 @@
   html {
     @apply font-sans;
     }
+  html.dock-page,
+  html.dock-page body,
+  html.dock-page #root {
+    background: transparent !important;
+  }
   ::selection {
     @apply bg-primary text-primary-foreground;
     }
@@ -242,4 +247,18 @@
 
 @utility animate-od-bounce-y {
   animation: od-bounce-y 0.9s var(--ease-fluid) infinite;
+}
+
+@keyframes od-eq {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@utility animate-od-eq {
+  animation: od-eq 0.9s var(--ease-fluid) infinite;
 }

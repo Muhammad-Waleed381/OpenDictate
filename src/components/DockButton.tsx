@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Check, Mic, X } from "lucide-react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 
@@ -66,38 +67,50 @@ export function DockButton() {
 
   let content: ReactNode;
   if (flash === "inserted") {
-    content = <span className="animate-od-pop text-[14px] font-bold text-green-400">✓</span>;
+    content = <Check className="size-3.5 text-green-400" strokeWidth={3} />;
   } else if (flash === "error" || error) {
-    content = <span className="animate-od-pop text-[14px] font-bold text-red-400">✕</span>;
+    content = <X className="size-3.5 text-red-400" strokeWidth={3} />;
   } else if (state === "transcribing") {
     content = (
-      <span className="flex gap-[2px]">
+      <span className="flex items-end gap-[1.5px]">
         {[0, 1, 2].map((i) => (
           <span
             key={i}
-            className="size-1 animate-od-bounce-y bg-white"
-            style={{ animationDelay: `${i * 0.15}s` }}
+            className="w-[2px] animate-od-eq origin-bottom bg-white"
+            style={{
+              height: 10,
+              animationDelay: `${i * 0.15}s`,
+              animationDuration: "0.8s",
+            }}
+          />
+        ))}
+      </span>
+    );
+  } else if (active) {
+    content = (
+      <span className="flex h-3 items-end gap-[1.5px]">
+        {[0, 1, 2, 3].map((i) => (
+          <span
+            key={i}
+            className="w-[2px] animate-od-eq origin-bottom bg-white"
+            style={{
+              height: 10,
+              animationDelay: `${i * 0.18}s`,
+              animationDuration: `${0.75 + (i % 2) * 0.2}s`,
+            }}
           />
         ))}
       </span>
     );
   } else {
-    content = (
-      <span
-        className={`block ${active ? "animate-od-blink bg-white" : "bg-black"}`}
-        style={{
-          width: 6,
-          height: active ? 10 : 8,
-        }}
-      />
-    );
+    content = <Mic className="size-3.5 text-slate-900" strokeWidth={2.5} />;
   }
 
   return (
     <button
       type="button"
       onClick={toggle}
-      className={`absolute right-0 top-0 flex size-6 cursor-pointer items-center justify-center rounded-full border transition-transform hover:scale-150 ${flash === "error" || error ? "border-red-400 bg-black" : flash === "inserted" ? "border-green-400 bg-black" : active || state === "transcribing" ? "border-black bg-black" : "border-black bg-white opacity-80"}`}
+      className={`absolute right-0 top-0 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 transition-transform hover:scale-110 ${flash === "error" || error ? "bg-black ring-red-400" : flash === "inserted" ? "bg-black ring-green-400" : active || state === "transcribing" ? "bg-black ring-black/40" : "bg-white/90 ring-black/20"}`}
       aria-label={canStop ? "Stop recording" : "Start recording"}
       title={canStop ? "Stop recording (Ctrl+K)" : "Start recording (Ctrl+K)"}
     >

@@ -13,6 +13,7 @@ async function main() {
   } catch {
     isDock = new URLSearchParams(window.location.search).get("window") === "dock";
   }
+  if (isDock) document.documentElement.classList.add("dock-page");
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
