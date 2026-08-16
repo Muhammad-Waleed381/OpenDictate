@@ -2,12 +2,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 
-const BAR_COUNT = 18;
-const BAR_WIDTH = 3;
-const BAR_GAP = 2;
+const BARS = 8;
+const BAR_WIDTH = 2;
+const BAR_GAP = 1;
 const BUFFER_SIZE = 32;
 
-function Waveform({ active }: { active: boolean }) {
+function Waveform({ active, color }: { active: boolean; color: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bufferRef = useRef<number[]>([]);
 
@@ -19,7 +19,7 @@ function Waveform({ active }: { active: boolean }) {
 
     let raf = 0;
     const draw = () => {
-      const level = active ? useStore.getState().level : 0.22;
+      const level = active ? useStore.getState().level : 0.3;
       const buffer = bufferRef.current;
       buffer.push(level);
       if (buffer.length > BUFFER_SIZE) buffer.shift();
@@ -27,9 +27,9 @@ function Waveform({ active }: { active: boolean }) {
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = "#000000";
+      ctx.fillStyle = color;
 
-      const half = Math.floor(BAR_COUNT / 2);
+      const half = Math.floor(BARS / 2);
       for (let i = 0; i < half; i++) {
         const sample =
           buffer[Math.floor((i / half) * Math.max(buffer.length - 1, 0))] ?? 0;
@@ -44,13 +44,13 @@ function Waveform({ active }: { active: boolean }) {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [active]);
+  }, [active, color]);
 
   return (
     <canvas
       ref={canvasRef}
-      width={BAR_COUNT * BAR_WIDTH + (BAR_COUNT - 1) * BAR_GAP}
-      height={26}
+      width={BARS * BAR_WIDTH + (BARS - 1) * BAR_GAP}
+      height={14}
     />
   );
 }
@@ -120,48 +120,29 @@ export function DockButton() {
   let content: ReactNode;
   if (flash === "inserted") {
     content = (
-      <div className="flex h-10 w-[140px] animate-od-pop items-center justify-center gap-2 border-2 border-black bg-black text-white">
-        <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
-          Inserted
-        </span>
-        <span className="text-sm font-bold">✓</span>
-      </div>
+      <span className="animate-od-pop text-sm font-bold text-green-400">✓</span>
     );
   } else if (flash === "error" || error) {
     content = (
-      <div className="flex h-10 w-[140px] animate-od-pop items-center justify-center gap-2 border-2 border-black bg-black px-2 text-white">
-        <span className="truncate text-[10px] font-bold tracking-wider uppercase">
-          ✕ {error ?? "Error"}
-        </span>
-      </div>
+      <span className="animate-od-pop text-[10px] font-bold text-red-400">
+        ✕
+      </span>
     );
   } else if (state === "transcribing") {
     content = (
-      <div className="flex h-10 w-[140px] items-center justify-center gap-2 border-2 border-black bg-white">
-        <span className="flex gap-1">
-          {[0, 1, 2].map((i) => (
-            <span
-              key={i}
-              className="size-1.5 animate-od-bounce-y bg-black"
-              style={{ animationDelay: `${i * 0.15}s` }}
-            />
-          ))}
-        </span>
-        <span className="text-[11px] font-bold tracking-[0.2em] uppercase">
-          Transcribing
-        </span>
-      </div>
+      <span className="flex gap-0.5">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="size-1 animate-od-bounce-y bg-white"
+            style={{ animationDelay: `${i * 0.15}s` }}
+          />
+        ))}
+      </span>
     );
   } else {
     content = (
-      <div
-        className={`flex h-10 w-[140px] cursor-pointer items-center justify-center gap-2.5 border-2 border-black bg-white px-3 transition-transform hover:scale-[1.03] ${active ? "" : "opacity-85"}`}
-      >
-        {active && (
-          <span className="size-2 animate-od-blink border-2 border-black bg-black" />
-        )}
-        <Waveform active={active} />
-      </div>
+      <Waveform active={active} color={active ? "#ffffff" : "#000000"} />
     );
   }
 
@@ -169,9 +150,9 @@ export function DockButton() {
     <button
       type="button"
       onClick={toggle}
-      className="fixed inset-0 cursor-pointer"
+      className={`fixed inset-0 cursor-pointer rounded-full border-2 transition-transform hover:scale-110 ${flash === "error" || error ? "border-red-400 bg-black" : flash === "inserted" ? "border-green-400 bg-black" : active || state === "transcribing" ? "border-black bg-black" : "border-black bg-white opacity-80"}`}
       aria-label={canStop ? "Stop recording" : "Start recording"}
-      title={canStop ? "Stop recording" : "Start recording"}
+      title={canStop ? "Stop recording (Ctrl+K)" : "Start recording (Ctrl+K)"}
     >
       {content}
     </button>

@@ -1,6 +1,6 @@
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewWindow};
 
-pub const DOCK_WIDTH: f64 = 140.0;
+pub const DOCK_SIZE: f64 = 30.0;
 const MARGIN: f64 = 16.0;
 
 pub fn window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -16,7 +16,7 @@ fn top_right(app: &AppHandle) -> PhysicalPosition<i32> {
         return default;
     };
     let size = monitor.size();
-    let x = (size.width as f64 - DOCK_WIDTH - MARGIN).max(0.0) as i32;
+    let x = (size.width as f64 - DOCK_SIZE - MARGIN).max(0.0) as i32;
     PhysicalPosition { x, y: MARGIN as i32 }
 }
 

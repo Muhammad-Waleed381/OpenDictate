@@ -17,15 +17,15 @@ Make OpenDictate a true background utility: closing the window keeps it running;
 
 ### Architecture
 
-The transient `overlay` window becomes a **persistent `dock` window** (top-right corner, ~130×40px, always-on-top, skip-taskbar, **non-focusable** — already supported by the window config, `focusable: false`). It never hides. It is the record button.
+The transient `overlay` window becomes a **persistent `dock` window** (top-right corner, **30×30 round dot**, always-on-top, skip-taskbar, **non-focusable** — `focusable: false` in the window config). It never hides. It is the record button. (Revision per user feedback: originally 140×40 pill; user wanted "round, very very small".)
 
 - Rust: `overlay.rs` → `dock.rs`. `set_state` keeps emitting the `overlay-state` event (drives dock visuals) but no longer show/hides the window. `init()` positions the window at the top-right of the primary monitor at startup.
 - Frontend: `OverlayPill.tsx` → `DockButton.tsx`. Rendered by `OverlayApp` (same window routing, `?window=dock`). Click = toggle record (same backend commands as the hotkey). Visuals driven by `overlay-state` + `audio-level` events:
-  - *idle* — static waveform glyph, subtle
-  - *listening* — waveform bars animated live from real mic RMS; this state also marks the button as "recording" (works for both hotkey- and click-initiated recording, fixing the old store.recording desync for hotkey starts)
-  - *transcribing* — bars pulse slowly
-  - *inserted* — brief green ✓ flash (~1.2s, backend already emits "hidden" after 1200ms → dock returns to idle)
-  - *error* — brief red ✕ flash, then idle
+  - *idle* — static waveform glyph in a white dot, subtle
+  - *listening* — black dot, waveform bars animated live from real mic RMS; this state also marks the button as "recording" (works for both hotkey- and click-initiated recording, fixing the old store.recording desync for hotkey starts)
+  - *transcribing* — black dot, three small bouncing dots
+  - *inserted* — black dot with green ✓ flash (~1.4s, backend already emits "hidden" after 1200ms → dock returns to idle)
+  - *error* — black dot with red ✕ flash (~2.4s), then idle
 - Dead code removed: `show_overlay` command (never called from frontend), old `show/hide/center_top` in overlay.rs.
 
 ### Focus safety
