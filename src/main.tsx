@@ -1,23 +1,22 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { MainApp, OverlayApp } from "./App";
+import { MainApp, DockApp } from "./App";
 import "./index.css";
 
 document.documentElement.classList.add("dark");
 
 async function main() {
-  let isOverlay = false;
+  let isDock = false;
   try {
-    isOverlay = getCurrentWindow().label === "overlay";
+    isDock = getCurrentWindow().label === "dock";
   } catch {
-    isOverlay =
-      new URLSearchParams(window.location.search).get("window") === "overlay";
+    isDock = new URLSearchParams(window.location.search).get("window") === "dock";
   }
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      {isOverlay ? <OverlayApp /> : <MainApp />}
+      {isDock ? <DockApp /> : <MainApp />}
     </React.StrictMode>,
   );
 }

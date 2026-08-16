@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Onboarding } from "@/components/Onboarding";
-import { OverlayPill } from "@/components/OverlayPill";
+import { DockButton } from "@/components/DockButton";
 import { GeneralTab } from "@/components/tabs/GeneralTab";
 import { DictionaryTab } from "@/components/tabs/DictionaryTab";
 import { HistoryTab } from "@/components/tabs/HistoryTab";
@@ -43,7 +43,7 @@ function RecordingButton() {
     if (recording) {
       try {
         const result = await api.stopRecording();
-        if (result.text) {
+        if (result?.text) {
           useStore.setState({ lastResult: result });
         }
       } catch (e) {
@@ -178,12 +178,12 @@ export function MainApp() {
   );
 }
 
-export function OverlayApp() {
+export function DockApp() {
   useOpenDictateEvents();
 
   return (
-    <div className="pointer-events-none fixed inset-0 bg-transparent">
-      <OverlayPill />
+    <div className="fixed inset-0">
+      <DockButton />
     </div>
   );
 }
