@@ -70,6 +70,11 @@ pub fn run() {
 
             let handle = app.handle();
             tray::build(handle)?;
+            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
+                for window in app.webview_windows().values() {
+                    let _ = window.set_icon(icon.clone());
+                }
+            }
             let _ = hotkey::register(handle, &handle.state::<AppState>(), &settings.hotkey);
             dock::init(handle);
             Ok(())
