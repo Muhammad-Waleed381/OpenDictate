@@ -130,6 +130,11 @@ pub fn set_settings(
             current.stt_model = stt_model.clone();
         }
     }
+    if let Some(insert_mode) = &settings.insert_mode {
+        if matches!(insert_mode.as_str(), "auto" | "type" | "clipboard") {
+            current.insert_mode = insert_mode.clone();
+        }
+    }
     let settings = current.clone();
     drop(current);
 
@@ -195,5 +200,13 @@ pub fn remove_dictionary_word(word: String, state: State<AppState>) -> Result<()
 
 #[tauri::command]
 pub fn paste_clipboard(text: String, app: AppHandle) -> Result<(), String> {
-    crate::inject::inject_text(&app, &text)
+    crate::inject::inject_text(&app, &text, "auto")
+}
+
+#[tauri::command]
+pub fn copy_text(text: String, app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    app.clipboard()
+        .write_text(text)
+        .map_err(|e| format!("failed to write clipboard: {e}"))
 }

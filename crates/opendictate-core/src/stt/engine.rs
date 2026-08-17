@@ -27,7 +27,7 @@ unsafe impl Send for SttEngine {}
 unsafe impl Sync for SttEngine {}
 
 impl SttEngine {
-    pub fn new(model_dir: &Path, kind: ModelKind) -> Result<Self> {
+    pub fn new(model_dir: &Path, kind: ModelKind, language: Option<String>) -> Result<Self> {
         if !model_dir.exists() {
             return Err(CoreError::Transcription(format!(
                 "STT model directory not found at {}",
@@ -38,6 +38,10 @@ impl SttEngine {
         let n_threads = std::thread::available_parallelism()
             .map(|p| p.get().clamp(1, MAX_STT_THREADS) as i32)
             .unwrap_or(2);
+
+        let whisper_language = language
+            .filter(|l| !l.is_empty() && l != "auto")
+            .map(|l| l.to_string());
 
         let config = match kind {
             ModelKind::Whisper => {
@@ -55,7 +59,7 @@ impl SttEngine {
                     whisper: OfflineWhisperModelConfig {
                         encoder: Some(encoder.to_string_lossy().to_string()),
                         decoder: Some(decoder.to_string_lossy().to_string()),
-                        language: Some("en".to_string()),
+                        language: whisper_language,
                         task: Some("transcribe".to_string()),
                         tail_paddings: 50,
                         ..Default::default()
@@ -151,12 +155,15 @@ impl SttEngine {
         Ok(Self { recognizer })
     }
 
-    pub fn transcribe(&self, audio: &[f32]) -> Result<String> {
+    pub fn transcribe(&self, audio: &[f32], hotwords: Option<&str>) -> Result<String> {
         if audio.len() < MIN_AUDIO_SAMPLES {
             return Ok(String::new());
         }
 
-        let stream = self.recognizer.create_stream();
+        let stream = match hotwords.filter(|h| !h.trim().is_empty()) {
+            Some(words) => self.recognizer.create_stream_with_hotwords(words),
+            None => self.recognizer.create_stream(),
+        };
         stream.accept_waveform(16000, audio);
         self.recognizer.decode(&stream);
 
@@ -175,8 +182,8 @@ mod tests {
     #[test]
     fn engine_requires_existing_model_dir() {
         let missing = std::env::temp_dir().join("opendictate-no-such-dir");
-        assert!(SttEngine::new(&missing, ModelKind::NemoCtc).is_err());
-        assert!(SttEngine::new(&missing, ModelKind::Whisper).is_err());
-        assert!(SttEngine::new(&missing, ModelKind::NemoTransducer).is_err());
+        assert!(SttEngine::new(&missing, ModelKind::NemoCtc, None).is_err());
+        assert!(SttEngine::new(&missing, ModelKind::Whisper, None).is_err());
+        assert!(SttEngine::new(&missing, ModelKind::NemoTransducer, None).is_err());
     }
 }

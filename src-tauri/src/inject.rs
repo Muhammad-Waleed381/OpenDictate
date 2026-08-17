@@ -3,19 +3,61 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
-pub fn inject_text(app: &AppHandle, text: &str) -> Result<(), String> {
-    let x11_active = has_active_x11_window();
-    log::info!(
-        "inject: active_x11={x11_active} text={} chars",
-        text.chars().count()
-    );
-    let result = if x11_active {
-        paste_via_clipboard(app, text)
+pub fn inject_text(app: &AppHandle, text: &str, mode: &str) -> Result<(), String> {
+    if mode == "clipboard" {
+        let clipboard = app.clipboard();
+        clipboard
+            .write_text(text.to_string())
+            .map_err(|e| format!("failed to write clipboard: {e}"))
+    } else if mode == "type" {
+        let result = type_via_ydotool(app, text);
+        log::info!("inject: mode=type result={result:?}");
+        result
     } else {
-        type_via_ydotool(app, text)
-    };
-    log::info!("inject: result={result:?}");
-    result
+        let x11_active = has_active_x11_window();
+        log::info!(
+            "inject: mode=auto active_x11={x11_active} text={} chars",
+            text.chars().count()
+        );
+        let result = if x11_active {
+            paste_via_clipboard(app, text)
+        } else {
+            type_via_ydotool(app, text)
+        };
+        log::info!("inject: result={result:?}");
+        result
+    }
+}
+
+pub fn clean_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut prev_space = false;
+    for ch in text.trim().chars() {
+        if ch.is_whitespace() {
+            if !prev_space {
+                out.push(' ');
+            }
+            prev_space = true;
+        } else {
+            prev_space = false;
+            if (ch == ',' || ch == '.' || ch == ';' || ch == ':' || ch == '?' || ch == '!')
+                && out.ends_with(' ')
+            {
+                out.pop();
+            }
+            out.push(ch);
+        }
+    }
+    let trimmed = out.trim_end().to_string();
+    let mut chars = trimmed.chars();
+    match chars.next() {
+        Some(first) => {
+            let mut cap = first.to_uppercase().collect::<String>();
+            cap.push_str(chars.as_str());
+            cap
+        }
+        None => trimmed,
+    }
 }
 
 fn paste_via_clipboard(app: &AppHandle, text: &str) -> Result<(), String> {

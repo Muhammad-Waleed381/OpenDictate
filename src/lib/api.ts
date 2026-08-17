@@ -24,10 +24,11 @@ export interface Settings {
   language: string;
   onboarded: boolean;
   stt_model: string;
+  insert_mode: string;
 }
 
 export type SettingsPatch = Partial<
-  Pick<Settings, "hotkey" | "engine" | "language" | "stt_model">
+  Pick<Settings, "hotkey" | "engine" | "language" | "stt_model" | "insert_mode">
 >;
 
 export interface HistoryEntry {
@@ -162,6 +163,10 @@ export function removeDictionaryWord(word: string): Promise<void> {
 
 export function pasteClipboard(text: string): Promise<void> {
   return invoke<void>("paste_clipboard", { text });
+}
+
+export function copyText(text: string): Promise<void> {
+  return invoke<void>("copy_text", { text });
 }
 
 export function onOverlayState(

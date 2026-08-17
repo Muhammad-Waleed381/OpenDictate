@@ -157,10 +157,24 @@ export function GeneralTab() {
     } catch {}
   };
 
+  const INSERT_MODE_LABELS: Record<string, string> = {
+  auto: "Auto (paste or type)",
+  type: "Always type text",
+  clipboard: "Clipboard only (no auto-paste)",
+};
+
   const handleLanguageChange = async (language: string | null) => {
     if (!language) return;
     try {
       await api.setSettings({ language });
+      useStore.getState().refreshAll();
+    } catch {}
+  };
+
+  const handleInsertModeChange = async (mode: string | null) => {
+    if (!mode) return;
+    try {
+      await api.setSettings({ insert_mode: mode });
       useStore.getState().refreshAll();
     } catch {}
   };
@@ -205,18 +219,33 @@ export function GeneralTab() {
             </SelectTrigger>
             <SelectContent className="w-full">
               <SelectItem value="auto">Auto (system default)</SelectItem>
-              <SelectItem value="en" disabled>
-                English
-              </SelectItem>
-              <SelectItem value="es" disabled>
-                Spanish
-              </SelectItem>
-              <SelectItem value="fr" disabled>
-                French
-              </SelectItem>
-              <SelectItem value="de" disabled>
-                German
-              </SelectItem>
+              <SelectItem value="en">English</SelectItem>
+              <SelectItem value="es">Spanish</SelectItem>
+              <SelectItem value="fr">French</SelectItem>
+              <SelectItem value="de">German</SelectItem>
+              <SelectItem value="pt">Portuguese</SelectItem>
+              <SelectItem value="it">Italian</SelectItem>
+              <SelectItem value="ur">Urdu</SelectItem>
+              <SelectItem value="hi">Hindi</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="insert-mode">Insertion mode</Label>
+          <Select
+            value={settings?.insert_mode ?? "auto"}
+            onValueChange={handleInsertModeChange}
+          >
+            <SelectTrigger className="w-full" id="insert-mode">
+              <SelectValue>
+                {INSERT_MODE_LABELS[settings?.insert_mode ?? "auto"] ?? "Auto (paste or type)"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent className="w-full">
+              <SelectItem value="auto">Auto (paste or type)</SelectItem>
+              <SelectItem value="type">Always type text</SelectItem>
+              <SelectItem value="clipboard">Clipboard only (no auto-paste)</SelectItem>
             </SelectContent>
           </Select>
         </div>

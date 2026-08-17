@@ -51,9 +51,11 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
     }
 
     let engine = load_engine(state)?;
-    let text = engine
-        .transcribe(&speech.trimmed_audio)
+    let hotwords = dictionary_hotwords(state);
+    let raw = engine
+        .transcribe(&speech.trimmed_audio, hotwords.as_deref())
         .map_err(|e| e.to_string())?;
+    let text = inject::clean_text(&raw);
     let duration_ms = speech.speech_duration_ms;
 
     if test {
@@ -81,7 +83,7 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
             }
         }
 
-        if let Err(e) = inject::inject_text(app, &text) {
+        if let Err(e) = inject::inject_text(app, &text, &insert_mode(state)) {
             dock::set_state(app, "error", Some(&format!("failed to paste: {e}")));
             return Ok(TranscriptResult { text, duration_ms });
         }
@@ -132,14 +134,44 @@ fn run_vad(
     Ok(apply_vad(audio, silero.as_ref()))
 }
 
+fn dictionary_hotwords(state: &AppState) -> Option<String> {
+    let words = state
+        .db
+        .lock()
+        .ok()
+        .and_then(|conn| db::get_dictionary(&conn).ok())?;
+    let joined: Vec<String> = words
+        .iter()
+        .map(|e| format!("{} {}", e.word.replace(' ', "_"), HOTWORD_SCORE))
+        .collect();
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined.join("\n"))
+    }
+}
+
+const HOTWORD_SCORE: f32 = 3.0;
+
+fn insert_mode(state: &AppState) -> String {
+    state
+        .settings
+        .lock()
+        .map(|s| s.insert_mode.clone())
+        .unwrap_or_else(|_| "auto".to_string())
+}
+
 fn load_engine(state: &AppState) -> Result<SttEngine, String> {
-    let model_id = {
+    let (model_id, language) = {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
-        if settings.stt_model.is_empty() {
-            models::STT_MODEL_ID.to_string()
-        } else {
-            settings.stt_model.clone()
-        }
+        (
+            if settings.stt_model.is_empty() {
+                models::STT_MODEL_ID.to_string()
+            } else {
+                settings.stt_model.clone()
+            },
+            settings.language.clone(),
+        )
     };
     if !models::is_model_installed(&model_id) {
         return Err(format!(
@@ -154,5 +186,5 @@ fn load_engine(state: &AppState) -> Result<SttEngine, String> {
     } else {
         ModelKind::NemoCtc
     };
-    SttEngine::new(&dir, kind).map_err(|e| e.to_string())
+    SttEngine::new(&dir, kind, Some(language)).map_err(|e| e.to_string())
 }

@@ -11,6 +11,7 @@ pub struct SettingsPatch {
     pub engine: Option<String>,
     pub language: Option<String>,
     pub stt_model: Option<String>,
+    pub insert_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,10 +23,16 @@ pub struct Settings {
     pub onboarded: bool,
     #[serde(default = "default_stt_model", alias = "sttModel")]
     pub stt_model: String,
+    #[serde(default = "default_insert_mode")]
+    pub insert_mode: String,
 }
 
 fn default_stt_model() -> String {
     opendictate_core::stt::models::STT_MODEL_ID.to_string()
+}
+
+fn default_insert_mode() -> String {
+    "auto".to_string()
 }
 
 impl Default for Settings {
@@ -37,6 +44,7 @@ impl Default for Settings {
             language: "auto".to_string(),
             onboarded: false,
             stt_model: default_stt_model(),
+            insert_mode: default_insert_mode(),
         }
     }
 }

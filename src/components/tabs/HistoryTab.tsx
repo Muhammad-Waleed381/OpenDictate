@@ -32,6 +32,12 @@ export function HistoryTab() {
 
   const handleCopy = async (text: string) => {
     try {
+      await api.copyText(text);
+    } catch {}
+  };
+
+  const handleInsert = async (text: string) => {
+    try {
       await api.pasteClipboard(text);
     } catch {}
   };
@@ -103,6 +109,9 @@ export function HistoryTab() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
+                      <Button size="sm" variant="ghost" onClick={() => handleInsert(entry.text)}>
+                        Re-insert
+                      </Button>
                       <Button size="sm" variant="ghost" onClick={() => handleCopy(entry.text)}>
                         Copy
                       </Button>

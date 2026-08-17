@@ -2,8 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 
 const ENDPOINTS = [
-  "Hugging Face — STT + VAD model files (first run only)",
-  "GitHub releases — model bundle updates (first run only)",
+  "GitHub releases — STT + VAD model downloads (first run only)",
 ];
 
 export function PrivacyTab() {
