@@ -5,6 +5,7 @@ import * as api from "@/lib/api";
 import { formatHotkey, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Settings, Activity, BookOpen, History, Shield } from "lucide-react";
 import { Onboarding } from "@/components/Onboarding";
 import { DockButton } from "@/components/DockButton";
 import { GeneralTab } from "@/components/tabs/GeneralTab";
@@ -14,11 +15,11 @@ import { HeatmapTab } from "@/components/tabs/HeatmapTab";
 import { PrivacyTab } from "@/components/tabs/PrivacyTab";
 
 const TABS = [
-  { id: "general", label: "General" },
-  { id: "activity", label: "Activity" },
-  { id: "dictionary", label: "Dictionary" },
-  { id: "history", label: "History" },
-  { id: "privacy", label: "Privacy" },
+  { id: "general", label: "General", icon: Settings },
+  { id: "activity", label: "Activity", icon: Activity },
+  { id: "dictionary", label: "Dictionary", icon: BookOpen },
+  { id: "history", label: "History", icon: History },
+  { id: "privacy", label: "Privacy", icon: Shield },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -189,19 +190,14 @@ export function MainApp() {
                 title={collapsed ? t.label : undefined}
                 className={cn(
                   "flex cursor-pointer items-center text-xs font-bold tracking-wider uppercase transition-colors duration-150",
-                  collapsed ? "justify-center py-2" : "justify-start px-4 py-2.5",
+                  collapsed ? "justify-center py-2" : "gap-2.5 justify-start px-4 py-2.5",
                   tab === t.id
                     ? "bg-white text-black"
                     : "text-white/70 hover:bg-white/10 hover:text-white",
                 )}
               >
-                {collapsed ? (
-                  <span className="flex size-6 items-center justify-center border-2 border-current text-[11px]">
-                    {t.label[0]}
-                  </span>
-                ) : (
-                  t.label
-                )}
+                <t.icon className="size-4 shrink-0" strokeWidth={2.5} />
+                {!collapsed && t.label}
               </button>
             ))}
           </nav>
