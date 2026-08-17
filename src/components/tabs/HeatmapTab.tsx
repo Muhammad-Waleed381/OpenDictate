@@ -52,15 +52,15 @@ function mix(hex: string, other: [number, number, number], t: number): string {
   return `#${out.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
-function shadesFor(hex: string): string[] {
+function shadesFor(hex: string): (string | null)[] {
   const white: [number, number, number] = [255, 255, 255];
   const black: [number, number, number] = [0, 0, 0];
   return [
-    "border-black/5 bg-zinc-100",
-    `bg-[${mix(hex, white, 0.7)}]`,
-    `bg-[${mix(hex, white, 0.4)}]`,
-    `bg-[${mix(hex, white, 0.1)}]`,
-    `bg-[${mix(hex, black, 0.3)}]`,
+    null,
+    mix(hex, white, 0.7),
+    mix(hex, white, 0.4),
+    mix(hex, white, 0.1),
+    mix(hex, black, 0.3),
   ];
 }
 
@@ -283,29 +283,39 @@ export function HeatmapTab() {
               <div className="flex gap-[3px]">
                 {cellsByCol.map((col, i) => (
                   <div key={i} className="flex flex-col gap-[3px]">
-                    {col.map((cell) => (
-                      <span
-                        key={cell.key}
-                        title={`${cell.date.toLocaleDateString(undefined, {
-                          weekday: "short",
-                          year: "numeric",
-                          month: "short",
-                          day: "numeric",
-                        })} — ${cell.words} word${cell.words === 1 ? "" : "s"}`}
-                        className={`size-[13px] border-2 ${cellColors[cell.level]}`}
-                      />
-                    ))}
+                    {col.map((cell) => {
+                      const bg = cellColors[cell.level];
+                      return (
+                        <span
+                          key={cell.key}
+                          title={`${cell.date.toLocaleDateString(undefined, {
+                            weekday: "short",
+                            year: "numeric",
+                            month: "short",
+                            day: "numeric",
+                          })} — ${cell.words} word${cell.words === 1 ? "" : "s"}`}
+                          className="size-[13px] border-2 border-black/5 bg-zinc-100"
+                          style={bg ? { backgroundColor: bg } : undefined}
+                        />
+                      );
+                    })}
                   </div>
                 ))}
               </div>
             </div>
             <div className="flex items-center justify-end gap-1.5 text-[10px] font-bold text-muted-foreground">
-              {legend.map((l) => (
-                <span key={l.level} className="flex items-center gap-1">
-                  {l.label && <span>{l.label}</span>}
-                  <span className={`size-[11px] border-2 ${cellColors[l.level]}`} />
-                </span>
-              ))}
+              {legend.map((l) => {
+                const bg = cellColors[l.level];
+                return (
+                  <span key={l.level} className="flex items-center gap-1">
+                    {l.label && <span>{l.label}</span>}
+                    <span
+                      className="size-[11px] border-2 border-black/5 bg-zinc-100"
+                      style={bg ? { backgroundColor: bg } : undefined}
+                    />
+                  </span>
+                );
+              })}
             </div>
           </div>
         </div>
