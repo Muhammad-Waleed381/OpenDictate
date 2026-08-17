@@ -139,6 +139,16 @@ function LastResult() {
 export function MainApp() {
   const settings = useStore((s) => s.settings);
   const [tab, setTab] = useState<TabId>("general");
+  const [collapsed, setCollapsed] = useState<boolean>(
+    () => localStorage.getItem("od:sidebar") !== "collapsed",
+  );
+
+  const toggleSidebar = () => {
+    setCollapsed((c) => {
+      localStorage.setItem("od:sidebar", c ? "collapsed" : "expanded");
+      return !c;
+    });
+  };
 
   useOpenDictateEvents();
 
@@ -158,27 +168,49 @@ export function MainApp() {
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-44 shrink-0 flex-col border-r-2 border-black bg-black">
-          <nav className="flex flex-col gap-1 p-3">
+        <aside
+          className={cn(
+            "flex shrink-0 flex-col border-r-2 border-black bg-black transition-[width] duration-200",
+            collapsed ? "w-12" : "w-44",
+          )}
+        >
+          <button
+            onClick={toggleSidebar}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="flex h-9 shrink-0 cursor-pointer items-center justify-center border-b-2 border-white/10 text-sm text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+          >
+            {collapsed ? "▸" : "◂"}
+          </button>
+          <nav className={cn("flex flex-col gap-1", collapsed ? "p-2" : "p-3")}>
             {TABS.map((t) => (
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
+                title={collapsed ? t.label : undefined}
                 className={cn(
-                  "cursor-pointer px-4 py-2.5 text-left text-xs font-bold tracking-wider uppercase transition-colors duration-150",
+                  "flex cursor-pointer items-center text-xs font-bold tracking-wider uppercase transition-colors duration-150",
+                  collapsed ? "justify-center py-2" : "justify-start px-4 py-2.5",
                   tab === t.id
                     ? "bg-white text-black"
                     : "text-white/70 hover:bg-white/10 hover:text-white",
                 )}
               >
-                {t.label}
+                {collapsed ? (
+                  <span className="flex size-6 items-center justify-center border-2 border-current text-[11px]">
+                    {t.label[0]}
+                  </span>
+                ) : (
+                  t.label
+                )}
               </button>
             ))}
           </nav>
-          <div className="mt-auto flex flex-col gap-1 border-t-2 border-white/10 p-4 text-[9px] font-bold tracking-widest text-white/40 uppercase">
-            <span>Local-first</span>
-            <span>Zero telemetry</span>
-          </div>
+          {!collapsed && (
+            <div className="mt-auto flex flex-col gap-1 border-t-2 border-white/10 p-4 text-[9px] font-bold tracking-widest text-white/40 uppercase">
+              <span>Local-first</span>
+              <span>Zero telemetry</span>
+            </div>
+          )}
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
           <Header />
