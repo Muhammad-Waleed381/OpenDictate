@@ -12,6 +12,7 @@ pub struct SettingsPatch {
     pub language: Option<String>,
     pub stt_model: Option<String>,
     pub insert_mode: Option<String>,
+    pub heatmap_color: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +26,8 @@ pub struct Settings {
     pub stt_model: String,
     #[serde(default = "default_insert_mode")]
     pub insert_mode: String,
+    #[serde(default = "default_heatmap_color")]
+    pub heatmap_color: String,
 }
 
 fn default_stt_model() -> String {
@@ -33,6 +36,10 @@ fn default_stt_model() -> String {
 
 fn default_insert_mode() -> String {
     "auto".to_string()
+}
+
+fn default_heatmap_color() -> String {
+    "#16a34a".to_string()
 }
 
 impl Default for Settings {
@@ -45,6 +52,7 @@ impl Default for Settings {
             onboarded: false,
             stt_model: default_stt_model(),
             insert_mode: default_insert_mode(),
+            heatmap_color: default_heatmap_color(),
         }
     }
 }

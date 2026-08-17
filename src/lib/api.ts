@@ -25,10 +25,14 @@ export interface Settings {
   onboarded: boolean;
   stt_model: string;
   insert_mode: string;
+  heatmap_color: string;
 }
 
 export type SettingsPatch = Partial<
-  Pick<Settings, "hotkey" | "engine" | "language" | "stt_model" | "insert_mode">
+  Pick<
+    Settings,
+    "hotkey" | "engine" | "language" | "stt_model" | "insert_mode" | "heatmap_color"
+  >
 >;
 
 export interface HistoryEntry {

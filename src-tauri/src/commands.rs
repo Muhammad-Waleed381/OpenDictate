@@ -135,6 +135,14 @@ pub fn set_settings(
             current.insert_mode = insert_mode.clone();
         }
     }
+    if let Some(heatmap_color) = &settings.heatmap_color {
+        let valid = heatmap_color.starts_with('#')
+            && matches!(heatmap_color.len(), 4 | 7 | 9)
+            && heatmap_color[1..].chars().all(|c| c.is_ascii_hexdigit());
+        if valid {
+            current.heatmap_color = heatmap_color.clone();
+        }
+    }
     let settings = current.clone();
     drop(current);
 

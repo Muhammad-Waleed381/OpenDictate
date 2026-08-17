@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { useStore } from "@/lib/store";
+import * as api from "@/lib/api";
 
 const DAY_MS = 86_400_000;
 
@@ -24,13 +25,44 @@ function levelFor(words: number): number {
   return 4;
 }
 
-const CELL_COLORS = [
-  "border-black/5 bg-zinc-100",
-  "bg-green-200",
-  "bg-green-300",
-  "bg-green-400",
-  "bg-green-600",
+const DEFAULT_COLOR = "#16a34a";
+
+const PRESETS: { name: string; hex: string }[] = [
+  { name: "Green", hex: "#16a34a" },
+  { name: "Blue", hex: "#2563eb" },
+  { name: "Violet", hex: "#7c3aed" },
+  { name: "Amber", hex: "#d97706" },
+  { name: "Rose", hex: "#e11d48" },
+  { name: "Slate", hex: "#475569" },
 ];
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  let h = hex.replace("#", "");
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  if (h.length !== 6) return null;
+  const n = parseInt(h, 16);
+  if (Number.isNaN(n)) return null;
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+
+function mix(hex: string, other: [number, number, number], t: number): string {
+  const rgb = hexToRgb(hex);
+  if (!rgb) return DEFAULT_COLOR;
+  const out = rgb.map((v, i) => Math.round(v * (1 - t) + other[i] * t));
+  return `#${out.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function shadesFor(hex: string): string[] {
+  const white: [number, number, number] = [255, 255, 255];
+  const black: [number, number, number] = [0, 0, 0];
+  return [
+    "border-black/5 bg-zinc-100",
+    `bg-[${mix(hex, white, 0.7)}]`,
+    `bg-[${mix(hex, white, 0.4)}]`,
+    `bg-[${mix(hex, white, 0.1)}]`,
+    `bg-[${mix(hex, black, 0.3)}]`,
+  ];
+}
 
 const MONTH_LABELS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -46,6 +78,18 @@ interface HeatmapCell {
 
 export function HeatmapTab() {
   const stats = useStore((s) => s.stats);
+  const settings = useStore((s) => s.settings);
+  const color = settings?.heatmap_color ?? DEFAULT_COLOR;
+  const cellColors = useMemo(() => shadesFor(color), [color]);
+
+  const handleColor = async (hex: string) => {
+    try {
+      await api.setSettings({ heatmap_color: hex });
+      await useStore.getState().refreshAll();
+    } catch {
+      // ignore transient save failures
+    }
+  };
 
   const { cells, monthLabels, weekLabels, legend } = useMemo(() => {
     const byDay = new Map<string, number>();
@@ -166,13 +210,46 @@ export function HeatmapTab() {
       </div>
 
       <div className="border-2 border-black bg-white p-5 shadow-[6px_6px_0_0_#E8E8E8]">
-        <div className="mb-4 flex items-baseline gap-2">
-          <h3 className="text-sm font-black tracking-widest uppercase">
-            Word activity
-          </h3>
-          <span className="text-xs font-bold text-muted-foreground">
-            words transcribed per day · last 52 weeks
-          </span>
+        <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3">
+          <div className="flex items-baseline gap-2">
+            <h3 className="text-sm font-black tracking-widest uppercase">
+              Word activity
+            </h3>
+            <span className="text-xs font-bold text-muted-foreground">
+              words transcribed per day · last 52 weeks
+            </span>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+              Color
+            </span>
+            {PRESETS.map((p) => (
+              <button
+                key={p.hex}
+                title={p.name}
+                onClick={() => handleColor(p.hex)}
+                className={`size-5 cursor-pointer border-2 ${
+                  color === p.hex ? "border-black" : "border-black/20"
+                }`}
+                style={{ backgroundColor: p.hex }}
+              />
+            ))}
+            <label
+              title="Custom color"
+              className="relative flex size-5 cursor-pointer items-center justify-center border-2 border-black/20 bg-white"
+            >
+              <input
+                type="color"
+                value={color}
+                onChange={(e) => handleColor(e.target.value)}
+                className="size-0 cursor-pointer opacity-0"
+              />
+              <span
+                className="size-2.5 border border-black"
+                style={{ backgroundColor: color }}
+              />
+            </label>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -215,7 +292,7 @@ export function HeatmapTab() {
                           month: "short",
                           day: "numeric",
                         })} — ${cell.words} word${cell.words === 1 ? "" : "s"}`}
-                        className={`size-[13px] border-2 ${CELL_COLORS[cell.level]}`}
+                        className={`size-[13px] border-2 ${cellColors[cell.level]}`}
                       />
                     ))}
                   </div>
@@ -226,7 +303,7 @@ export function HeatmapTab() {
               {legend.map((l) => (
                 <span key={l.level} className="flex items-center gap-1">
                   {l.label && <span>{l.label}</span>}
-                  <span className={`size-[11px] border-2 ${CELL_COLORS[l.level]}`} />
+                  <span className={`size-[11px] border-2 ${cellColors[l.level]}`} />
                 </span>
               ))}
             </div>
