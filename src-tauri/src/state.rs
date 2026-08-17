@@ -13,6 +13,8 @@ pub struct SettingsPatch {
     pub stt_model: Option<String>,
     pub insert_mode: Option<String>,
     pub heatmap_color: Option<String>,
+    pub vad_sensitivity: Option<f32>,
+    pub continuous: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +30,10 @@ pub struct Settings {
     pub insert_mode: String,
     #[serde(default = "default_heatmap_color")]
     pub heatmap_color: String,
+    #[serde(default = "default_vad_sensitivity")]
+    pub vad_sensitivity: f32,
+    #[serde(default)]
+    pub continuous: bool,
 }
 
 fn default_stt_model() -> String {
@@ -42,6 +48,10 @@ fn default_heatmap_color() -> String {
     "#16a34a".to_string()
 }
 
+fn default_vad_sensitivity() -> f32 {
+    0.5
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -53,6 +63,8 @@ impl Default for Settings {
             stt_model: default_stt_model(),
             insert_mode: default_insert_mode(),
             heatmap_color: default_heatmap_color(),
+            vad_sensitivity: default_vad_sensitivity(),
+            continuous: false,
         }
     }
 }
@@ -107,6 +119,7 @@ pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub settings: Arc<Mutex<Settings>>,
     pub hotkey: Arc<Mutex<Option<String>>>,
+    pub continuous: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -116,5 +129,9 @@ impl AppState {
 
     pub fn set_test_mode(&self, enabled: bool) {
         self.test_mode.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn set_continuous(&self, enabled: bool) {
+        self.continuous.store(enabled, Ordering::SeqCst);
     }
 }

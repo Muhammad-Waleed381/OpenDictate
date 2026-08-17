@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use opendictate_core::audio::capture::AudioRecorder;
 use opendictate_core::stt::models;
@@ -143,6 +143,14 @@ pub fn set_settings(
             current.heatmap_color = heatmap_color.clone();
         }
     }
+    if let Some(vad_sensitivity) = settings.vad_sensitivity {
+        if (0.0..=1.0).contains(&vad_sensitivity) {
+            current.vad_sensitivity = vad_sensitivity;
+        }
+    }
+    if let Some(continuous) = settings.continuous {
+        current.continuous = continuous;
+    }
     let settings = current.clone();
     drop(current);
 
@@ -283,6 +291,88 @@ pub fn word_stats(state: State<AppState>) -> Result<crate::state::WordStats, Str
 pub fn reset_word_stats(state: State<AppState>) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::reset_word_stats(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn export_history(
+    kind: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let entries = db::get_history(&conn).map_err(|e| e.to_string())?;
+
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?;
+    let exports_dir = data_dir.join("exports");
+    std::fs::create_dir_all(&exports_dir).map_err(|e| e.to_string())?;
+
+    let ext = match kind.as_str() {
+        "json" => "json",
+        "csv" => "csv",
+        other => return Err(format!("unsupported export format '{other}'")),
+    };
+    let path = exports_dir.join(format!("history-{}.{ext}", db::now_timestamp()));
+
+    let contents = match ext {
+        "json" => serde_json::to_string_pretty(&entries)
+            .map_err(|e| e.to_string())?,
+        _ => csv_contents(&entries),
+    };
+
+    std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn csv_contents(entries: &[crate::state::HistoryEntry]) -> String {
+    let mut out = String::from("id,text,created_at,duration_ms,source\n");
+    for e in entries {
+        let text = e.text.replace('"', "\"\"");
+        out.push_str(&format!(
+            "{},{},\"{}\",{},\"{}\"\n",
+            e.id,
+            e.created_at,
+            text.replace('\n', " "),
+            e.duration_ms,
+            e.source
+        ));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::HistoryEntry;
+
+    #[test]
+    fn csv_escapes_quotes_and_newlines() {
+        let entries = vec![
+            HistoryEntry {
+                id: 1,
+                text: "say \"hi\"".to_string(),
+                created_at: "1724000000".to_string(),
+                duration_ms: 1200,
+                source: "hotkey".to_string(),
+            },
+            HistoryEntry {
+                id: 2,
+                text: "line1\nline2, with comma".to_string(),
+                created_at: "1724000001".to_string(),
+                duration_ms: 800,
+                source: "continuous".to_string(),
+            },
+        ];
+        let csv = csv_contents(&entries);
+        let lines: Vec<&str> = csv.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "id,text,created_at,duration_ms,source");
+        assert!(lines[1].contains("\"say \"\"hi\"\"\""));
+        assert!(lines[2].contains("line1 line2, with comma"));
+        assert!(lines[2].contains("continuous"));
+    }
 }
 
 fn chrono_day_offset(days: i64) -> String {

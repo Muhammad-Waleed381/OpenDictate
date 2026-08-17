@@ -22,6 +22,10 @@ unsafe impl Sync for SileroVad {}
 
 impl SileroVad {
     pub fn new(model_path: &Path) -> Result<Self> {
+        Self::with_threshold(model_path, 0.5)
+    }
+
+    pub fn with_threshold(model_path: &Path, threshold: f32) -> Result<Self> {
         if !model_path.exists() {
             return Err(CoreError::Audio(format!(
                 "silero VAD model not found at {}",
@@ -29,10 +33,11 @@ impl SileroVad {
             )));
         }
 
+        let threshold = threshold.clamp(0.0, 1.0);
         let config = VadModelConfig {
             silero_vad: SileroVadModelConfig {
                 model: Some(model_path.to_string_lossy().to_string()),
-                threshold: 0.5,
+                threshold,
                 min_silence_duration: 0.5,
                 min_speech_duration: 0.1,
                 max_speech_duration: 120.0,
@@ -45,7 +50,7 @@ impl SileroVad {
             ..Default::default()
         };
 
-        VoiceActivityDetector::create(&config, 0.5)
+        VoiceActivityDetector::create(&config, threshold)
             .ok_or_else(|| CoreError::Audio("failed to initialize silero VAD".to_string()))?;
 
         log::info!("silero VAD loaded from {}", model_path.display());
@@ -138,8 +143,10 @@ pub fn classify_frames(audio: &[f32], config: &VadConfig) -> Vec<bool> {
 }
 
 pub fn apply_energy_vad(audio: &[f32]) -> VadResult {
-    let config = default_config();
+    apply_energy_vad_with_config(audio, &default_config())
+}
 
+pub fn apply_energy_vad_with_config(audio: &[f32], config: &VadConfig) -> VadResult {
     if audio.is_empty() {
         return VadResult {
             trimmed_audio: Vec::new(),
@@ -148,7 +155,7 @@ pub fn apply_energy_vad(audio: &[f32]) -> VadResult {
         };
     }
 
-    let raw_flags = classify_frames(audio, &config);
+    let raw_flags = classify_frames(audio, config);
     let speech_frames = raw_flags.iter().filter(|&&f| f).count();
 
     if speech_frames < config.min_speech_frames {
@@ -187,10 +194,29 @@ pub fn apply_energy_vad(audio: &[f32]) -> VadResult {
     }
 }
 
-pub fn apply_vad(audio: &[f32], silero: Option<&SileroVad>) -> VadResult {
+/// Map a 0..1 sensitivity knob to the energy VAD threshold. Lower sensitivity
+/// (0.0) means louder speech is required; higher sensitivity (1.0) catches
+/// quieter speech.
+pub fn sensitivity_to_energy_threshold(sensitivity: f32) -> f32 {
+    let s = sensitivity.clamp(0.0, 1.0);
+    0.03 - 0.02 * s
+}
+
+/// Map a 0..1 sensitivity knob to the Silero speech-probability threshold.
+/// Lower sensitivity = higher threshold (needs more confident speech).
+pub fn sensitivity_to_silero_threshold(sensitivity: f32) -> f32 {
+    let s = sensitivity.clamp(0.0, 1.0);
+    0.7 - 0.4 * s
+}
+
+pub fn apply_vad(audio: &[f32], silero: Option<&SileroVad>, sensitivity: f32) -> VadResult {
     match silero {
         Some(vad) => vad.process(audio),
-        None => apply_energy_vad(audio),
+        None => {
+            let mut config = default_config();
+            config.energy_threshold = sensitivity_to_energy_threshold(sensitivity);
+            apply_energy_vad_with_config(audio, &config)
+        }
     }
 }
 
@@ -238,7 +264,33 @@ mod tests {
 
     #[test]
     fn apply_vad_without_silero_uses_energy() {
-        let result = apply_vad(&[0.0f32; 16_000], None);
+        let result = apply_vad(&[0.0f32; 16_000], None, 0.5);
         assert!(!result.has_speech);
+    }
+
+    #[test]
+    fn sensitivity_mapping_is_monotonic() {
+        let low = sensitivity_to_silero_threshold(0.0);
+        let mid = sensitivity_to_silero_threshold(0.5);
+        let high = sensitivity_to_silero_threshold(1.0);
+        assert!(low > mid && mid > high, "silero thresholds must decrease with sensitivity");
+
+        let elow = sensitivity_to_energy_threshold(0.0);
+        let ehigh = sensitivity_to_energy_threshold(1.0);
+        assert!(elow > ehigh, "energy thresholds must decrease with sensitivity");
+    }
+
+    #[test]
+    fn energy_vad_respects_sensitivity() {
+        let quiet: Vec<f32> = vec![0.0f32; 8_000];
+        let speech: Vec<f32> = (0..16_000).map(|i| (i as f32 * 0.05).sin() * 0.08).collect();
+        let mut audio = quiet.clone();
+        audio.extend_from_slice(&speech);
+        audio.extend_from_slice(&quiet);
+
+        let insensitive = apply_vad(&audio, None, 0.0);
+        let sensitive = apply_vad(&audio, None, 1.0);
+        assert!(!insensitive.has_speech || sensitive.has_speech);
+        assert!(sensitive.has_speech);
     }
 }

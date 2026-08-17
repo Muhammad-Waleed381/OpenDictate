@@ -1,10 +1,12 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use opendictate_core::audio::vad::{apply_vad, SileroVad};
+use opendictate_core::audio::vad::{
+    apply_vad, sensitivity_to_energy_threshold, sensitivity_to_silero_threshold, SileroVad,
+};
 use opendictate_core::stt::engine::{ModelKind, SttEngine};
 use opendictate_core::stt::models;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
 use crate::inject;
@@ -27,21 +29,150 @@ pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String
 
     dock::set_state(app, "listening", None);
 
+    if !test && is_continuous_enabled(state) {
+        state.set_continuous(true);
+        spawn_continuous_loop(app, state);
+    }
+
     spawn_level_emitter(app, state);
     Ok(())
 }
 
 pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, String> {
+    state.set_continuous(false);
     if !state.recorder.is_recording() {
         return Err("no recording in progress".to_string());
     }
 
     let audio = state.recorder.stop().map_err(|e| e.to_string())?;
     let test = state.is_test_mode();
-
     dock::set_state(app, "transcribing", None);
 
-    let speech = run_vad(&audio).map_err(|e| e.to_string())?;
+    process_utterance(app, state, &audio, test, false)
+}
+
+pub fn cancel(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    state.set_continuous(false);
+    if !state.recorder.is_recording() {
+        return Ok(());
+    }
+    state.recorder.cancel().map_err(|e| e.to_string())?;
+    state.set_test_mode(false);
+    dock::set_state(app, "hidden", None);
+    Ok(())
+}
+
+fn is_continuous_enabled(state: &AppState) -> bool {
+    state
+        .settings
+        .lock()
+        .map(|s| s.continuous)
+        .unwrap_or(false)
+}
+
+fn sensitivity(state: &AppState) -> f32 {
+    state
+        .settings
+        .lock()
+        .map(|s| s.vad_sensitivity)
+        .unwrap_or(0.5)
+}
+
+/// Keeps the mic open: each utterance is endpointed by trailing silence,
+/// transcribed, and inserted, then listening resumes. Killed when the user
+/// toggles stop (clears the continuous flag) or calls cancel.
+fn spawn_continuous_loop(app: &AppHandle, state: &AppState) {
+    const SILENCE_TIMEOUT: Duration = Duration::from_millis(1400);
+    const MIN_UTTERANCE: Duration = Duration::from_millis(600);
+
+    let app = app.clone();
+    let recorder = Arc::clone(&state.recorder);
+    let continuous = Arc::clone(&state.continuous);
+    std::thread::spawn(move || {
+        let mut silent_since = Instant::now();
+        let mut utterance_started = Instant::now();
+
+        while continuous.load(std::sync::atomic::Ordering::SeqCst) {
+            if !recorder.is_recording() {
+                break;
+            }
+            let rms = recorder.current_rms();
+            let energy_threshold = sensitivity_to_energy_threshold(
+                state_sensitivity(&app),
+            );
+            if rms < energy_threshold {
+                if silent_since.elapsed() >= SILENCE_TIMEOUT
+                    && utterance_started.elapsed() >= MIN_UTTERANCE
+                {
+                    let audio = match recorder.stop() {
+                        Ok(a) => a,
+                        Err(e) => {
+                            log::warn!("continuous: stop failed: {e}");
+                            break;
+                        }
+                    };
+                    if !continuous.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    dock::set_state(&app, "transcribing", None);
+                    let _ = process_utterance(&app, &state_from_app(&app), &audio, false, true);
+
+                    if !continuous.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    match restart_recorder(&app) {
+                        Ok(()) => {
+                            silent_since = Instant::now();
+                            utterance_started = Instant::now();
+                        }
+                        Err(e) => {
+                            log::warn!("continuous: restart failed: {e}");
+                            break;
+                        }
+                    }
+                }
+            } else {
+                silent_since = Instant::now();
+            }
+            std::thread::sleep(Duration::from_millis(60));
+        }
+        continuous.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
+fn restart_recorder(app: &AppHandle) -> Result<(), String> {
+    let state = state_from_app(app);
+    let mic = state
+        .settings
+        .lock()
+        .map(|s| s.mic.clone())
+        .unwrap_or(None);
+    match mic {
+        Some(name) if !name.is_empty() => state.recorder.start_with_name(&name),
+        _ => state.recorder.start(),
+    }
+    .map_err(|e| e.to_string())?;
+    dock::set_state(app, "listening", None);
+    Ok(())
+}
+
+fn state_from_app(app: &AppHandle) -> tauri::State<'_, AppState> {
+    app.state::<AppState>()
+}
+
+fn state_sensitivity(app: &AppHandle) -> f32 {
+    let state = state_from_app(app);
+    sensitivity(&state)
+}
+
+fn process_utterance(
+    app: &AppHandle,
+    state: &AppState,
+    audio: &[f32],
+    test: bool,
+    continuous: bool,
+) -> Result<TranscriptResult, String> {
+    let speech = run_vad(audio, sensitivity(state)).map_err(|e| e.to_string())?;
     if !speech.has_speech {
         dock::set_state(app, "hidden", None);
         return Ok(TranscriptResult {
@@ -75,7 +206,7 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
             text: text.clone(),
             created_at: db::now_timestamp(),
             duration_ms,
-            source: "hotkey".to_string(),
+            source: if continuous { "continuous".to_string() } else { "hotkey".to_string() },
         };
         if let Ok(conn) = state.db.lock() {
             if db::insert_history(&conn, &entry).is_ok() {
@@ -89,6 +220,11 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
         }
     }
 
+    if continuous {
+        dock::set_state(app, "listening", None);
+        return Ok(TranscriptResult { text, duration_ms });
+    }
+
     dock::set_state(app, "inserted", None);
     let app = app.clone();
     std::thread::spawn(move || {
@@ -97,16 +233,6 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
     });
 
     Ok(TranscriptResult { text, duration_ms })
-}
-
-pub fn cancel(app: &AppHandle, state: &AppState) -> Result<(), String> {
-    if !state.recorder.is_recording() {
-        return Ok(());
-    }
-    state.recorder.cancel().map_err(|e| e.to_string())?;
-    state.set_test_mode(false);
-    dock::set_state(app, "hidden", None);
-    Ok(())
 }
 
 fn spawn_level_emitter(app: &AppHandle, state: &AppState) {
@@ -124,14 +250,15 @@ fn spawn_level_emitter(app: &AppHandle, state: &AppState) {
 
 fn run_vad(
     audio: &[f32],
+    sensitivity: f32,
 ) -> Result<opendictate_core::audio::vad::VadResult, opendictate_core::CoreError> {
     let vad_path = models::vad_model_path();
     let silero = if models::is_vad_ready() {
-        SileroVad::new(&vad_path).ok()
+        SileroVad::with_threshold(&vad_path, sensitivity_to_silero_threshold(sensitivity)).ok()
     } else {
         None
     };
-    Ok(apply_vad(audio, silero.as_ref()))
+    Ok(apply_vad(audio, silero.as_ref(), sensitivity))
 }
 
 fn dictionary_hotwords(state: &AppState) -> Option<String> {

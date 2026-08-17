@@ -69,7 +69,7 @@ fn run(record_secs: u64, countdown_secs: u64) -> Result<String, String> {
     } else {
         None
     };
-    let vad_result = apply_vad(&audio, silero.as_ref());
+    let vad_result = apply_vad(&audio, silero.as_ref(), 0.5);
     if !vad_result.has_speech {
         return Err(format!(
             "no speech detected (RMS {rms:.4}); speak during the recording window"

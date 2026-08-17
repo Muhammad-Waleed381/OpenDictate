@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,12 +24,32 @@ function formatDate(value: string): string {
 export function HistoryTab() {
   const history = useStore((s) => s.history);
   const [query, setQuery] = useState("");
+  const [exported, setExported] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return history;
     return history.filter((entry) => entry.text.toLowerCase().includes(q));
   }, [history, query]);
+
+  const handleExport = async (kind: api.ExportKind) => {
+    setExportError(null);
+    try {
+      const path = await api.exportHistory(kind);
+      setExported(path);
+    } catch (e) {
+      setExported(null);
+      setExportError(String(e));
+    }
+  };
+
+  const handleReveal = async () => {
+    if (!exported) return;
+    try {
+      await revealItemInDir(exported);
+    } catch {}
+  };
 
   const handleCopy = async (text: string) => {
     try {
@@ -65,10 +86,34 @@ export function HistoryTab() {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search history…"
         />
+        <Button variant="outline" onClick={() => handleExport("json")}>
+          Export JSON
+        </Button>
+        <Button variant="outline" onClick={() => handleExport("csv")}>
+          Export CSV
+        </Button>
         <Button variant="outline" onClick={handleClearAll}>
           Clear all
         </Button>
       </div>
+      {exported && (
+        <div className="flex flex-wrap items-center gap-2 border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
+          <span className="truncate">✓ Exported — {exported}</span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto border-white text-white shadow-none"
+            onClick={handleReveal}
+          >
+            Show in folder
+          </Button>
+        </div>
+      )}
+      {exportError && (
+        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
+          ✕ {exportError}
+        </div>
+      )}
       {filtered.length === 0 ? (
         <div className="border-2 border-dashed border-black p-6 text-center">
           <p className="text-sm font-bold uppercase tracking-wider">

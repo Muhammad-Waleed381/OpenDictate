@@ -5,6 +5,7 @@ import * as api from "@/lib/api";
 import { formatHotkey } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ModelCard } from "@/components/ModelCard";
 
@@ -179,6 +180,26 @@ export function GeneralTab() {
     } catch {}
   };
 
+  const handleSensitivityChange = async (value: number) => {
+    try {
+      await api.setSettings({ vad_sensitivity: value });
+      useStore.getState().refreshAll();
+    } catch {}
+  };
+
+  const handleContinuousChange = async (enabled: boolean) => {
+    try {
+      await api.setSettings({ continuous: enabled });
+      useStore.getState().refreshAll();
+    } catch {}
+  };
+
+  const sensitivity = settings?.vad_sensitivity ?? 0.5;
+  const sensitivityLabel =
+    sensitivity <= 0.25 ? "Low — only loud, clear speech" :
+    sensitivity <= 0.75 ? "Medium — balanced" :
+    "High — catches quiet speech";
+
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -252,6 +273,42 @@ export function GeneralTab() {
 
         <div className="sm:col-span-2">
           <HotkeyCapture />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="sensitivity">Voice activity sensitivity</Label>
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground tabular-nums">
+              {Math.round(sensitivity * 100)}%
+            </span>
+          </div>
+          <input
+            id="sensitivity"
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={Math.round(sensitivity * 100)}
+            onChange={(e) => handleSensitivityChange(Number(e.target.value) / 100)}
+            className="h-2 w-full cursor-pointer appearance-none rounded-full bg-black"
+          />
+          <p className="text-xs text-muted-foreground">{sensitivityLabel}</p>
+        </div>
+
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="continuous">Continuous dictation</Label>
+            <p className="text-xs text-muted-foreground">
+              Keep listening after each phrase — press the hotkey again to stop.
+            </p>
+          </div>
+          <Switch
+            id="continuous"
+            checked={settings?.continuous ?? false}
+            onCheckedChange={handleContinuousChange}
+          />
         </div>
       </div>
 

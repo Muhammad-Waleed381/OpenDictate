@@ -50,6 +50,7 @@ pub fn run() {
             commands::copy_text,
             commands::word_stats,
             commands::reset_word_stats,
+            commands::export_history,
         ])
         .setup(|app| {
             let data_dir = app
@@ -74,6 +75,7 @@ pub fn run() {
                 db: Arc::new(Mutex::new(conn)),
                 settings: Arc::new(Mutex::new(settings.clone())),
                 hotkey: Arc::new(Mutex::new(None)),
+                continuous: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             };
             app.manage(state);
 

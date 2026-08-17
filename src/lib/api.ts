@@ -26,12 +26,21 @@ export interface Settings {
   stt_model: string;
   insert_mode: string;
   heatmap_color: string;
+  vad_sensitivity: number;
+  continuous: boolean;
 }
 
 export type SettingsPatch = Partial<
   Pick<
     Settings,
-    "hotkey" | "engine" | "language" | "stt_model" | "insert_mode" | "heatmap_color"
+    | "hotkey"
+    | "engine"
+    | "language"
+    | "stt_model"
+    | "insert_mode"
+    | "heatmap_color"
+    | "vad_sensitivity"
+    | "continuous"
   >
 >;
 
@@ -193,6 +202,12 @@ export function getWordStats(): Promise<WordStats> {
 
 export function resetWordStats(): Promise<void> {
   return invoke<void>("reset_word_stats");
+}
+
+export type ExportKind = "json" | "csv";
+
+export function exportHistory(kind: ExportKind): Promise<string> {
+  return invoke<string>("export_history", { kind });
 }
 
 export function onOverlayState(
