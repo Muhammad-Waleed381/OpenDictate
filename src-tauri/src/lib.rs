@@ -49,6 +49,7 @@ pub fn run() {
             commands::paste_clipboard,
             commands::copy_text,
             commands::word_stats,
+            commands::reset_word_stats,
         ])
         .setup(|app| {
             let data_dir = app

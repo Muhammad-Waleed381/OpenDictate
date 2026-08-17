@@ -191,6 +191,10 @@ export function getWordStats(): Promise<WordStats> {
   return invoke<WordStats>("word_stats");
 }
 
+export function resetWordStats(): Promise<void> {
+  return invoke<void>("reset_word_stats");
+}
+
 export function onOverlayState(
   cb: (payload: OverlayState) => void
 ): Promise<UnlistenFn> {

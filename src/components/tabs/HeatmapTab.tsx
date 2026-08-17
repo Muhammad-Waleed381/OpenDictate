@@ -91,6 +91,16 @@ export function HeatmapTab() {
     }
   };
 
+  const handleReset = async () => {
+    if (!window.confirm("Reset all word activity? This clears the heatmap and counters permanently.")) return;
+    try {
+      await api.resetWordStats();
+      await useStore.getState().refreshAll();
+    } catch {
+      // ignore transient failures
+    }
+  };
+
   const { cells, monthLabels, weekLabels, legend } = useMemo(() => {
     const byDay = new Map<string, number>();
     for (const entry of stats?.daily ?? []) {
@@ -219,7 +229,14 @@ export function HeatmapTab() {
               words transcribed per day · last 52 weeks
             </span>
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-3">
+            <button
+              onClick={handleReset}
+              className="cursor-pointer border-2 border-black/30 px-2 py-0.5 text-[10px] font-bold tracking-widest text-muted-foreground uppercase transition-colors hover:border-red-500 hover:text-red-500"
+            >
+              Reset stats
+            </button>
+            <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
               Color
             </span>
@@ -251,6 +268,7 @@ export function HeatmapTab() {
             </label>
           </div>
         </div>
+      </div>
 
         <div className="overflow-x-auto">
           <div className="inline-flex flex-col gap-1.5">

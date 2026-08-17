@@ -23,8 +23,27 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             word TEXT NOT NULL UNIQUE,
             created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS daily_stats (
+            day TEXT PRIMARY KEY,
+            words INTEGER NOT NULL DEFAULT 0,
+            sessions INTEGER NOT NULL DEFAULT 0
         );",
     )?;
+    let backfilled: i64 = conn.query_row("SELECT COUNT(*) FROM daily_stats", [], |r| r.get(0))?;
+    if backfilled == 0 {
+        conn.execute_batch(
+            "INSERT INTO daily_stats (day, words, sessions)
+             SELECT date(created_at, 'unixepoch'),
+                    COALESCE(SUM(
+                        CASE WHEN length(text) = 0 THEN 0
+                             ELSE length(text) - length(replace(text, ' ', '')) + 1
+                        END
+                    ), 0),
+                    COUNT(*)
+             FROM history GROUP BY date(created_at, 'unixepoch');",
+        )?;
+    }
     Ok(conn)
 }
 
@@ -47,7 +66,8 @@ pub fn save_settings(conn: &Connection, settings: &Settings) -> rusqlite::Result
 }
 
 pub fn insert_history(conn: &Connection, entry: &HistoryEntry) -> rusqlite::Result<()> {
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
         "INSERT INTO history (text, created_at, duration_ms, source) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![
             entry.text,
@@ -56,7 +76,19 @@ pub fn insert_history(conn: &Connection, entry: &HistoryEntry) -> rusqlite::Resu
             entry.source
         ],
     )?;
-    Ok(())
+    tx.execute(
+        "INSERT INTO daily_stats (day, words, sessions)
+         VALUES (date(?1, 'unixepoch'),
+                 CASE WHEN length(?2) = 0 THEN 0
+                      ELSE length(?2) - length(replace(?2, ' ', '')) + 1
+                 END,
+                 1)
+         ON CONFLICT(day) DO UPDATE SET
+             words = words + excluded.words,
+             sessions = sessions + excluded.sessions",
+        rusqlite::params![entry.created_at, entry.text],
+    )?;
+    tx.commit()
 }
 
 pub fn get_history(conn: &Connection) -> rusqlite::Result<Vec<HistoryEntry>> {
@@ -113,17 +145,14 @@ pub fn remove_dictionary_word(conn: &Connection, word: &str) -> rusqlite::Result
 }
 
 pub fn word_stats(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
-    let mut stmt = conn.prepare(
-        "SELECT date(created_at, 'unixepoch') AS day,
-                COALESCE(SUM(
-                    CASE WHEN length(text) = 0 THEN 0
-                         ELSE length(text) - length(replace(text, ' ', '')) + 1
-                    END
-                ), 0) AS words
-         FROM history GROUP BY day ORDER BY day",
-    )?;
+    let mut stmt = conn.prepare("SELECT day, words FROM daily_stats ORDER BY day")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     rows.collect()
+}
+
+pub fn reset_word_stats(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM daily_stats", [])?;
+    Ok(())
 }
 
 pub fn now_timestamp() -> String {

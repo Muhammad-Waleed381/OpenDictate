@@ -226,6 +226,11 @@ pub fn word_stats(state: State<AppState>) -> Result<crate::state::WordStats, Str
 
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let rows = db::word_stats(&conn).map_err(|e| e.to_string())?;
+    let total_sessions: i64 = conn
+        .query_row("SELECT COALESCE(SUM(sessions), 0) FROM daily_stats", [], |r| {
+            r.get(0)
+        })
+        .map_err(|e| e.to_string())?;
 
     let mut by_day: HashMap<String, u64> = HashMap::new();
     let mut total_words: u64 = 0;
@@ -240,7 +245,7 @@ pub fn word_stats(state: State<AppState>) -> Result<crate::state::WordStats, Str
             best_day = Some(day.clone());
         }
     }
-    let total_sessions = db::get_history(&conn).map(|h| h.len() as u64).unwrap_or(0);
+    let total_sessions = total_sessions as u64;
 
     let mut streak_days: u64 = 0;
     let today = chrono_day_offset(0);
@@ -272,6 +277,12 @@ pub fn word_stats(state: State<AppState>) -> Result<crate::state::WordStats, Str
         best_day,
         best_words,
     })
+}
+
+#[tauri::command]
+pub fn reset_word_stats(state: State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::reset_word_stats(&conn).map_err(|e| e.to_string())
 }
 
 fn chrono_day_offset(days: i64) -> String {
