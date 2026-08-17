@@ -5,21 +5,19 @@ import * as api from "@/lib/api";
 import { formatHotkey, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Settings, Activity, BookOpen, History, Shield } from "lucide-react";
+import { Settings, Activity, BookOpen, History } from "lucide-react";
 import { Onboarding } from "@/components/Onboarding";
 import { DockButton } from "@/components/DockButton";
 import { GeneralTab } from "@/components/tabs/GeneralTab";
 import { DictionaryTab } from "@/components/tabs/DictionaryTab";
 import { HistoryTab } from "@/components/tabs/HistoryTab";
 import { HeatmapTab } from "@/components/tabs/HeatmapTab";
-import { PrivacyTab } from "@/components/tabs/PrivacyTab";
 
 const TABS = [
   { id: "general", label: "General", icon: Settings },
   { id: "activity", label: "Activity", icon: Activity },
   { id: "dictionary", label: "Dictionary", icon: BookOpen },
   { id: "history", label: "History", icon: History },
-  { id: "privacy", label: "Privacy", icon: Shield },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -217,7 +215,6 @@ export function MainApp() {
               {tab === "activity" && <HeatmapTab />}
               {tab === "dictionary" && <DictionaryTab />}
               {tab === "history" && <HistoryTab />}
-              {tab === "privacy" && <PrivacyTab />}
             </div>
           </main>
         </div>
