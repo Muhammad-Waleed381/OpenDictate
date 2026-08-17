@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
-import { formatHotkey } from "@/lib/utils";
+import { formatHotkey, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Onboarding } from "@/components/Onboarding";
 import { DockButton } from "@/components/DockButton";
 import { GeneralTab } from "@/components/tabs/GeneralTab";
@@ -13,6 +12,16 @@ import { DictionaryTab } from "@/components/tabs/DictionaryTab";
 import { HistoryTab } from "@/components/tabs/HistoryTab";
 import { HeatmapTab } from "@/components/tabs/HeatmapTab";
 import { PrivacyTab } from "@/components/tabs/PrivacyTab";
+
+const TABS = [
+  { id: "general", label: "General" },
+  { id: "activity", label: "Activity" },
+  { id: "dictionary", label: "Dictionary" },
+  { id: "history", label: "History" },
+  { id: "privacy", label: "Privacy" },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
 
 function useOpenDictateEvents() {
   useEffect(() => {
@@ -129,6 +138,7 @@ function LastResult() {
 
 export function MainApp() {
   const settings = useStore((s) => s.settings);
+  const [tab, setTab] = useState<TabId>("general");
 
   useOpenDictateEvents();
 
@@ -147,34 +157,43 @@ export function MainApp() {
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <Header />
-      <LastResult />
-      <main className="flex-1 overflow-y-auto px-6 py-5">
-        <Tabs defaultValue="general">
-          <TabsList>
-            <TabsTrigger value="general">General</TabsTrigger>
-            <TabsTrigger value="activity">Activity</TabsTrigger>
-            <TabsTrigger value="dictionary">Dictionary</TabsTrigger>
-            <TabsTrigger value="history">History</TabsTrigger>
-            <TabsTrigger value="privacy">Privacy</TabsTrigger>
-          </TabsList>
-          <TabsContent value="general" className="animate-od-slide-up pt-5">
-            <GeneralTab />
-          </TabsContent>
-          <TabsContent value="activity" className="animate-od-slide-up pt-5">
-            <HeatmapTab />
-          </TabsContent>
-          <TabsContent value="dictionary" className="animate-od-slide-up pt-5">
-            <DictionaryTab />
-          </TabsContent>
-          <TabsContent value="history" className="animate-od-slide-up pt-5">
-            <HistoryTab />
-          </TabsContent>
-          <TabsContent value="privacy" className="animate-od-slide-up pt-5">
-            <PrivacyTab />
-          </TabsContent>
-        </Tabs>
-      </main>
+      <div className="flex min-h-0 flex-1">
+        <aside className="flex w-44 shrink-0 flex-col border-r-2 border-black bg-black">
+          <nav className="flex flex-col gap-1 p-3">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  "cursor-pointer px-4 py-2.5 text-left text-xs font-bold tracking-wider uppercase transition-colors duration-150",
+                  tab === t.id
+                    ? "bg-white text-black"
+                    : "text-white/70 hover:bg-white/10 hover:text-white",
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
+          <div className="mt-auto flex flex-col gap-1 border-t-2 border-white/10 p-4 text-[9px] font-bold tracking-widest text-white/40 uppercase">
+            <span>Local-first</span>
+            <span>Zero telemetry</span>
+          </div>
+        </aside>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Header />
+          <LastResult />
+          <main className="flex-1 overflow-y-auto px-6 py-5">
+            <div key={tab} className="animate-od-slide-up">
+              {tab === "general" && <GeneralTab />}
+              {tab === "activity" && <HeatmapTab />}
+              {tab === "dictionary" && <DictionaryTab />}
+              {tab === "history" && <HistoryTab />}
+              {tab === "privacy" && <PrivacyTab />}
+            </div>
+          </main>
+        </div>
+      </div>
       <footer className="flex items-center gap-3 border-t-2 border-black bg-black px-6 py-2.5 text-[11px] font-bold tracking-wider text-white uppercase">
         <span>Speak. Don't type.</span>
         <span className="ml-auto hidden text-white/60 sm:inline">
