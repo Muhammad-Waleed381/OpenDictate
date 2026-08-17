@@ -1,0 +1,238 @@
+import { useMemo } from "react";
+import { useStore } from "@/lib/store";
+
+const DAY_MS = 86_400_000;
+
+function localDayKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function startOfDay(d: Date): Date {
+  const c = new Date(d);
+  c.setHours(0, 0, 0, 0);
+  return c;
+}
+
+function levelFor(words: number): number {
+  if (words <= 0) return 0;
+  if (words <= 2) return 1;
+  if (words <= 5) return 2;
+  if (words <= 10) return 3;
+  return 4;
+}
+
+const CELL_COLORS = [
+  "border-black/5 bg-zinc-100",
+  "bg-green-200",
+  "bg-green-300",
+  "bg-green-400",
+  "bg-green-600",
+];
+
+const MONTH_LABELS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+interface HeatmapCell {
+  date: Date;
+  key: string;
+  words: number;
+  level: number;
+}
+
+export function HeatmapTab() {
+  const stats = useStore((s) => s.stats);
+
+  const { cells, monthLabels, weekLabels, legend } = useMemo(() => {
+    const byDay = new Map<string, number>();
+    for (const entry of stats?.daily ?? []) {
+      byDay.set(entry.day, entry.words);
+    }
+
+    const today = startOfDay(new Date());
+    const todayDow = (today.getDay() + 6) % 7; // Monday = 0
+    const endMonday = new Date(today.getTime() - todayDow * DAY_MS);
+    const startMonday = new Date(endMonday.getTime() - 52 * 7 * DAY_MS);
+
+    const cells: HeatmapCell[] = [];
+    const monthLabels: { col: number; label: string }[] = [];
+    let lastMonth = -1;
+
+    for (let col = 0; col < 53; col++) {
+      const colStart = new Date(startMonday.getTime() + col * 7 * DAY_MS);
+      const month = colStart.getMonth();
+      if (month !== lastMonth) {
+        lastMonth = month;
+        monthLabels.push({ col, label: MONTH_LABELS[month] });
+      }
+      for (let row = 0; row < 7; row++) {
+        const date = new Date(colStart.getTime() + row * DAY_MS);
+        if (date.getTime() > today.getTime()) continue;
+        const key = localDayKey(date);
+        const words = byDay.get(key) ?? 0;
+        cells.push({ date, key, words, level: levelFor(words) });
+      }
+    }
+
+    const weekLabels = [
+      { row: 1, label: "Mon" },
+      { row: 3, label: "Wed" },
+      { row: 5, label: "Fri" },
+    ];
+
+    const legend = [
+      { level: 0, label: "Less" },
+      { level: 1, label: "" },
+      { level: 2, label: "" },
+      { level: 3, label: "" },
+      { level: 4, label: "More" },
+    ];
+
+    return { cells, monthLabels, weekLabels, legend };
+  }, [stats]);
+
+  const totals = stats ?? {
+    total_words: 0,
+    total_sessions: 0,
+    streak_days: 0,
+    best_day: null,
+    best_words: 0,
+  };
+
+  const bestLabel = totals.best_day
+    ? new Date(`${totals.best_day}T00:00:00`).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      })
+    : "—";
+
+  const statCard =
+    "flex flex-col gap-1 border-2 border-black bg-white p-4 shadow-[4px_4px_0_0_#E8E8E8]";
+
+  const cellsByCol: HeatmapCell[][] = useMemo(() => {
+    const cols: HeatmapCell[][] = Array.from({ length: 53 }, () => []);
+    for (const cell of cells) {
+      const idx = Math.floor(
+        (cell.date.getTime() - new Date(cells[0]?.date ?? 0).getTime()) / (7 * DAY_MS)
+      );
+      cols[Math.max(0, idx)]?.push(cell);
+    }
+    return cols;
+  }, [cells]);
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className={statCard}>
+          <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+            Words transcribed
+          </span>
+          <span className="text-3xl font-black tabular-nums">
+            {totals.total_words.toLocaleString()}
+          </span>
+        </div>
+        <div className={statCard}>
+          <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+            Dictations
+          </span>
+          <span className="text-3xl font-black tabular-nums">
+            {totals.total_sessions.toLocaleString()}
+          </span>
+        </div>
+        <div className={statCard}>
+          <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+            Day streak
+          </span>
+          <span className="text-3xl font-black tabular-nums">
+            {totals.streak_days}
+            <span className="ml-1 text-sm font-bold text-muted-foreground">days</span>
+          </span>
+        </div>
+        <div className={statCard}>
+          <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+            Best day
+          </span>
+          <span className="text-3xl font-black tabular-nums">
+            {totals.best_words.toLocaleString()}
+          </span>
+          <span className="text-xs font-bold text-muted-foreground">
+            {totals.best_words > 0 ? `words · ${bestLabel}` : "—"}
+          </span>
+        </div>
+      </div>
+
+      <div className="border-2 border-black bg-white p-5 shadow-[6px_6px_0_0_#E8E8E8]">
+        <div className="mb-4 flex items-baseline gap-2">
+          <h3 className="text-sm font-black tracking-widest uppercase">
+            Word activity
+          </h3>
+          <span className="text-xs font-bold text-muted-foreground">
+            words transcribed per day · last 52 weeks
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <div className="inline-flex flex-col gap-1.5">
+            <div className="flex">
+              <div className="w-8 shrink-0" />
+              <div className="relative h-4">
+                {monthLabels.map((m) => (
+                  <span
+                    key={`${m.col}-${m.label}`}
+                    className="absolute text-[10px] font-bold text-muted-foreground"
+                    style={{ left: m.col * 13 }}
+                  >
+                    {m.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="flex">
+              <div className="flex w-8 shrink-0 flex-col">
+                {weekLabels.map((w) => (
+                  <span
+                    key={w.row}
+                    className="flex h-[13px] items-center text-[9px] font-bold text-muted-foreground"
+                    style={{ marginTop: w.row === 1 ? 0 : 1 }}
+                  >
+                    {w.label}
+                  </span>
+                ))}
+              </div>
+              <div className="flex gap-[3px]">
+                {cellsByCol.map((col, i) => (
+                  <div key={i} className="flex flex-col gap-[3px]">
+                    {col.map((cell) => (
+                      <span
+                        key={cell.key}
+                        title={`${cell.date.toLocaleDateString(undefined, {
+                          weekday: "short",
+                          year: "numeric",
+                          month: "short",
+                          day: "numeric",
+                        })} — ${cell.words} word${cell.words === 1 ? "" : "s"}`}
+                        className={`size-[13px] border-2 ${CELL_COLORS[cell.level]}`}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-1.5 text-[10px] font-bold text-muted-foreground">
+              {legend.map((l) => (
+                <span key={l.level} className="flex items-center gap-1">
+                  {l.label && <span>{l.label}</span>}
+                  <span className={`size-[11px] border-2 ${CELL_COLORS[l.level]}`} />
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

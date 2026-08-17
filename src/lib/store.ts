@@ -20,6 +20,7 @@ interface OpenDictateStore {
   mics: string[];
   modelProgress: ModelProgress[];
   lastResult: api.TranscriptResult | null;
+  stats: api.WordStats | null;
 
   setLevel: (level: number) => void;
   setOverlayState: (overlayState: api.OverlayState) => void;
@@ -33,6 +34,7 @@ interface OpenDictateStore {
   setMics: (mics: string[]) => void;
   setModelProgress: (modelProgress: ModelProgress[]) => void;
   addModelProgress: (progress: ModelProgress) => void;
+  refreshStats: () => Promise<void>;
 
   refreshModels: () => Promise<void>;
   refreshCatalog: () => Promise<void>;
@@ -52,6 +54,7 @@ export const useStore = create<OpenDictateStore>()((set) => ({
   mics: [],
   modelProgress: [],
   lastResult: null,
+  stats: null,
 
   setLevel: (level) => set({ level }),
   setOverlayState: (overlayState) => set({ overlayState }),
@@ -78,13 +81,18 @@ export const useStore = create<OpenDictateStore>()((set) => ({
     set({ models });
   },
 
+  refreshStats: async () => {
+    const stats = await api.getWordStats();
+    set({ stats });
+  },
+
   refreshCatalog: async () => {
     const catalog = await api.getModelsCatalog();
     set({ catalog });
   },
 
   refreshAll: async () => {
-    const [settings, models, catalog, history, dictionary, mics, mic, recording] =
+    const [settings, models, catalog, history, dictionary, mics, mic, recording, stats] =
       await Promise.all([
         api.getSettings(),
         api.getModelsStatus(),
@@ -94,7 +102,8 @@ export const useStore = create<OpenDictateStore>()((set) => ({
         api.listMics(),
         api.getMic(),
         api.isRecording(),
+        api.getWordStats(),
       ]);
-    set({ settings, models, catalog, history, dictionary, mics, mic, recording });
+    set({ settings, models, catalog, history, dictionary, mics, mic, recording, stats });
   },
 }));

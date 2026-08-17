@@ -11,6 +11,7 @@ import { DockButton } from "@/components/DockButton";
 import { GeneralTab } from "@/components/tabs/GeneralTab";
 import { DictionaryTab } from "@/components/tabs/DictionaryTab";
 import { HistoryTab } from "@/components/tabs/HistoryTab";
+import { HeatmapTab } from "@/components/tabs/HeatmapTab";
 import { PrivacyTab } from "@/components/tabs/PrivacyTab";
 
 function useOpenDictateEvents() {
@@ -24,6 +25,7 @@ function useOpenDictateEvents() {
       api.onHistoryUpdated(() =>
         api.getHistory().then((history) => useStore.setState({ history })),
       ),
+      api.onHistoryUpdated(() => store.refreshStats()),
     ];
     let cancelled = false;
     subs.forEach((sub) => {
@@ -151,12 +153,16 @@ export function MainApp() {
         <Tabs defaultValue="general">
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
+            <TabsTrigger value="activity">Activity</TabsTrigger>
             <TabsTrigger value="dictionary">Dictionary</TabsTrigger>
             <TabsTrigger value="history">History</TabsTrigger>
             <TabsTrigger value="privacy">Privacy</TabsTrigger>
           </TabsList>
           <TabsContent value="general" className="animate-od-slide-up pt-5">
             <GeneralTab />
+          </TabsContent>
+          <TabsContent value="activity" className="animate-od-slide-up pt-5">
+            <HeatmapTab />
           </TabsContent>
           <TabsContent value="dictionary" className="animate-od-slide-up pt-5">
             <DictionaryTab />

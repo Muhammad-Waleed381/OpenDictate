@@ -77,6 +77,22 @@ pub struct TranscriptResult {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DayWords {
+    pub day: String,
+    pub words: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WordStats {
+    pub daily: Vec<DayWords>,
+    pub total_words: u64,
+    pub total_sessions: u64,
+    pub streak_days: u64,
+    pub best_day: Option<String>,
+    pub best_words: u64,
+}
+
 pub struct AppState {
     pub recorder: Arc<AudioRecorder>,
     pub test_mode: Arc<AtomicBool>,

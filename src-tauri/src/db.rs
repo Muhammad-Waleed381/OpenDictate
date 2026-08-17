@@ -112,6 +112,20 @@ pub fn remove_dictionary_word(conn: &Connection, word: &str) -> rusqlite::Result
     Ok(())
 }
 
+pub fn word_stats(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT date(created_at, 'unixepoch') AS day,
+                COALESCE(SUM(
+                    CASE WHEN length(text) = 0 THEN 0
+                         ELSE length(text) - length(replace(text, ' ', '')) + 1
+                    END
+                ), 0) AS words
+         FROM history GROUP BY day ORDER BY day",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
+}
+
 pub fn now_timestamp() -> String {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -50,6 +50,20 @@ export interface TranscriptResult {
   duration_ms: number;
 }
 
+export interface DayWords {
+  day: string;
+  words: number;
+}
+
+export interface WordStats {
+  daily: DayWords[];
+  total_words: number;
+  total_sessions: number;
+  streak_days: number;
+  best_day: string | null;
+  best_words: number;
+}
+
 export type OverlayStateValue =
   | "listening"
   | "transcribing"
@@ -167,6 +181,10 @@ export function pasteClipboard(text: string): Promise<void> {
 
 export function copyText(text: string): Promise<void> {
   return invoke<void>("copy_text", { text });
+}
+
+export function getWordStats(): Promise<WordStats> {
+  return invoke<WordStats>("word_stats");
 }
 
 export function onOverlayState(

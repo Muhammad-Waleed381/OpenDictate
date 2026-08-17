@@ -48,6 +48,7 @@ pub fn run() {
             commands::remove_dictionary_word,
             commands::paste_clipboard,
             commands::copy_text,
+            commands::word_stats,
         ])
         .setup(|app| {
             let data_dir = app

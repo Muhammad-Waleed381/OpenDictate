@@ -210,3 +210,81 @@ pub fn copy_text(text: String, app: AppHandle) -> Result<(), String> {
         .write_text(text)
         .map_err(|e| format!("failed to write clipboard: {e}"))
 }
+
+#[tauri::command]
+pub fn word_stats(state: State<AppState>) -> Result<crate::state::WordStats, String> {
+    use crate::state::{DayWords, WordStats};
+    use std::collections::HashMap;
+
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let rows = db::word_stats(&conn).map_err(|e| e.to_string())?;
+
+    let mut by_day: HashMap<String, u64> = HashMap::new();
+    let mut total_words: u64 = 0;
+    let mut best_day: Option<String> = None;
+    let mut best_words: u64 = 0;
+    for (day, words) in &rows {
+        let words = *words as u64;
+        total_words += words;
+        by_day.insert(day.clone(), words);
+        if words > best_words {
+            best_words = words;
+            best_day = Some(day.clone());
+        }
+    }
+    let total_sessions = db::get_history(&conn).map(|h| h.len() as u64).unwrap_or(0);
+
+    let mut streak_days: u64 = 0;
+    let today = chrono_day_offset(0);
+    if let Some(first) = by_day.get(&today) {
+        if *first > 0 {
+            streak_days = 1;
+            let mut offset = 1;
+            while by_day.get(&chrono_day_offset(-(offset as i64))).is_some_and(|w| *w > 0) {
+                streak_days += 1;
+                offset += 1;
+            }
+        }
+    } else {
+        let mut offset = 1;
+        while by_day.get(&chrono_day_offset(-(offset as i64))).is_some_and(|w| *w > 0) {
+            streak_days += 1;
+            offset += 1;
+        }
+    }
+
+    Ok(WordStats {
+        daily: by_day
+            .into_iter()
+            .map(|(day, words)| DayWords { day, words })
+            .collect(),
+        total_words,
+        total_sessions,
+        streak_days,
+        best_day,
+        best_words,
+    })
+}
+
+fn chrono_day_offset(days: i64) -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let z = secs.div_euclid(86_400) + days;
+    let (y, m, d) = civil_from_days(z);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
