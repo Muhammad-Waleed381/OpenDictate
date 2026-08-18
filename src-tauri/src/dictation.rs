@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::db;
 use crate::inject;
 use crate::dock;
+use crate::notify;
 use crate::state::{AppState, HistoryEntry, StreamingPipe, TranscriptResult};
 
 pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String> {
@@ -41,10 +42,15 @@ pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String
     .map_err(|e| e.to_string())?;
 
     dock::set_state(app, "listening", None);
+    dock::set_caption(app, Some("listening…"));
+    if !test {
+        notify::notify("Dictation on", "Recording — press Ctrl+K to stop");
+    }
 
     if streaming {
         if let Err(e) = spawn_streaming(app, state) {
             let _ = state.recorder.cancel();
+            dock::set_caption(app, None);
             dock::set_state(app, "hidden", None);
             return Err(e);
         }
@@ -69,6 +75,7 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
     let audio = state.recorder.stop().map_err(|e| e.to_string())?;
     let test = state.is_test_mode();
     dock::set_state(app, "transcribing", None);
+    dock::set_caption(app, Some("transcribing…"));
 
     process_utterance(app, state, &audio, test, false)
 }
@@ -363,6 +370,15 @@ fn stop_streaming(app: &AppHandle, state: &AppState) -> Result<TranscriptResult,
 
     if !test && !text.is_empty() {
         let _ = commit_text(app, state, &text, duration_ms, true, true);
+    } else if !test {
+        notify::notify("No speech detected", "Try again or check your microphone");
+        let app = app.clone();
+        std::thread::spawn(move || {
+            dock::set_caption(&app, Some("no speech detected"));
+            std::thread::sleep(Duration::from_millis(2200));
+            dock::set_caption(&app, None);
+            dock::set_state(&app, "hidden", None);
+        });
     }
 
     Ok(result)
@@ -377,7 +393,18 @@ fn process_utterance(
 ) -> Result<TranscriptResult, String> {
     let speech = run_vad(audio, sensitivity(state)).map_err(|e| e.to_string())?;
     if !speech.has_speech {
-        dock::set_state(app, "hidden", None);
+        if continuous {
+            dock::set_state(app, "hidden", None);
+        } else {
+            dock::set_caption(app, Some("no speech detected"));
+            notify::notify("No speech detected", "Try again or check your microphone");
+            let app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(2200));
+                dock::set_caption(&app, None);
+                dock::set_state(&app, "hidden", None);
+            });
+        }
         return Ok(TranscriptResult {
             text: String::new(),
             duration_ms: 0,
@@ -393,6 +420,7 @@ fn process_utterance(
     let duration_ms = speech.speech_duration_ms;
 
     if test {
+        dock::set_caption(app, None);
         dock::set_state(app, "hidden", None);
         return Ok(TranscriptResult {
             text,
@@ -403,6 +431,28 @@ fn process_utterance(
     commit_text(app, state, &text, duration_ms, continuous, !continuous)?;
 
     Ok(TranscriptResult { text, duration_ms })
+}
+
+/// Truncates a transcript for the dock caption pill.
+fn pill_text(text: &str) -> String {
+    let t = text.trim();
+    let mut s: String = t.chars().take(48).collect();
+    if t.chars().count() > 48 {
+        s.push('…');
+    }
+    s
+}
+
+/// Flashes the inserted transcript in the pill, then collapses the dock.
+fn show_inserted(app: &AppHandle, text: &str) {
+    dock::set_state(app, "inserted", None);
+    dock::set_caption(app, Some(&pill_text(text)));
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1500));
+        dock::set_caption(&app, None);
+        dock::set_state(&app, "hidden", None);
+    });
 }
 
 /// Emits the transcript, persists it, injects it and drives dock feedback.
@@ -441,30 +491,26 @@ fn commit_text(
 
         if let Err(e) = inject::inject_text(app, text, &insert_mode(state)) {
             dock::set_state(app, "error", Some(&format!("failed to paste: {e}")));
+            notify::notify("Dictation error", &format!("Failed to insert text: {e}"));
             return Err(e);
         }
     }
 
+    if !continuous || finish {
+        notify::notify("Inserted", &pill_text(text));
+    }
+
     if continuous {
         if finish {
-            dock::set_state(app, "inserted", None);
-            let app = app.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(1200));
-                dock::set_state(&app, "hidden", None);
-            });
+            show_inserted(app, text);
         } else {
             dock::set_state(app, "listening", None);
+            dock::set_caption(app, Some("listening…"));
         }
         return Ok(());
     }
 
-    dock::set_state(app, "inserted", None);
-    let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1200));
-        dock::set_state(&app, "hidden", None);
-    });
+    show_inserted(app, text);
 
     Ok(())
 }

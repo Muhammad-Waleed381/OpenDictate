@@ -88,13 +88,15 @@ fn apply_dock_size(app: &AppHandle) {
     }
 }
 
+/// Fixed width of the caption strip; the pill truncates long text.
+const CAPTION_STRIP_WIDTH: u32 = 210;
+
 /// Shows a live caption strip in the dock while streaming; pass `None` to
 /// collapse back to the round button.
 pub fn set_caption(app: &AppHandle, text: Option<&str>) {
     match text.map(str::trim).filter(|t| !t.is_empty()) {
         Some(text) => {
-            let width = ((text.chars().count() as f64) * 6.5 + 56.0).clamp(120.0, 420.0) as u32;
-            CAPTION_WIDTH.store(width, Ordering::Relaxed);
+            CAPTION_WIDTH.store(CAPTION_STRIP_WIDTH, Ordering::Relaxed);
             let _ = app.emit(
                 "partial",
                 serde_json::json!({ "text": text, "streaming": true }),

@@ -56,6 +56,7 @@ pub fn toggle_dictation(app: &AppHandle) {
         log::info!("toggle: stopping dictation");
         if let Err(e) = dictation::stop(app, &state) {
             log::error!("toggle: stop failed: {e}");
+            crate::notify::notify("Dictation error", &format!("Stop failed: {e}"));
             let _ = app.emit(
                 "dictation-error",
                 serde_json::json!({ "message": format!("stop failed: {e}") }),
@@ -65,6 +66,7 @@ pub fn toggle_dictation(app: &AppHandle) {
         log::info!("toggle: starting dictation");
         if let Err(e) = dictation::start(app, &state, false) {
             log::error!("toggle: start failed: {e}");
+            crate::notify::notify("Dictation error", &format!("Start failed: {e}"));
             let _ = app.emit(
                 "dictation-error",
                 serde_json::json!({ "message": format!("start failed: {e}") }),

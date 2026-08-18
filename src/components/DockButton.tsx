@@ -113,11 +113,50 @@ export function DockButton() {
     content = <Mic className="size-[17px] text-slate-900" strokeWidth={2.5} />;
   }
 
+  const listening = active;
+  const processing = state === "transcribing";
+  const pillLabel =
+    partial === "listening…" ? "RECORDING"
+    : partial === "transcribing…" ? "PROCESSING"
+    : partial;
+
   return (
     <div className="flex h-full w-full items-center justify-between gap-2 pr-2 pl-3">
-      {partial && (
-        <span className="min-w-0 truncate rounded-full bg-black/85 px-3 py-1 text-[11px] leading-none font-semibold text-white shadow-lg">
-          {partial}
+      {pillLabel && (
+        <span
+          className={`flex min-w-0 items-center gap-2 rounded-full px-3 py-1.5 text-[11px] leading-none font-bold tracking-wider text-white shadow-lg ring-1 ${
+            listening
+              ? "bg-black/90 ring-red-400/70"
+              : processing
+                ? "bg-black/90 ring-amber-400/70"
+                : "bg-black/85 ring-white/10"
+          }`}
+        >
+          {(listening || processing) && (
+            <span
+              className={`size-2 shrink-0 animate-pulse rounded-full ${
+                listening ? "bg-red-500" : "bg-amber-400"
+              }`}
+            />
+          )}
+          <span className="min-w-0 truncate">{pillLabel}</span>
+          {(listening || processing) && (
+            <span className="flex h-3 shrink-0 items-end gap-[1.5px]">
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className={`w-[2px] animate-od-eq origin-bottom ${
+                    listening ? "bg-red-400" : "bg-amber-400"
+                  }`}
+                  style={{
+                    height: 10,
+                    animationDelay: `${i * 0.15}s`,
+                    animationDuration: "0.7s",
+                  }}
+                />
+              ))}
+            </span>
+          )}
         </span>
       )}
       <div className="relative flex size-6 shrink-0 items-center justify-center">

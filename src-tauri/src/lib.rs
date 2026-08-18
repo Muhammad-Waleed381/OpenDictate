@@ -4,6 +4,7 @@ mod dictation;
 mod dock;
 mod hotkey;
 mod inject;
+mod notify;
 mod state;
 mod tray;
 pub mod tray_icon;
