@@ -17,16 +17,27 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
         return Ok(());
     }
 
-    app.global_shortcut()
-        .on_shortcut(key, move |app, _shortcut, event| {
-            if event.state() == ShortcutState::Pressed {
-                toggle_dictation(app);
-            }
-        })
-        .map_err(|e| format!("failed to register hotkey '{key}': {e}"))?;
+    // On GNOME (X11 or Wayland) the settings-daemon custom keybinding is the
+    // single global path: the X11 grab would double-fire alongside it and
+    // toggle start+stop in one press. Elsewhere (bare X11, other DEs) fall
+    // back to the X11 grab.
+    let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.to_lowercase().contains("gnome"))
+        .unwrap_or(false);
+    if is_gnome {
+        log::info!("GNOME session: relying on settings-daemon keybinding (no X11 grab)");
+    } else {
+        app.global_shortcut()
+            .on_shortcut(key, move |app, _shortcut, event| {
+                if event.state() == ShortcutState::Pressed {
+                    toggle_dictation(app);
+                }
+            })
+            .map_err(|e| format!("failed to register hotkey '{key}': {e}"))?;
 
-    if let Some(old) = current {
-        let _ = app.global_shortcut().unregister(old.as_str());
+        if let Some(old) = current {
+            let _ = app.global_shortcut().unregister(old.as_str());
+        }
     }
 
     if let Ok(mut current) = state.hotkey.lock() {
@@ -38,21 +49,6 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
 }
 
 pub fn toggle_dictation(app: &AppHandle) {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    static LAST_TOGGLE_MS: AtomicU64 = AtomicU64::new(0);
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let last = LAST_TOGGLE_MS.load(Ordering::Relaxed);
-    if now_ms.saturating_sub(last) < 500 {
-        log::debug!("toggle debounced (double-fired hotkey)");
-        return;
-    }
-    LAST_TOGGLE_MS.store(now_ms, Ordering::Relaxed);
-
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
@@ -78,11 +74,10 @@ pub fn toggle_dictation(app: &AppHandle) {
 }
 
 // ---------------------------------------------------------------------------
-// GNOME Wayland fallback: `global-hotkey` is X11-only, so keys pressed while a
-// native-Wayland window is focused never reach the X grab. On GNOME we mirror
-// the hotkey into a settings-daemon custom keybinding; the shell then consumes
-// the key globally and runs scripts/opendictate-toggle.sh, which signals this
-// process with SIGUSR1.
+// GNOME fallback: on Wayland the X11 grab never sees keys while a native
+// Wayland window has focus, so we mirror the hotkey into a settings-daemon
+// custom keybinding; the shell consumes the key globally and runs
+// scripts/opendictate-toggle.sh, which toggles over the app's unix socket.
 // ---------------------------------------------------------------------------
 
 const KEYBINDING_PATH: &str =
