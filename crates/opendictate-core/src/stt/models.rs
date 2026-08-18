@@ -16,7 +16,6 @@ pub const VAD_MODEL_ID: &str = "silero-vad-v4";
 pub const PARAKEET_TDT_06B_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
 pub const PARAKEET_UNIFIED_EN_MODEL_ID: &str = "parakeet-unified-en-0.6b";
 pub const PARAKEET_STREAMING_MODEL_ID: &str = "parakeet-unified-en-0.6b-int8-streaming-560ms";
-pub const ZIPFORMER_STREAMING_MODEL_ID: &str = "streaming-zipformer-en-20m-2023-02-17";
 pub const WHISPER_TINY_MODEL_ID: &str = "whisper-tiny-en";
 pub const WHISPER_BASE_MODEL_ID: &str = "whisper-base-en";
 pub const WHISPER_SMALL_MODEL_ID: &str = "whisper-small-en";
@@ -28,7 +27,6 @@ const PARAKEET_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/d
 const PARAKEET_TDT_06B_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2";
 const PARAKEET_UNIFIED_EN_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming.tar.bz2";
 const PARAKEET_STREAMING_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-streaming-560ms.tar.bz2";
-const ZIPFORMER_STREAMING_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2";
 const SILERO_VAD_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
 const WHISPER_TINY_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2";
@@ -97,16 +95,6 @@ const MODELS: &[ModelDef] = &[
         engine_key: Some("parakeet-streaming"),
         size_bytes: 501_360_769,
         url: PARAKEET_STREAMING_ARCHIVE,
-        available: true,
-        streaming: true,
-    },
-    ModelDef {
-        id: ZIPFORMER_STREAMING_MODEL_ID,
-        name: "Zipformer Streaming 20M (en)",
-        kind: "stt",
-        engine_key: Some("zipformer-streaming"),
-        size_bytes: 127_887_156,
-        url: ZIPFORMER_STREAMING_ARCHIVE,
         available: true,
         streaming: true,
     },
@@ -225,10 +213,7 @@ pub fn is_whisper_model(id: &str) -> bool {
 }
 
 pub fn is_streaming_model(id: &str) -> bool {
-    matches!(
-        id,
-        PARAKEET_STREAMING_MODEL_ID | ZIPFORMER_STREAMING_MODEL_ID
-    )
+    matches!(id, PARAKEET_STREAMING_MODEL_ID)
 }
 
 pub fn is_transducer_model(id: &str) -> bool {
@@ -278,7 +263,7 @@ pub fn is_model_installed(id: &str) -> bool {
         STT_MODEL_ID => is_parakeet_ready(),
         VAD_MODEL_ID => is_vad_ready(),
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => is_transducer_ready(id),
-        PARAKEET_STREAMING_MODEL_ID | ZIPFORMER_STREAMING_MODEL_ID => is_transducer_ready(id),
+        PARAKEET_STREAMING_MODEL_ID => is_transducer_ready(id),
         WHISPER_TINY_MODEL_ID
         | WHISPER_BASE_MODEL_ID
         | WHISPER_SMALL_MODEL_ID
@@ -586,9 +571,7 @@ pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Re
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => {
             install_transducer_model(id, on_progress)
         }
-        PARAKEET_STREAMING_MODEL_ID | ZIPFORMER_STREAMING_MODEL_ID => {
-            install_transducer_model(id, on_progress)
-        }
+        PARAKEET_STREAMING_MODEL_ID => install_transducer_model(id, on_progress),
         VAD_MODEL_ID => {
             log::info!("downloading silero VAD -> {}", vad_model_path().display());
             download_to_with_progress(
@@ -666,7 +649,6 @@ mod tests {
             PARAKEET_TDT_06B_MODEL_ID,
             PARAKEET_UNIFIED_EN_MODEL_ID,
             PARAKEET_STREAMING_MODEL_ID,
-            ZIPFORMER_STREAMING_MODEL_ID,
             WHISPER_TINY_MODEL_ID,
             WHISPER_BASE_MODEL_ID,
             WHISPER_SMALL_MODEL_ID,
@@ -695,7 +677,6 @@ mod tests {
     #[test]
     fn streaming_models_are_flagged() {
         assert!(is_streaming_model(PARAKEET_STREAMING_MODEL_ID));
-        assert!(is_streaming_model(ZIPFORMER_STREAMING_MODEL_ID));
         assert!(!is_streaming_model(STT_MODEL_ID));
         assert!(!is_streaming_model(VAD_MODEL_ID));
         assert!(!is_streaming_model("bogus"));

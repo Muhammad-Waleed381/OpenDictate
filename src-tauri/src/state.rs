@@ -156,7 +156,4 @@ pub struct StreamingPipe {
     /// recognizer. Monotonic across utterances within one streaming session.
     pub watermark: usize,
     pub total_fed: usize,
-    /// Samples buffered between accepts (icefall zipformer needs full
-    /// chunk-sized accepts; parakeet drains everything immediately).
-    pub pending: Vec<f32>,
 }

@@ -7,7 +7,7 @@ use opendictate_core::audio::vad::{
 };
 use opendictate_core::stt::engine::{ModelKind, SttEngine};
 use opendictate_core::stt::models;
-use opendictate_core::stt::streaming::{StreamingKind, StreamingRecognizer};
+use opendictate_core::stt::streaming::StreamingRecognizer;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::db;
@@ -212,21 +212,13 @@ fn selected_model_id(state: &AppState) -> String {
         .unwrap_or_else(|_| models::STT_MODEL_ID.to_string())
 }
 
-fn streaming_kind(model_id: &str) -> StreamingKind {
-    if model_id == models::ZIPFORMER_STREAMING_MODEL_ID {
-        StreamingKind::Zipformer
-    } else {
-        StreamingKind::NemoTransducer
-    }
-}
-
 /// Builds the streaming pipe (recognizer + session) and starts the capture
 /// loop. Streaming ignores the continuous toggle: it always runs until stop.
 fn spawn_streaming(app: &AppHandle, state: &AppState) -> Result<(), String> {
     let model_id = selected_model_id(state);
     let dir = models::model_dir_for(&model_id);
     let recognizer =
-        StreamingRecognizer::new(&dir, streaming_kind(&model_id)).map_err(|e| e.to_string())?;
+        StreamingRecognizer::new(&dir).map_err(|e| e.to_string())?;
     let hotwords = dictionary_hotwords(state);
     let session = recognizer.create_session(hotwords.as_deref());
 
@@ -235,7 +227,6 @@ fn spawn_streaming(app: &AppHandle, state: &AppState) -> Result<(), String> {
         session,
         watermark: 0,
         total_fed: 0,
-        pending: Vec::new(),
     };
     *state.stream.lock().map_err(|e| e.to_string())? = Some(pipe);
     state.set_streaming(true);
@@ -296,18 +287,8 @@ fn spawn_streaming_loop(app: &AppHandle, state: &AppState) {
             let Some(pipe) = pipe_guard.as_mut() else {
                 break;
             };
-            pipe.pending.extend_from_slice(&samples);
-            let chunk = pipe.recognizer.chunk_samples();
-            if chunk == 0 {
-                if !pipe.pending.is_empty() {
-                    pipe.recognizer.accept(&pipe.session, &pipe.pending);
-                    pipe.pending.clear();
-                }
-            } else {
-                while pipe.pending.len() >= chunk {
-                    pipe.recognizer.accept(&pipe.session, &pipe.pending[..chunk]);
-                    pipe.pending.drain(..chunk);
-                }
+            if !samples.is_empty() {
+                pipe.recognizer.accept(&pipe.session, &samples);
             }
 
             if pipe.recognizer.is_ready(&pipe.session) {
@@ -368,13 +349,7 @@ fn stop_streaming(app: &AppHandle, state: &AppState) -> Result<TranscriptResult,
         log::warn!("streaming stop: recorder stop failed: {e}");
     }
 
-    pipe.pending.extend_from_slice(&tail);
-    let chunk = pipe.recognizer.chunk_samples();
-    if chunk > 0 && !pipe.pending.is_empty() {
-        let need = chunk - pipe.pending.len() % chunk;
-        pipe.pending.resize(pipe.pending.len() + need, 0.0);
-    }
-    pipe.recognizer.accept(&pipe.session, &pipe.pending);
+    pipe.recognizer.accept(&pipe.session, &tail);
     let text = pipe.recognizer.result(&pipe.session);
     let duration_ms = pipe.session.started_at.elapsed().as_millis() as u64;
     let result = TranscriptResult {
