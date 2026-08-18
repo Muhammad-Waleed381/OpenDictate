@@ -26,11 +26,11 @@ function progressPercent(received: number, total: number): number {
   return Math.min(100, Math.round((received / total) * 100));
 }
 
-const SECTION_HINTS: Record<"streaming" | "offline", string> = {
+const SECTION_HINTS: Record<"streaming" | "non-streaming", string> = {
   streaming:
     "Streaming engines transcribe live as you speak, with captions — no silence waiting.",
-  offline:
-    "Offline engines transcribe after you stop speaking. Higher accuracy, no live captions.",
+  "non-streaming":
+    "Non-streaming engines transcribe after you stop speaking. Higher accuracy, no live captions."
 };
 
 export function ModelCard() {
@@ -39,9 +39,9 @@ export function ModelCard() {
   const modelProgress = useStore((s) => s.modelProgress);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<"streaming" | "offline">(() => {
+  const [view, setView] = useState<"streaming" | "non-streaming">(() => {
     const active = catalog.find((m) => m.id === settings?.stt_model);
-    return active?.streaming ? "streaming" : "offline";
+    return active?.streaming ? "streaming" : "non-streaming";
   });
 
   useEffect(() => {
@@ -110,7 +110,7 @@ export function ModelCard() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex border-2 border-black">
-        {(["streaming", "offline"] as const).map((tab) => (
+        {(["streaming", "non-streaming"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setView(tab)}
@@ -118,7 +118,7 @@ export function ModelCard() {
               view === tab
                 ? "bg-black text-white"
                 : "bg-white text-black hover:bg-black/10"
-            } ${tab === "offline" ? "border-l-2" : ""}`}
+            } ${tab === "non-streaming" ? "border-l-2" : ""}`}
           >
             {tab}
           </button>
