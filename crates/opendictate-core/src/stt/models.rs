@@ -15,6 +15,8 @@ pub const STT_MODEL_ID: &str = "parakeet-tdt-ctc-110m-int8";
 pub const VAD_MODEL_ID: &str = "silero-vad-v4";
 pub const PARAKEET_TDT_06B_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
 pub const PARAKEET_UNIFIED_EN_MODEL_ID: &str = "parakeet-unified-en-0.6b";
+pub const PARAKEET_STREAMING_MODEL_ID: &str = "parakeet-unified-en-0.6b-int8-streaming-560ms";
+pub const ZIPFORMER_STREAMING_MODEL_ID: &str = "streaming-zipformer-en-20m-2023-02-17";
 pub const WHISPER_TINY_MODEL_ID: &str = "whisper-tiny-en";
 pub const WHISPER_BASE_MODEL_ID: &str = "whisper-base-en";
 pub const WHISPER_SMALL_MODEL_ID: &str = "whisper-small-en";
@@ -25,6 +27,8 @@ const PARAKEET_INT8_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/relea
 const PARAKEET_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000.tar.bz2";
 const PARAKEET_TDT_06B_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2";
 const PARAKEET_UNIFIED_EN_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming.tar.bz2";
+const PARAKEET_STREAMING_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-streaming-560ms.tar.bz2";
+const ZIPFORMER_STREAMING_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2";
 const SILERO_VAD_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
 const WHISPER_TINY_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2";
@@ -34,6 +38,9 @@ const WHISPER_TURBO_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/relea
 const WHISPER_MEDIUM_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-medium.en.tar.bz2";
 
 const MODEL_MIN_BYTES: u64 = 1_000_000;
+/// Zipformer streaming decoders/joiners are genuinely small (a few hundred
+/// KB), so the part minimum must be lower than the encoder's.
+const STREAMING_PART_MIN_BYTES: u64 = 100_000;
 const TOKENS_MIN_BYTES: u64 = 100;
 const VAD_MIN_BYTES: u64 = 100_000;
 const WHISPER_PART_MIN_BYTES: u64 = 5_000_000;
@@ -48,6 +55,7 @@ pub struct ModelInfo {
     pub disk_bytes: u64,
     pub installed: bool,
     pub available: bool,
+    pub streaming: bool,
 }
 
 struct ModelDef {
@@ -58,6 +66,7 @@ struct ModelDef {
     size_bytes: u64,
     url: &'static str,
     available: bool,
+    streaming: bool,
 }
 
 const MODELS: &[ModelDef] = &[
@@ -69,6 +78,7 @@ const MODELS: &[ModelDef] = &[
         size_bytes: 104_337_827,
         url: PARAKEET_INT8_ARCHIVE,
         available: true,
+        streaming: false,
     },
     ModelDef {
         id: VAD_MODEL_ID,
@@ -78,6 +88,27 @@ const MODELS: &[ModelDef] = &[
         size_bytes: 1_700_000,
         url: SILERO_VAD_URL,
         available: true,
+        streaming: false,
+    },
+    ModelDef {
+        id: PARAKEET_STREAMING_MODEL_ID,
+        name: "Parakeet Unified 0.6B (Streaming)",
+        kind: "stt",
+        engine_key: Some("parakeet-streaming"),
+        size_bytes: 501_360_769,
+        url: PARAKEET_STREAMING_ARCHIVE,
+        available: true,
+        streaming: true,
+    },
+    ModelDef {
+        id: ZIPFORMER_STREAMING_MODEL_ID,
+        name: "Zipformer Streaming 20M (en)",
+        kind: "stt",
+        engine_key: Some("zipformer-streaming"),
+        size_bytes: 127_887_156,
+        url: ZIPFORMER_STREAMING_ARCHIVE,
+        available: true,
+        streaming: true,
     },
     ModelDef {
         id: WHISPER_TINY_MODEL_ID,
@@ -87,6 +118,7 @@ const MODELS: &[ModelDef] = &[
         size_bytes: 118_071_777,
         url: WHISPER_TINY_ARCHIVE,
         available: true,
+        streaming: false,
     },
     ModelDef {
         id: WHISPER_BASE_MODEL_ID,
@@ -96,6 +128,7 @@ const MODELS: &[ModelDef] = &[
         size_bytes: 208_576_005,
         url: WHISPER_BASE_ARCHIVE,
         available: true,
+        streaming: false,
     },
     ModelDef {
         id: PARAKEET_TDT_06B_MODEL_ID,
@@ -105,6 +138,7 @@ const MODELS: &[ModelDef] = &[
         size_bytes: 487_170_055,
         url: PARAKEET_TDT_06B_ARCHIVE,
         available: true,
+        streaming: false,
     },
     ModelDef {
         id: PARAKEET_UNIFIED_EN_MODEL_ID,
@@ -114,6 +148,7 @@ const MODELS: &[ModelDef] = &[
         size_bytes: 501_350_460,
         url: PARAKEET_UNIFIED_EN_ARCHIVE,
         available: true,
+        streaming: false,
     },
     ModelDef {
         id: WHISPER_TURBO_MODEL_ID,
@@ -123,6 +158,7 @@ const MODELS: &[ModelDef] = &[
         size_bytes: 563_790_207,
         url: WHISPER_TURBO_ARCHIVE,
         available: true,
+        streaming: false,
     },
     ModelDef {
         id: WHISPER_SMALL_MODEL_ID,
@@ -132,6 +168,7 @@ const MODELS: &[ModelDef] = &[
         size_bytes: 635_693_775,
         url: WHISPER_SMALL_ARCHIVE,
         available: true,
+        streaming: false,
     },
     ModelDef {
         id: WHISPER_MEDIUM_MODEL_ID,
@@ -141,6 +178,7 @@ const MODELS: &[ModelDef] = &[
         size_bytes: 1_905_872_689,
         url: WHISPER_MEDIUM_ARCHIVE,
         available: true,
+        streaming: false,
     },
 ];
 
@@ -186,6 +224,13 @@ pub fn is_whisper_model(id: &str) -> bool {
     )
 }
 
+pub fn is_streaming_model(id: &str) -> bool {
+    matches!(
+        id,
+        PARAKEET_STREAMING_MODEL_ID | ZIPFORMER_STREAMING_MODEL_ID
+    )
+}
+
 pub fn is_transducer_model(id: &str) -> bool {
     matches!(
         id,
@@ -215,8 +260,8 @@ fn is_whisper_ready(id: &str) -> bool {
 fn is_transducer_ready(id: &str) -> bool {
     let dir = model_dir_for(id);
     valid_file_size(&dir.join("encoder.onnx"), MODEL_MIN_BYTES).is_some()
-        && valid_file_size(&dir.join("decoder.onnx"), MODEL_MIN_BYTES).is_some()
-        && valid_file_size(&dir.join("joiner.onnx"), MODEL_MIN_BYTES).is_some()
+        && valid_file_size(&dir.join("decoder.onnx"), STREAMING_PART_MIN_BYTES).is_some()
+        && valid_file_size(&dir.join("joiner.onnx"), STREAMING_PART_MIN_BYTES).is_some()
         && valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
 }
 
@@ -233,6 +278,7 @@ pub fn is_model_installed(id: &str) -> bool {
         STT_MODEL_ID => is_parakeet_ready(),
         VAD_MODEL_ID => is_vad_ready(),
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => is_transducer_ready(id),
+        PARAKEET_STREAMING_MODEL_ID | ZIPFORMER_STREAMING_MODEL_ID => is_transducer_ready(id),
         WHISPER_TINY_MODEL_ID
         | WHISPER_BASE_MODEL_ID
         | WHISPER_SMALL_MODEL_ID
@@ -284,6 +330,7 @@ pub fn catalog() -> Vec<ModelInfo> {
             disk_bytes: model_disk_bytes(def.id),
             installed: is_model_installed(def.id),
             available: def.available,
+            streaming: def.streaming,
         })
         .collect()
 }
@@ -484,17 +531,27 @@ fn install_transducer_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64
 
     let mut files = Vec::new();
     collect_files(&extract_dir, &mut files);
-    let part = |suffix: &str| {
-        files
+    let part = |needle: &str| {
+        let mut hits: Vec<_> = files
             .iter()
-            .find(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n == suffix))
+            .filter(|p| {
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    n.ends_with(".onnx") && n.contains(needle)
+                })
+            })
             .cloned()
+            .collect();
+        hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
+        hits.first().cloned()
     };
     let (Some(encoder), Some(decoder), Some(joiner), Some(tokens)) = (
-        part("encoder.onnx").or_else(|| part("encoder.int8.onnx")),
-        part("decoder.onnx").or_else(|| part("decoder.int8.onnx")),
-        part("joiner.onnx").or_else(|| part("joiner.int8.onnx")),
-        part("tokens.txt"),
+        part("encoder"),
+        part("decoder"),
+        part("joiner"),
+        files
+            .iter()
+            .find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"))
+            .cloned(),
     ) else {
         clean_after(&archive_path, &extract_dir);
         return Err(CoreError::Download(format!(
@@ -527,6 +584,9 @@ pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Re
             Ok(())
         }
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => {
+            install_transducer_model(id, on_progress)
+        }
+        PARAKEET_STREAMING_MODEL_ID | ZIPFORMER_STREAMING_MODEL_ID => {
             install_transducer_model(id, on_progress)
         }
         VAD_MODEL_ID => {
@@ -605,6 +665,8 @@ mod tests {
             VAD_MODEL_ID,
             PARAKEET_TDT_06B_MODEL_ID,
             PARAKEET_UNIFIED_EN_MODEL_ID,
+            PARAKEET_STREAMING_MODEL_ID,
+            ZIPFORMER_STREAMING_MODEL_ID,
             WHISPER_TINY_MODEL_ID,
             WHISPER_BASE_MODEL_ID,
             WHISPER_SMALL_MODEL_ID,
@@ -622,6 +684,21 @@ mod tests {
             Some("parakeet")
         );
         assert!(catalog.iter().all(|m| m.size_bytes > 0));
+        assert!(
+            catalog
+                .iter()
+                .filter(|m| m.streaming)
+                .all(|m| is_streaming_model(&m.id))
+        );
+    }
+
+    #[test]
+    fn streaming_models_are_flagged() {
+        assert!(is_streaming_model(PARAKEET_STREAMING_MODEL_ID));
+        assert!(is_streaming_model(ZIPFORMER_STREAMING_MODEL_ID));
+        assert!(!is_streaming_model(STT_MODEL_ID));
+        assert!(!is_streaming_model(VAD_MODEL_ID));
+        assert!(!is_streaming_model("bogus"));
     }
 
     #[test]

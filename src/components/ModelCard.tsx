@@ -32,7 +32,7 @@ const SECTION_LABELS: Record<string, string> = {
 };
 
 const SECTION_HINTS: Record<string, string> = {
-  stt: "Pick one engine to transcribe your dictation. Bigger = more accurate, slower.",
+  stt: "Pick one engine to transcribe your dictation. STREAMING engines transcribe live as you speak, with captions — no silence waiting.",
   vad: "Detects speech boundaries so silence isn't transcribed. Recommended.",
 };
 
@@ -155,6 +155,18 @@ export function ModelCard() {
                       <span className="flex-1 truncate text-sm font-bold tracking-wide uppercase">
                         {model.name}
                       </span>
+                      {model.streaming && (
+                        <span
+                          className={`shrink-0 border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
+                            isActive
+                              ? "animate-od-blink border-white bg-white text-black"
+                              : "border-black bg-black text-white"
+                          }`}
+                          title="Streaming engine: transcribes as you speak, with live captions"
+                        >
+                          STREAMING
+                        </span>
+                      )}
                       <span
                         className={`shrink-0 text-[11px] font-bold tracking-wider uppercase tabular-nums ${
                           isActive ? "text-white/70" : "text-muted-foreground"

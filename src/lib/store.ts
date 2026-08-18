@@ -21,6 +21,7 @@ interface OpenDictateStore {
   modelProgress: ModelProgress[];
   lastResult: api.TranscriptResult | null;
   stats: api.WordStats | null;
+  partial: string;
 
   setLevel: (level: number) => void;
   setOverlayState: (overlayState: api.OverlayState) => void;
@@ -34,6 +35,7 @@ interface OpenDictateStore {
   setMics: (mics: string[]) => void;
   setModelProgress: (modelProgress: ModelProgress[]) => void;
   addModelProgress: (progress: ModelProgress) => void;
+  setPartial: (text: string) => void;
   refreshStats: () => Promise<void>;
 
   refreshModels: () => Promise<void>;
@@ -55,6 +57,7 @@ export const useStore = create<OpenDictateStore>()((set) => ({
   modelProgress: [],
   lastResult: null,
   stats: null,
+  partial: "",
 
   setLevel: (level) => set({ level }),
   setOverlayState: (overlayState) => set({ overlayState }),
@@ -75,6 +78,8 @@ export const useStore = create<OpenDictateStore>()((set) => ({
       }
       return { modelProgress: [...rest, progress] };
     }),
+
+  setPartial: (text) => set({ partial: text }),
 
   refreshModels: async () => {
     const models = await api.getModelsStatus();

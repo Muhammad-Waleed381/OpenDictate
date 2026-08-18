@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Size, WebviewWindow};
 
 pub const DOCK_SIZE: f64 = 29.0;
@@ -6,9 +6,20 @@ const MARGIN: f64 = 16.0;
 const TOLERANCE: i32 = 2;
 
 static LAST_ASSERT_MS: AtomicU64 = AtomicU64::new(0);
+static CAPTION_WIDTH: AtomicU32 = AtomicU32::new(0);
 
 pub fn window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("dock")
+}
+
+/// Width of the dock window: caption strip while streaming, DOCK_SIZE otherwise.
+fn current_width() -> u32 {
+    let w = CAPTION_WIDTH.load(Ordering::Relaxed);
+    if w > 0 {
+        w
+    } else {
+        DOCK_SIZE as u32
+    }
 }
 
 fn bottom_right(app: &AppHandle, width: u32, height: u32) -> PhysicalPosition<i32> {
@@ -42,18 +53,26 @@ pub fn ensure(app: &AppHandle) {
         return;
     }
     LAST_ASSERT_MS.store(now_ms, Ordering::Relaxed);
+    apply_dock_size(app);
+}
+
+/// Resizes the dock to the caption strip width (or back to the round button)
+/// and parks it at the bottom-right corner. Tauri window calls only — GTK
+/// level adjustments happen via `shrink_to_min` on the main thread.
+fn apply_dock_size(app: &AppHandle) {
     if let Some(win) = window(app) {
+        let width = current_width();
         let _ = win.set_always_on_top(true);
         let _ = win.set_min_size(Some(PhysicalSize {
             width: DOCK_SIZE as u32,
             height: DOCK_SIZE as u32,
         }));
         let _ = win.set_size(Size::Physical(PhysicalSize {
-            width: DOCK_SIZE as u32,
+            width,
             height: DOCK_SIZE as u32,
         }));
         let size = win.outer_size().ok().unwrap_or(PhysicalSize {
-            width: DOCK_SIZE as u32,
+            width,
             height: DOCK_SIZE as u32,
         });
         let target = bottom_right(app, size.width, size.height);
@@ -66,6 +85,35 @@ pub fn ensure(app: &AppHandle) {
             let _ = win.set_position(target);
         }
         let _ = win.show();
+    }
+}
+
+/// Shows a live caption strip in the dock while streaming; pass `None` to
+/// collapse back to the round button.
+pub fn set_caption(app: &AppHandle, text: Option<&str>) {
+    match text.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(text) => {
+            let width = ((text.chars().count() as f64) * 6.5 + 56.0).clamp(120.0, 420.0) as u32;
+            CAPTION_WIDTH.store(width, Ordering::Relaxed);
+            let _ = app.emit(
+                "partial",
+                serde_json::json!({ "text": text, "streaming": true }),
+            );
+        }
+        None => {
+            CAPTION_WIDTH.store(0, Ordering::Relaxed);
+            let _ = app.emit(
+                "partial",
+                serde_json::json!({ "text": "", "streaming": false }),
+            );
+        }
+    }
+    apply_dock_size(app);
+    #[cfg(target_os = "linux")]
+    {
+        let app = app.clone();
+        let inner = app.clone();
+        let _ = app.run_on_main_thread(move || shrink_to_min(&inner));
     }
 }
 
@@ -146,7 +194,8 @@ fn shrink_to_min(app: &AppHandle) {
 
     let vbox_widget: gtk::Widget = vbox.clone().upcast();
     if let Some(webview) = find_webview(&vbox_widget) {
-        webview.set_size_request(DOCK_SIZE as i32, DOCK_SIZE as i32);
+        let width = current_width();
+        webview.set_size_request(width as i32, DOCK_SIZE as i32);
     }
 }
 

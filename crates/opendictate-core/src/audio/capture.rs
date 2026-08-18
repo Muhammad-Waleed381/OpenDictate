@@ -183,6 +183,16 @@ impl AudioRecorder {
         (sum_sq / window.len() as f32).sqrt()
     }
 
+    /// Returns every sample appended since the given watermark and advances
+    /// the watermark to the end of the buffer. Used for streaming ASR.
+    pub fn take_since(&self, watermark: &mut usize) -> Vec<f32> {
+        let buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+        let start = (*watermark).min(buffer.len());
+        let out = buffer[start..].to_vec();
+        *watermark = buffer.len();
+        out
+    }
+
     fn start_with_device(&self, device: cpal::Device) -> Result<()> {
         if self.state.load(Ordering::SeqCst) != STATE_IDLE {
             return Err(CoreError::Audio(

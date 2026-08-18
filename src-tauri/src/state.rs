@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use opendictate_core::audio::capture::AudioRecorder;
+use opendictate_core::stt::streaming::{StreamingRecognizer, StreamingSession};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -120,6 +121,8 @@ pub struct AppState {
     pub settings: Arc<Mutex<Settings>>,
     pub hotkey: Arc<Mutex<Option<String>>>,
     pub continuous: Arc<AtomicBool>,
+    pub stream: Arc<Mutex<Option<StreamingPipe>>>,
+    pub stream_active: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -134,4 +137,26 @@ impl AppState {
     pub fn set_continuous(&self, enabled: bool) {
         self.continuous.store(enabled, Ordering::SeqCst);
     }
+
+    pub fn is_streaming_active(&self) -> bool {
+        self.stream_active.load(Ordering::SeqCst)
+    }
+
+    pub fn set_streaming(&self, enabled: bool) {
+        self.stream_active.store(enabled, Ordering::SeqCst);
+    }
+}
+
+/// Live state for streaming ASR: the recognizer, its active session and the
+/// capture-buffer watermark. All access is serialized through the mutex.
+pub struct StreamingPipe {
+    pub recognizer: StreamingRecognizer,
+    pub session: StreamingSession,
+    /// Offset into the capture buffer of the first sample not yet fed to the
+    /// recognizer. Monotonic across utterances within one streaming session.
+    pub watermark: usize,
+    pub total_fed: usize,
+    /// Samples buffered between accepts (icefall zipformer needs full
+    /// chunk-sized accepts; parakeet drains everything immediately).
+    pub pending: Vec<f32>,
 }

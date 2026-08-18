@@ -76,6 +76,8 @@ pub fn run() {
                 settings: Arc::new(Mutex::new(settings.clone())),
                 hotkey: Arc::new(Mutex::new(None)),
                 continuous: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                stream: Arc::new(Mutex::new(None)),
+                stream_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             };
             app.manage(state);
 

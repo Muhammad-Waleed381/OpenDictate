@@ -6,6 +6,7 @@ import * as api from "@/lib/api";
 export function DockButton() {
   const overlayState = useStore((s) => s.overlayState);
   const recording = useStore((s) => s.recording);
+  const partial = useStore((s) => s.partial);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<"inserted" | "error" | null>(null);
   const flashTimer = useRef<number | null>(null);
@@ -113,24 +114,31 @@ export function DockButton() {
   }
 
   return (
-    <div className="relative flex size-6 items-center justify-center">
-      {(active || state === "transcribing") && (
-        <span
-          key={`${state}-${recording}`}
-          className={`pointer-events-none absolute inset-0 animate-od-ping rounded-full ${
-            state === "transcribing" ? "bg-amber-400/40" : "bg-red-400/50"
-          }`}
-        />
+    <div className="flex h-full w-full items-center justify-between gap-2 pr-2 pl-3">
+      {partial && (
+        <span className="min-w-0 truncate rounded-full bg-black/85 px-3 py-1 text-[11px] leading-none font-semibold text-white shadow-lg">
+          {partial}
+        </span>
       )}
-      <button
-        type="button"
-        onClick={toggle}
-        className={`relative z-10 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 transition-transform hover:scale-110 ${live ? "bg-black/90" : "bg-white/90"} ${tint}`}
-        aria-label={canStop ? "Stop recording" : "Start recording"}
-        title={canStop ? "Stop recording (Ctrl+K)" : "Start recording (Ctrl+K)"}
-      >
-        {content}
-      </button>
+      <div className="relative flex size-6 shrink-0 items-center justify-center">
+        {(active || state === "transcribing") && (
+          <span
+            key={`${state}-${recording}`}
+            className={`pointer-events-none absolute inset-0 animate-od-ping rounded-full ${
+              state === "transcribing" ? "bg-amber-400/40" : "bg-red-400/50"
+            }`}
+          />
+        )}
+        <button
+          type="button"
+          onClick={toggle}
+          className={`relative z-10 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 transition-transform hover:scale-110 ${live ? "bg-black/90" : "bg-white/90"} ${tint}`}
+          aria-label={canStop ? "Stop recording" : "Start recording"}
+          title={canStop ? "Stop recording (Ctrl+K)" : "Start recording (Ctrl+K)"}
+        >
+          {content}
+        </button>
+      </div>
     </div>
   );
 }

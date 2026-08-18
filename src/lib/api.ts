@@ -15,6 +15,7 @@ export interface ModelInfo {
   disk_bytes: number;
   installed: boolean;
   available: boolean;
+  streaming: boolean;
 }
 
 export interface Settings {
@@ -104,6 +105,11 @@ export interface ModelsReadyPayload {}
 export interface TranscriptPayload {
   text: string;
   injected: boolean;
+}
+
+export interface PartialPayload {
+  text: string;
+  streaming: boolean;
 }
 
 export type RecordingMode = "dictate" | "test";
@@ -244,4 +250,10 @@ export function onTranscript(
 
 export function onHistoryUpdated(cb: () => void): Promise<UnlistenFn> {
   return listen<unknown>("history-updated", () => cb());
+}
+
+export function onPartial(
+  cb: (payload: PartialPayload) => void
+): Promise<UnlistenFn> {
+  return listen<PartialPayload>("partial", (event) => cb(event.payload));
 }

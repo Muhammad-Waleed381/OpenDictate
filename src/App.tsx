@@ -34,6 +34,7 @@ function useOpenDictateEvents() {
         api.getHistory().then((history) => useStore.setState({ history })),
       ),
       api.onHistoryUpdated(() => store.refreshStats()),
+      api.onPartial((payload) => store.setPartial(payload.text)),
     ];
     let cancelled = false;
     subs.forEach((sub) => {
@@ -135,6 +136,22 @@ function LastResult() {
   );
 }
 
+function LiveCaptions() {
+  const partial = useStore((s) => s.partial);
+
+  if (!partial) return null;
+
+  return (
+    <div className="flex items-center gap-3 border-b-2 border-black bg-black px-6 py-2.5 text-white">
+      <span className="flex h-5 shrink-0 items-center border-2 border-white bg-white px-1.5 text-[10px] font-bold tracking-wider text-black">
+        LIVE
+      </span>
+      <span className="size-2 shrink-0 animate-od-blink bg-white" />
+      <span className="truncate text-sm font-medium">“{partial}”</span>
+    </div>
+  );
+}
+
 export function MainApp() {
   const settings = useStore((s) => s.settings);
   const [tab, setTab] = useState<TabId>("general");
@@ -208,6 +225,7 @@ export function MainApp() {
         </aside>
         <div className="flex min-w-0 flex-1 flex-col">
           <Header />
+          <LiveCaptions />
           <LastResult />
           <main className="flex-1 overflow-y-auto px-6 py-5">
             <div key={tab} className="animate-od-slide-up">

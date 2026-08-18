@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::dictation;
@@ -38,15 +38,42 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
 }
 
 pub fn toggle_dictation(app: &AppHandle) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static LAST_TOGGLE_MS: AtomicU64 = AtomicU64::new(0);
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let last = LAST_TOGGLE_MS.load(Ordering::Relaxed);
+    if now_ms.saturating_sub(last) < 500 {
+        log::debug!("toggle debounced (double-fired hotkey)");
+        return;
+    }
+    LAST_TOGGLE_MS.store(now_ms, Ordering::Relaxed);
+
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
     if state.recorder.is_recording() {
         log::info!("toggle: stopping dictation");
-        let _ = dictation::stop(app, &state);
+        if let Err(e) = dictation::stop(app, &state) {
+            log::error!("toggle: stop failed: {e}");
+            let _ = app.emit(
+                "dictation-error",
+                serde_json::json!({ "message": format!("stop failed: {e}") }),
+            );
+        }
     } else {
         log::info!("toggle: starting dictation");
-        let _ = dictation::start(app, &state, false);
+        if let Err(e) = dictation::start(app, &state, false) {
+            log::error!("toggle: start failed: {e}");
+            let _ = app.emit(
+                "dictation-error",
+                serde_json::json!({ "message": format!("start failed: {e}") }),
+            );
+        }
     }
 }
 
