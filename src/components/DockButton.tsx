@@ -121,7 +121,7 @@ export function DockButton() {
     : partial;
 
   return (
-    <div className="flex h-full w-full items-center justify-between gap-2 pr-2 pl-3">
+    <div className="flex h-full w-full items-end justify-between gap-2 pr-2 pl-3">
       {pillLabel && (
         <span
           className={`flex min-w-0 items-center gap-2 rounded-full px-3 py-1.5 text-[11px] leading-none font-bold tracking-wider text-white shadow-lg ring-1 ${

@@ -253,7 +253,7 @@ export function DockApp() {
   useOpenDictateEvents();
 
   return (
-    <div className="fixed inset-0">
+    <div className="h-[29px] w-full overflow-hidden">
       <DockButton />
     </div>
   );

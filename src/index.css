@@ -137,6 +137,9 @@
   html.dock-page body,
   html.dock-page #root {
     background: transparent !important;
+    height: 29px;
+    max-height: 29px;
+    overflow: hidden;
   }
   ::selection {
     @apply bg-primary text-primary-foreground;
