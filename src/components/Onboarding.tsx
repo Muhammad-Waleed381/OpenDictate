@@ -16,7 +16,6 @@ export function Onboarding() {
   const models = useStore((s) => s.models);
 
   const sttReady = models?.stt_ready ?? false;
-  const vadReady = models?.vad_ready ?? false;
 
   useEffect(() => {
     const unlistenPromise = api.onModelsReady(() => {
@@ -121,7 +120,7 @@ export function Onboarding() {
           {step < STEPS.length ? (
             <Button
               onClick={() => setStep((s) => Math.min(STEPS.length, s + 1))}
-              disabled={step === 2 && !(sttReady && vadReady)}
+              disabled={step === 2 && !sttReady}
             >
               Next →
             </Button>

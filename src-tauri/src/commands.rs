@@ -47,6 +47,19 @@ pub fn ensure_model(id: String, app: AppHandle) -> Result<(), String> {
                 serde_json::json!({ "file": file, "received": received, "total": total }),
             );
         });
+        // VAD is an internal default, never user-selectable: install it
+        // alongside any requested model so speech detection just works.
+        let result = match result {
+            Ok(()) if id != models::VAD_MODEL_ID => {
+                models::ensure_model(models::VAD_MODEL_ID, &mut |file, received, total| {
+                    let _ = app.emit(
+                        "model-progress",
+                        serde_json::json!({ "file": file, "received": received, "total": total }),
+                    );
+                })
+            }
+            other => other,
+        };
         match result {
             Ok(()) => {
                 let _ = app.emit("models-ready", serde_json::json!({}));
