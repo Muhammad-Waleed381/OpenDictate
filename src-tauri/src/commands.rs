@@ -189,6 +189,9 @@ pub fn set_settings(
     if let Some(autostart) = settings.autostart {
         current.autostart = autostart;
     }
+    if let Some(spoken_punctuation) = settings.spoken_punctuation {
+        current.spoken_punctuation = spoken_punctuation;
+    }
     let settings = current.clone();
     drop(current);
 

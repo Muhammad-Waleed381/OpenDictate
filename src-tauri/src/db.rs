@@ -197,6 +197,7 @@ mod tests {
         assert_eq!(s.hotkey, "ctrl+k");
         assert!(s.onboarded);
         assert_eq!(s.stt_model, "parakeet-tdt-ctc-110m-int8");
+        assert!(!s.spoken_punctuation);
 
         save_settings(&conn, &s).unwrap();
         let raw: String = conn
@@ -204,6 +205,7 @@ mod tests {
             .unwrap();
         assert!(raw.contains("\"stt_model\""));
         assert!(!raw.contains("sttModel"));
+        assert!(raw.contains("\"spoken_punctuation\""));
     }
 
     #[test]

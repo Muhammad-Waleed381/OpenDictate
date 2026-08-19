@@ -19,6 +19,7 @@ pub struct SettingsPatch {
     pub vad_sensitivity: Option<f32>,
     pub continuous: Option<bool>,
     pub autostart: Option<bool>,
+    pub spoken_punctuation: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +41,8 @@ pub struct Settings {
     pub continuous: bool,
     #[serde(default)]
     pub autostart: bool,
+    #[serde(default)]
+    pub spoken_punctuation: bool,
 }
 
 fn default_stt_model() -> String {
@@ -72,6 +75,7 @@ impl Default for Settings {
             vad_sensitivity: default_vad_sensitivity(),
             continuous: false,
             autostart: false,
+            spoken_punctuation: false,
         }
     }
 }
