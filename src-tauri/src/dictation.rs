@@ -126,6 +126,14 @@ fn is_continuous_enabled(state: &AppState) -> bool {
         .unwrap_or(false)
 }
 
+fn spoken_punctuation_enabled(state: &AppState) -> bool {
+    state
+        .settings
+        .lock()
+        .map(|s| s.spoken_punctuation)
+        .unwrap_or(false)
+}
+
 fn sensitivity(state: &AppState) -> f32 {
     state
         .settings
@@ -466,7 +474,12 @@ fn process_utterance(
     let raw = engine
         .transcribe(&speech.trimmed_audio, hotwords.as_deref())
         .map_err(|e| e.to_string())?;
-    let corrected = opendictate_core::text::correct_dictionary_terms(&raw, &dictionary);
+    let mapped = if spoken_punctuation_enabled(state) {
+        opendictate_core::text::map_spoken_punctuation(&raw)
+    } else {
+        raw
+    };
+    let corrected = opendictate_core::text::correct_dictionary_terms(&mapped, &dictionary);
     let text = inject::clean_text(&corrected);
     let duration_ms = speech.speech_duration_ms;
 
