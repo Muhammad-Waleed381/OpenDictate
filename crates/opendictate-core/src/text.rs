@@ -1,3 +1,38 @@
+struct Token {
+    start: usize,
+    end: usize,
+    lower: String,
+}
+
+fn tokenize(value: &str) -> Vec<Token> {
+    let mut result = Vec::new();
+    let mut start = None;
+    for (index, character) in value.char_indices() {
+        let part_of_word = character.is_alphanumeric() || character == '\'';
+        match (start, part_of_word) {
+            (None, true) => start = Some(index),
+            (Some(begin), false) => {
+                let end = index;
+                result.push(Token {
+                    start: begin,
+                    end,
+                    lower: value[begin..end].to_lowercase(),
+                });
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(begin) = start {
+        result.push(Token {
+            start: begin,
+            end: value.len(),
+            lower: value[begin..].to_lowercase(),
+        });
+    }
+    result
+}
+
 /// Applies dictionary casing to matching words and phrases without touching
 /// substrings inside unrelated words.
 pub fn correct_dictionary_terms(text: &str, terms: &[String]) -> String {
@@ -5,42 +40,6 @@ pub fn correct_dictionary_terms(text: &str, terms: &[String]) -> String {
     struct Term {
         canonical: String,
         tokens: Vec<String>,
-    }
-
-    #[derive(Clone)]
-    struct Token {
-        start: usize,
-        end: usize,
-        lower: String,
-    }
-
-    fn tokenize(value: &str) -> Vec<Token> {
-        let mut result = Vec::new();
-        let mut start = None;
-        for (index, character) in value.char_indices() {
-            let part_of_word = character.is_alphanumeric() || character == '\'';
-            match (start, part_of_word) {
-                (None, true) => start = Some(index),
-                (Some(begin), false) => {
-                    let end = index;
-                    result.push(Token {
-                        start: begin,
-                        end,
-                        lower: value[begin..end].to_lowercase(),
-                    });
-                    start = None;
-                }
-                _ => {}
-            }
-        }
-        if let Some(begin) = start {
-            result.push(Token {
-                start: begin,
-                end: value.len(),
-                lower: value[begin..].to_lowercase(),
-            });
-        }
-        result
     }
 
     let dictionary: Vec<Term> = terms
@@ -102,9 +101,65 @@ pub fn correct_dictionary_terms(text: &str, terms: &[String]) -> String {
     corrected
 }
 
+/// Maps spoken punctuation words to their symbols. Case-insensitive,
+/// standalone-token only — "point" is preserved so decimals survive.
+pub fn map_spoken_punctuation(text: &str) -> String {
+    const PHRASES: &[(&[&str], char)] = &[
+        (&["period"], '.'),
+        (&["comma"], ','),
+        (&["question", "mark"], '?'),
+        (&["exclamation", "point"], '!'),
+        (&["exclamation", "mark"], '!'),
+    ];
+
+    let tokens = tokenize(text);
+    let mut replacements: Vec<(usize, usize, char, bool)> = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        let matched = PHRASES
+            .iter()
+            .filter_map(|(phrase, symbol)| {
+                let end = index + phrase.len();
+                (end <= tokens.len()
+                    && tokens[index..end]
+                        .iter()
+                        .map(|token| token.lower.as_str())
+                        .eq(phrase.iter().copied()))
+                    .then_some((phrase.len(), *symbol))
+            })
+            .max_by_key(|(length, _)| *length);
+
+        if let Some((length, symbol)) = matched {
+            let prev_taken = index > 0
+                && !replacements.is_empty()
+                && tokens[index - 1].end == replacements.last().unwrap().1;
+            replacements.push((tokens[index].start, tokens[index + length - 1].end, symbol, prev_taken));
+            index += length;
+        } else {
+            index += 1;
+        }
+    }
+
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for (start, end, symbol, prev_taken) in replacements {
+        let gap = &text[cursor..start];
+        if prev_taken {
+            out.push_str(gap);
+        } else {
+            out.push_str(gap.trim_end());
+        }
+        out.push(symbol);
+        cursor = end;
+    }
+    out.push_str(&text[cursor..]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::correct_dictionary_terms;
+    use super::map_spoken_punctuation;
 
     fn terms(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
@@ -126,5 +181,36 @@ mod tests {
     fn does_not_replace_substrings() {
         let result = correct_dictionary_terms("iphoneography is unrelated", &terms(&["iPhone"]));
         assert_eq!(result, "iphoneography is unrelated");
+    }
+
+    #[test]
+    fn maps_all_core_punctuation_words() {
+        assert_eq!(
+            map_spoken_punctuation("period comma question mark exclamation point exclamation mark"),
+            ". , ? ! !"
+        );
+    }
+
+    #[test]
+    fn maps_punctuation_mid_sentence() {
+        assert_eq!(
+            map_spoken_punctuation("hello period this is important comma right question mark"),
+            "hello. this is important, right?"
+        );
+    }
+
+    #[test]
+    fn preserves_point_in_decimals() {
+        assert_eq!(map_spoken_punctuation("three point five"), "three point five");
+    }
+
+    #[test]
+    fn does_not_match_inside_words() {
+        assert_eq!(map_spoken_punctuation("periodontist"), "periodontist");
+    }
+
+    #[test]
+    fn matching_is_case_insensitive() {
+        assert_eq!(map_spoken_punctuation("Period Comma"), ". ,");
     }
 }
