@@ -50,11 +50,9 @@ export function DockButton() {
           setError(null);
         }, 2400);
       }
-      useStore.getState().setRecording(false);
     } else if (!active) {
       try {
         await api.startRecording("dictate");
-        useStore.getState().setRecording(true);
       } catch (e) {
         setError(String(e));
         setFlash("error");
@@ -171,7 +169,7 @@ export function DockButton() {
         <button
           type="button"
           onClick={toggle}
-          className={`relative z-10 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 transition-transform hover:scale-110 ${live ? "bg-black/90" : "bg-white/90"} ${tint}`}
+          className={`relative z-10 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 ${live ? "bg-black/90" : "bg-white/90"} ${tint}`}
           aria-label={canStop ? "Stop recording" : "Start recording"}
           title={canStop ? "Stop recording (Ctrl+K)" : "Start recording (Ctrl+K)"}
         >

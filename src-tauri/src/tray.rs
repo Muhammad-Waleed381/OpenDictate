@@ -7,9 +7,10 @@ use crate::hotkey;
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open OpenDictate", true, None::<&str>)?;
     let toggle = MenuItem::with_id(app, "toggle", "Start / Stop Dictation", true, None::<&str>)?;
+    let undo = MenuItem::with_id(app, "undo", "Undo Last Insert", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&open, &toggle, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &toggle, &undo, &separator, &quit])?;
 
     let icon = app
         .default_window_icon()
@@ -24,6 +25,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main(app),
             "toggle" => hotkey::toggle_dictation(app),
+            "undo" => {
+                let _ = crate::commands::undo_last_insert(app.state());
+            }
             "quit" => app.exit(0),
             _ => {}
         })

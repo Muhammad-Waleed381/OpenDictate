@@ -158,31 +158,10 @@ export function GeneralTab() {
     } catch {}
   };
 
-  const INSERT_MODE_LABELS: Record<string, string> = {
-  auto: "Auto (paste or type)",
-  type: "Always type text",
-  clipboard: "Clipboard only (no auto-paste)",
-};
-
   const handleLanguageChange = async (language: string | null) => {
     if (!language) return;
     try {
       await api.setSettings({ language });
-      useStore.getState().refreshAll();
-    } catch {}
-  };
-
-  const handleInsertModeChange = async (mode: string | null) => {
-    if (!mode) return;
-    try {
-      await api.setSettings({ insert_mode: mode });
-      useStore.getState().refreshAll();
-    } catch {}
-  };
-
-  const handleSensitivityChange = async (value: number) => {
-    try {
-      await api.setSettings({ vad_sensitivity: value });
       useStore.getState().refreshAll();
     } catch {}
   };
@@ -194,11 +173,12 @@ export function GeneralTab() {
     } catch {}
   };
 
-  const sensitivity = settings?.vad_sensitivity ?? 0.5;
-  const sensitivityLabel =
-    sensitivity <= 0.25 ? "Low — only loud, clear speech" :
-    sensitivity <= 0.75 ? "Medium — balanced" :
-    "High — catches quiet speech";
+  const handleAutostartChange = async (enabled: boolean) => {
+    try {
+      await api.setSettings({ autostart: enabled });
+      await useStore.getState().refreshAll();
+    } catch {}
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -252,64 +232,37 @@ export function GeneralTab() {
           </Select>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="insert-mode">Insertion mode</Label>
-          <Select
-            value={settings?.insert_mode ?? "auto"}
-            onValueChange={handleInsertModeChange}
-          >
-            <SelectTrigger className="w-full" id="insert-mode">
-              <SelectValue>
-                {INSERT_MODE_LABELS[settings?.insert_mode ?? "auto"] ?? "Auto (paste or type)"}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent className="w-full">
-              <SelectItem value="auto">Auto (paste or type)</SelectItem>
-              <SelectItem value="type">Always type text</SelectItem>
-              <SelectItem value="clipboard">Clipboard only (no auto-paste)</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
         <div className="sm:col-span-2">
           <HotkeyCapture />
         </div>
       </div>
 
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="sensitivity">Voice activity sensitivity</Label>
-            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground tabular-nums">
-              {Math.round(sensitivity * 100)}%
-            </span>
-          </div>
-          <input
-            id="sensitivity"
-            type="range"
-            min={0}
-            max={100}
-            step={5}
-            value={Math.round(sensitivity * 100)}
-            onChange={(e) => handleSensitivityChange(Number(e.target.value) / 100)}
-            className="h-2 w-full cursor-pointer appearance-none rounded-full bg-black"
-          />
-          <p className="text-xs text-muted-foreground">{sensitivityLabel}</p>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="continuous">Continuous dictation</Label>
+          <p className="text-xs text-muted-foreground">
+            Keep listening after each phrase — press the hotkey again to stop.
+          </p>
         </div>
+        <Switch
+          id="continuous"
+          checked={settings?.continuous ?? false}
+          onCheckedChange={handleContinuousChange}
+        />
+      </div>
 
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-col gap-1">
-            <Label htmlFor="continuous">Continuous dictation</Label>
-            <p className="text-xs text-muted-foreground">
-              Keep listening after each phrase — press the hotkey again to stop.
-            </p>
-          </div>
-          <Switch
-            id="continuous"
-            checked={settings?.continuous ?? false}
-            onCheckedChange={handleContinuousChange}
-          />
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="autostart">Start with system</Label>
+          <p className="text-xs text-muted-foreground">
+            Keep OpenDictate ready after you sign in.
+          </p>
         </div>
+        <Switch
+          id="autostart"
+          checked={settings?.autostart ?? false}
+          onCheckedChange={handleAutostartChange}
+        />
       </div>
 
       <ModelCard />

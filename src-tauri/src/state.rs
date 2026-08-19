@@ -2,7 +2,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use opendictate_core::audio::capture::AudioRecorder;
+use opendictate_core::stt::engine::SttEngine;
 use opendictate_core::stt::streaming::{StreamingRecognizer, StreamingSession};
+use opendictate_core::audio::vad::SileroVad;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +18,7 @@ pub struct SettingsPatch {
     pub heatmap_color: Option<String>,
     pub vad_sensitivity: Option<f32>,
     pub continuous: Option<bool>,
+    pub autostart: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +38,8 @@ pub struct Settings {
     pub vad_sensitivity: f32,
     #[serde(default)]
     pub continuous: bool,
+    #[serde(default)]
+    pub autostart: bool,
 }
 
 fn default_stt_model() -> String {
@@ -66,6 +71,7 @@ impl Default for Settings {
             heatmap_color: default_heatmap_color(),
             vad_sensitivity: default_vad_sensitivity(),
             continuous: false,
+            autostart: false,
         }
     }
 }
@@ -123,6 +129,26 @@ pub struct AppState {
     pub continuous: Arc<AtomicBool>,
     pub stream: Arc<Mutex<Option<StreamingPipe>>>,
     pub stream_active: Arc<AtomicBool>,
+    pub last_inserted: Arc<Mutex<Option<String>>>,
+    pub stt_engine: Arc<Mutex<Option<CachedSttEngine>>>,
+    pub streaming_engine: Arc<Mutex<Option<CachedStreamingEngine>>>,
+    pub vad: Arc<Mutex<Option<CachedVad>>>,
+}
+
+pub struct CachedSttEngine {
+    pub model_id: String,
+    pub language: String,
+    pub engine: Arc<SttEngine>,
+}
+
+pub struct CachedStreamingEngine {
+    pub model_id: String,
+    pub recognizer: Arc<StreamingRecognizer>,
+}
+
+pub struct CachedVad {
+    pub sensitivity: f32,
+    pub detector: Arc<SileroVad>,
 }
 
 impl AppState {
@@ -150,7 +176,7 @@ impl AppState {
 /// Live state for streaming ASR: the recognizer, its active session and the
 /// capture-buffer watermark. All access is serialized through the mutex.
 pub struct StreamingPipe {
-    pub recognizer: StreamingRecognizer,
+    pub recognizer: Arc<StreamingRecognizer>,
     pub session: StreamingSession,
     /// Offset into the capture buffer of the first sample not yet fed to the
     /// recognizer. Monotonic across utterances within one streaming session.

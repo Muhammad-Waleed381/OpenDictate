@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Mutex;
 
 use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
 
@@ -12,7 +13,7 @@ pub struct VadResult {
 }
 
 pub struct SileroVad {
-    config: VadModelConfig,
+    detector: Mutex<VoiceActivityDetector>,
 }
 
 // SAFETY: VadModelConfig holds plain data; the stateful detector is created
@@ -50,11 +51,13 @@ impl SileroVad {
             ..Default::default()
         };
 
-        VoiceActivityDetector::create(&config, threshold)
+        let detector = VoiceActivityDetector::create(&config, threshold)
             .ok_or_else(|| CoreError::Audio("failed to initialize silero VAD".to_string()))?;
 
         log::info!("silero VAD loaded from {}", model_path.display());
-        Ok(Self { config })
+        Ok(Self {
+            detector: Mutex::new(detector),
+        })
     }
 
     pub fn process(&self, audio: &[f32]) -> VadResult {
@@ -66,13 +69,14 @@ impl SileroVad {
             };
         }
 
-        let detector = match VoiceActivityDetector::create(&self.config, 0.5) {
-            Some(d) => d,
-            None => {
-                log::warn!("VAD: detector creation failed, falling back to energy");
+        let detector = match self.detector.lock() {
+            Ok(detector) => detector,
+            Err(_) => {
+                log::warn!("VAD: detector lock poisoned, falling back to energy");
                 return apply_energy_vad(audio);
             }
         };
+        detector.reset();
 
         let chunk_size = 512;
         for chunk in audio.chunks(chunk_size) {

@@ -29,6 +29,7 @@ export interface Settings {
   heatmap_color: string;
   vad_sensitivity: number;
   continuous: boolean;
+  autostart: boolean;
 }
 
 export type SettingsPatch = Partial<
@@ -42,6 +43,7 @@ export type SettingsPatch = Partial<
     | "heatmap_color"
     | "vad_sensitivity"
     | "continuous"
+    | "autostart"
   >
 >;
 
@@ -178,6 +180,10 @@ export function deleteHistory(id: number): Promise<void> {
   return invoke<void>("delete_history", { id });
 }
 
+export function updateHistory(id: number, text: string): Promise<void> {
+  return invoke<void>("update_history", { id, text });
+}
+
 export function clearHistory(): Promise<void> {
   return invoke<void>("clear_history");
 }
@@ -200,6 +206,14 @@ export function pasteClipboard(text: string): Promise<void> {
 
 export function copyText(text: string): Promise<void> {
   return invoke<void>("copy_text", { text });
+}
+
+export function undoLastInsert(): Promise<void> {
+  return invoke<void>("undo_last_insert");
+}
+
+export function warmupModel(id: string, engineKey: string): Promise<void> {
+  return invoke<void>("warmup_model", { id, engineKey });
 }
 
 export function getWordStats(): Promise<WordStats> {

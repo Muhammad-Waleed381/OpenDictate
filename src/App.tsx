@@ -25,6 +25,14 @@ type TabId = (typeof TABS)[number]["id"];
 function useOpenDictateEvents() {
   useEffect(() => {
     const store = useStore.getState();
+    const onDockState = (event: Event) => {
+      store.setOverlayState((event as CustomEvent<api.OverlayState>).detail);
+    };
+    const onDockPartial = (event: Event) => {
+      store.setPartial((event as CustomEvent<api.PartialPayload>).detail.text);
+    };
+    window.addEventListener("opendictate:overlay-state", onDockState);
+    window.addEventListener("opendictate:partial", onDockPartial);
     const subs: Promise<UnlistenFn>[] = [
       api.onOverlayState((payload) => store.setOverlayState(payload)),
       api.onAudioLevel((payload) => store.setLevel(payload.rms)),
@@ -44,6 +52,8 @@ function useOpenDictateEvents() {
     });
     return () => {
       cancelled = true;
+      window.removeEventListener("opendictate:overlay-state", onDockState);
+      window.removeEventListener("opendictate:partial", onDockPartial);
     };
   }, []);
 }
@@ -118,6 +128,7 @@ function Header() {
 
 function LastResult() {
   const lastResult = useStore((s) => s.lastResult);
+  const [undone, setUndone] = useState(false);
 
   if (!lastResult) return null;
 
@@ -127,6 +138,20 @@ function LastResult() {
         INSERTED ✓
       </span>
       <span className="truncate text-sm font-medium">“{lastResult.text}”</span>
+      <Button
+        size="sm"
+        variant="outline"
+        className="ml-auto shrink-0"
+        disabled={undone}
+        onClick={async () => {
+          try {
+            await api.undoLastInsert();
+            setUndone(true);
+          } catch {}
+        }}
+      >
+        {undone ? "Undone" : "Undo"}
+      </Button>
       {lastResult.duration_ms > 0 && (
         <span className="ml-auto shrink-0 text-xs font-bold text-muted-foreground tabular-nums">
           {(lastResult.duration_ms / 1000).toFixed(1)}s
@@ -253,7 +278,7 @@ export function DockApp() {
   useOpenDictateEvents();
 
   return (
-    <div className="h-[29px] w-full overflow-hidden">
+    <div className="fixed inset-x-0 bottom-0 h-[29px] w-full overflow-hidden">
       <DockButton />
     </div>
   );

@@ -32,6 +32,7 @@ pub fn inject_text(app: &AppHandle, text: &str, mode: &str) -> Result<(), String
 pub fn clean_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut prev_space = false;
+    let mut capitalize_next = true;
     for ch in text.trim().chars() {
         if ch.is_whitespace() {
             if !prev_space {
@@ -40,12 +41,23 @@ pub fn clean_text(text: &str) -> String {
             prev_space = true;
         } else {
             prev_space = false;
-            if (ch == ',' || ch == '.' || ch == ';' || ch == ':' || ch == '?' || ch == '!')
-                && out.ends_with(' ')
-            {
-                out.pop();
+            if ch == ',' || ch == '.' || ch == ';' || ch == ':' || ch == '?' || ch == '!' {
+                if out.ends_with(' ') {
+                    out.pop();
+                }
+                out.push(ch);
+                capitalize_next = matches!(ch, '.' | '?' | '!');
+                continue;
             }
-            out.push(ch);
+            if capitalize_next && ch.is_alphabetic() {
+                out.extend(ch.to_uppercase());
+                capitalize_next = false;
+            } else {
+                out.push(ch);
+                if ch.is_alphabetic() {
+                    capitalize_next = false;
+                }
+            }
         }
     }
     let trimmed = out.trim_end().to_string();
@@ -57,6 +69,23 @@ pub fn clean_text(text: &str) -> String {
             cap
         }
         None => trimmed,
+    }
+}
+
+pub fn undo_last_insert() -> Result<(), String> {
+    run("xdotool", &["key", "--clearmodifiers", "ctrl+z"]).or_else(|first| {
+        run("ydotool", &["key", "29+44"])
+            .map_err(|second| format!("{first}; {second}"))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_text;
+
+    #[test]
+    fn capitalizes_sentences_and_removes_punctuation_spaces() {
+        assert_eq!(clean_text("hello. world! how are you?"), "Hello. World! How are you?");
     }
 }
 

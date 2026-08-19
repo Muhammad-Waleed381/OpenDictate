@@ -77,7 +77,28 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
     dock::set_state(app, "transcribing", None);
     dock::set_caption(app, Some("transcribing…"));
 
-    process_utterance(app, state, &audio, test, false)
+    process_utterance_on_worker(app, audio, test, false)
+}
+
+fn process_utterance_on_worker(
+    app: &AppHandle,
+    audio: Vec<f32>,
+    test: bool,
+    continuous: bool,
+) -> Result<TranscriptResult, String> {
+    let app = app.clone();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("opendictate-inference".to_string())
+        .spawn(move || {
+            let state = state_from_app(&app);
+            let result = process_utterance(&app, &state, &audio, test, continuous);
+            let _ = sender.send(result);
+        })
+        .map_err(|e| format!("failed to start inference worker: {e}"))?;
+    receiver
+        .recv()
+        .map_err(|_| "inference worker exited unexpectedly".to_string())?
 }
 
 pub fn cancel(app: &AppHandle, state: &AppState) -> Result<(), String> {
@@ -150,7 +171,7 @@ fn spawn_continuous_loop(app: &AppHandle, state: &AppState) {
                         break;
                     }
                     dock::set_state(&app, "transcribing", None);
-                    let _ = process_utterance(&app, &state_from_app(&app), &audio, false, true);
+                    let _ = process_utterance_on_worker(&app, audio, false, true);
 
                     if !continuous.load(std::sync::atomic::Ordering::SeqCst) {
                         break;
@@ -191,7 +212,7 @@ fn restart_recorder(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn state_from_app(app: &AppHandle) -> tauri::State<'_, AppState> {
+pub fn state_from_app(app: &AppHandle) -> tauri::State<'_, AppState> {
     app.state::<AppState>()
 }
 
@@ -221,12 +242,39 @@ fn selected_model_id(state: &AppState) -> String {
 
 /// Builds the streaming pipe (recognizer + session) and starts the capture
 /// loop. Streaming ignores the continuous toggle: it always runs until stop.
-fn spawn_streaming(app: &AppHandle, state: &AppState) -> Result<(), String> {
+pub fn spawn_streaming(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    let load_started = Instant::now();
     let model_id = selected_model_id(state);
     let dir = models::model_dir_for(&model_id);
-    let recognizer =
-        StreamingRecognizer::new(&dir).map_err(|e| e.to_string())?;
-    let hotwords = dictionary_hotwords(state);
+    let recognizer = {
+        let mut cache = state
+            .streaming_engine
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if let Some(existing) = cache.as_ref() {
+            if existing.model_id == model_id {
+                log::debug!("streaming engine cache hit for {}", model_id);
+                Arc::clone(&existing.recognizer)
+            } else {
+                let created = Arc::new(StreamingRecognizer::new(&dir).map_err(|e| e.to_string())?);
+                *cache = Some(crate::state::CachedStreamingEngine {
+                    model_id: model_id.clone(),
+                    recognizer: Arc::clone(&created),
+                });
+                created
+            }
+        } else {
+            let created = Arc::new(StreamingRecognizer::new(&dir).map_err(|e| e.to_string())?);
+            *cache = Some(crate::state::CachedStreamingEngine {
+                model_id: model_id.clone(),
+                recognizer: Arc::clone(&created),
+            });
+            created
+        }
+    };
+    log::info!("streaming engine ready in {} ms", load_started.elapsed().as_millis());
+    let dictionary = dictionary_terms(state);
+    let hotwords = dictionary_hotwords(&dictionary);
     let session = recognizer.create_session(hotwords.as_deref());
 
     let pipe = StreamingPipe {
@@ -245,6 +293,7 @@ fn spawn_streaming(app: &AppHandle, state: &AppState) -> Result<(), String> {
 /// Feeds captured samples into the recognizer in small chunks, emits partial
 /// hypotheses as live captions, and commits each endpointed utterance.
 fn spawn_streaming_loop(app: &AppHandle, state: &AppState) {
+    const STREAM_POLL_INTERVAL: Duration = Duration::from_millis(100);
     let app = app.clone();
     let recorder = Arc::clone(&state.recorder);
     let stream = Arc::clone(&state.stream);
@@ -284,7 +333,7 @@ fn spawn_streaming_loop(app: &AppHandle, state: &AppState) {
             pipe.total_fed += samples.len();
             drop(pipe_guard);
             if samples.is_empty() {
-                std::thread::sleep(Duration::from_millis(60));
+                std::thread::sleep(STREAM_POLL_INTERVAL);
                 continue;
             }
             pipe_guard = match stream.lock() {
@@ -326,7 +375,7 @@ fn spawn_streaming_loop(app: &AppHandle, state: &AppState) {
             }
 
             drop(pipe_guard);
-            std::thread::sleep(Duration::from_millis(60));
+            std::thread::sleep(STREAM_POLL_INTERVAL);
         }
         stream_active.store(false, Ordering::SeqCst);
         dock::set_caption(&app, None);
@@ -391,7 +440,7 @@ fn process_utterance(
     test: bool,
     continuous: bool,
 ) -> Result<TranscriptResult, String> {
-    let speech = run_vad(audio, sensitivity(state)).map_err(|e| e.to_string())?;
+    let speech = run_vad(state, audio).map_err(|e| e.to_string())?;
     if !speech.has_speech {
         if continuous {
             dock::set_state(app, "hidden", None);
@@ -412,11 +461,13 @@ fn process_utterance(
     }
 
     let engine = load_engine(state)?;
-    let hotwords = dictionary_hotwords(state);
+    let dictionary = dictionary_terms(state);
+    let hotwords = dictionary_hotwords(&dictionary);
     let raw = engine
         .transcribe(&speech.trimmed_audio, hotwords.as_deref())
         .map_err(|e| e.to_string())?;
-    let text = inject::clean_text(&raw);
+    let corrected = opendictate_core::text::correct_dictionary_terms(&raw, &dictionary);
+    let text = inject::clean_text(&corrected);
     let duration_ms = speech.speech_duration_ms;
 
     if test {
@@ -494,6 +545,9 @@ fn commit_text(
             notify::notify("Dictation error", &format!("Failed to insert text: {e}"));
             return Err(e);
         }
+        if let Ok(mut last) = state.last_inserted.lock() {
+            *last = Some(text.to_string());
+        }
     }
 
     if !continuous || finish {
@@ -529,27 +583,58 @@ fn spawn_level_emitter(app: &AppHandle, state: &AppState) {
 }
 
 fn run_vad(
+    state: &AppState,
     audio: &[f32],
-    sensitivity: f32,
 ) -> Result<opendictate_core::audio::vad::VadResult, opendictate_core::CoreError> {
+    let sensitivity = sensitivity(state);
     let vad_path = models::vad_model_path();
     let silero = if models::is_vad_ready() {
-        SileroVad::with_threshold(&vad_path, sensitivity_to_silero_threshold(sensitivity)).ok()
+        let threshold = sensitivity_to_silero_threshold(sensitivity);
+        let mut cache = state
+            .vad
+            .lock()
+            .map_err(|_| opendictate_core::CoreError::Audio("VAD cache lock poisoned".to_string()))?;
+        if let Some(cached) = cache.as_ref() {
+            if (cached.sensitivity - sensitivity).abs() < f32::EPSILON {
+                Some(Arc::clone(&cached.detector))
+            } else {
+                let detector = Arc::new(SileroVad::with_threshold(&vad_path, threshold)?);
+                *cache = Some(crate::state::CachedVad {
+                    sensitivity,
+                    detector: Arc::clone(&detector),
+                });
+                Some(detector)
+            }
+        } else {
+            let detector = Arc::new(SileroVad::with_threshold(&vad_path, threshold)?);
+            *cache = Some(crate::state::CachedVad {
+                sensitivity,
+                detector: Arc::clone(&detector),
+            });
+            Some(detector)
+        }
     } else {
         None
     };
-    Ok(apply_vad(audio, silero.as_ref(), sensitivity))
+    Ok(apply_vad(audio, silero.as_deref(), sensitivity))
 }
 
-fn dictionary_hotwords(state: &AppState) -> Option<String> {
-    let words = state
+fn dictionary_terms(state: &AppState) -> Vec<String> {
+    state
         .db
         .lock()
         .ok()
-        .and_then(|conn| db::get_dictionary(&conn).ok())?;
-    let joined: Vec<String> = words
+        .and_then(|conn| db::get_dictionary(&conn).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| entry.word)
+        .collect()
+}
+
+fn dictionary_hotwords(terms: &[String]) -> Option<String> {
+    let joined: Vec<String> = terms
         .iter()
-        .map(|e| format!("{} {}", e.word.replace(' ', "_"), HOTWORD_SCORE))
+        .map(|word| format!("{} {}", word.replace(' ', "_"), HOTWORD_SCORE))
         .collect();
     if joined.is_empty() {
         None
@@ -568,7 +653,7 @@ fn insert_mode(state: &AppState) -> String {
         .unwrap_or_else(|_| "auto".to_string())
 }
 
-fn load_engine(state: &AppState) -> Result<SttEngine, String> {
+pub fn load_engine(state: &AppState) -> Result<Arc<SttEngine>, String> {
     let (model_id, language) = {
         let settings = state.settings.lock().map_err(|e| e.to_string())?;
         (
@@ -580,6 +665,16 @@ fn load_engine(state: &AppState) -> Result<SttEngine, String> {
             settings.language.clone(),
         )
     };
+    let language_key = language.clone();
+    {
+        let cache = state.stt_engine.lock().map_err(|e| e.to_string())?;
+        if let Some(cached) = cache.as_ref() {
+            if cached.model_id == model_id && cached.language == language_key {
+                log::debug!("offline engine cache hit for {}", model_id);
+                return Ok(Arc::clone(&cached.engine));
+            }
+        }
+    }
     if !models::is_model_installed(&model_id) {
         return Err(format!(
             "STT model '{model_id}' is not installed — download it in Settings → Models"
@@ -593,5 +688,19 @@ fn load_engine(state: &AppState) -> Result<SttEngine, String> {
     } else {
         ModelKind::NemoCtc
     };
-    SttEngine::new(&dir, kind, Some(language)).map_err(|e| e.to_string())
+    let load_started = Instant::now();
+    let engine = Arc::new(SttEngine::new(&dir, kind, Some(language)).map_err(|e| e.to_string())?);
+    let mut cache = state.stt_engine.lock().map_err(|e| e.to_string())?;
+    if let Some(cached) = cache.as_ref() {
+        if cached.model_id == model_id && cached.language == language_key {
+            return Ok(Arc::clone(&cached.engine));
+        }
+    }
+    *cache = Some(crate::state::CachedSttEngine {
+        model_id,
+        language: language_key,
+        engine: Arc::clone(&engine),
+    });
+    log::info!("offline engine ready in {} ms", load_started.elapsed().as_millis());
+    Ok(engine)
 }

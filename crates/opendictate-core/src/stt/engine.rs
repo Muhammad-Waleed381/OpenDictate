@@ -8,7 +8,9 @@ use sherpa_onnx::{
 use crate::error::{CoreError, Result};
 
 const MIN_AUDIO_SAMPLES: usize = 3_200;
-const MAX_STT_THREADS: usize = 4;
+const MAX_STT_THREADS: usize = 8;
+/// Whisper models have a hard 30-second context window.
+const WHISPER_CHUNK_SAMPLES: usize = 16_000 * 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelKind {
@@ -19,6 +21,7 @@ pub enum ModelKind {
 
 pub struct SttEngine {
     recognizer: OfflineRecognizer,
+    kind: ModelKind,
 }
 
 // SAFETY: OfflineRecognizer wraps the ONNX Runtime C API, which is documented
@@ -67,6 +70,7 @@ impl SttEngine {
                     tokens: Some(tokens.to_string_lossy().to_string()),
                     num_threads: n_threads,
                     provider: Some("cpu".to_string()),
+                    model_type: Some("nemo_transducer".to_string()),
                     debug: false,
                     ..Default::default()
                 },
@@ -152,10 +156,31 @@ impl SttEngine {
             kind
         );
 
-        Ok(Self { recognizer })
+        Ok(Self { recognizer, kind })
     }
 
     pub fn transcribe(&self, audio: &[f32], hotwords: Option<&str>) -> Result<String> {
+        if audio.len() < MIN_AUDIO_SAMPLES {
+            return Ok(String::new());
+        }
+
+        // Whisper models have a hard 30-second context window.
+        // Longer audio must be chunked or sherpa-onnx silently truncates.
+        if self.kind == ModelKind::Whisper && audio.len() > WHISPER_CHUNK_SAMPLES {
+            let mut results = Vec::new();
+            for chunk in audio.chunks(WHISPER_CHUNK_SAMPLES) {
+                let text = self.transcribe_single(chunk, hotwords)?;
+                if !text.is_empty() {
+                    results.push(text);
+                }
+            }
+            return Ok(results.join(" "));
+        }
+
+        self.transcribe_single(audio, hotwords)
+    }
+
+    fn transcribe_single(&self, audio: &[f32], hotwords: Option<&str>) -> Result<String> {
         if audio.len() < MIN_AUDIO_SAMPLES {
             return Ok(String::new());
         }

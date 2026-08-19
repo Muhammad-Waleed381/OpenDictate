@@ -81,6 +81,28 @@ pub fn remove_model(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn warmup_model(
+    _id: String,
+    engine_key: String,
+    app: AppHandle,
+    _state: State<AppState>,
+) -> Result<(), String> {
+    let is_streaming = engine_key.contains("streaming");
+    std::thread::Builder::new()
+        .name("opendictate-warmup".to_string())
+        .spawn(move || {
+            let state = dictation::state_from_app(&app);
+            if is_streaming {
+                let _ = dictation::spawn_streaming(&app, &state);
+            } else {
+                let _ = dictation::load_engine(&state);
+            }
+        })
+        .map_err(|e| format!("failed to start warm-up thread: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn start_recording(mode: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
     dictation::start(&app, &state, mode == "test")
 }
@@ -164,6 +186,9 @@ pub fn set_settings(
     if let Some(continuous) = settings.continuous {
         current.continuous = continuous;
     }
+    if let Some(autostart) = settings.autostart {
+        current.autostart = autostart;
+    }
     let settings = current.clone();
     drop(current);
 
@@ -172,7 +197,8 @@ pub fn set_settings(
     }
 
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::save_settings(&conn, &settings).map_err(|e| e.to_string())
+    db::save_settings(&conn, &settings).map_err(|e| e.to_string())?;
+    crate::autostart::set_enabled(&app, settings.autostart)
 }
 
 #[tauri::command]
@@ -200,6 +226,16 @@ pub fn delete_history(id: i64, state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn update_history(id: i64, text: String, state: State<AppState>) -> Result<(), String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("history text cannot be empty".to_string());
+    }
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::update_history(&conn, id, text).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn clear_history(state: State<AppState>) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::clear_history(&conn).map_err(|e| e.to_string())
@@ -213,7 +249,7 @@ pub fn get_dictionary(state: State<AppState>) -> Result<Vec<crate::state::DictEn
 
 #[tauri::command]
 pub fn add_dictionary_word(word: String, state: State<AppState>) -> Result<(), String> {
-    let word = word.trim().to_lowercase();
+    let word = word.trim().to_string();
     if word.is_empty() {
         return Err("word cannot be empty".to_string());
     }
@@ -238,6 +274,15 @@ pub fn copy_text(text: String, app: AppHandle) -> Result<(), String> {
     app.clipboard()
         .write_text(text)
         .map_err(|e| format!("failed to write clipboard: {e}"))
+}
+
+#[tauri::command]
+pub fn undo_last_insert(state: State<AppState>) -> Result<(), String> {
+    let mut last = state.last_inserted.lock().map_err(|e| e.to_string())?;
+    if last.take().is_none() {
+        return Err("nothing to undo".to_string());
+    }
+    crate::inject::undo_last_insert()
 }
 
 #[tauri::command]

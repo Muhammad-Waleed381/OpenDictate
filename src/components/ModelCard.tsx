@@ -28,9 +28,14 @@ function progressPercent(received: number, total: number): number {
 
 const SECTION_HINTS: Record<"streaming" | "non-streaming", string> = {
   streaming:
-    "Streaming engines transcribe live as you speak, with captions — no silence waiting.",
+    "Live captions appear while you speak. Best for fast back-and-forth dictation.",
   "non-streaming":
-    "Non-streaming engines transcribe after you stop speaking. Higher accuracy, no live captions."
+    "Transcribes after you stop speaking. Best for longer recordings and accuracy."
+};
+
+const SECTION_LABELS: Record<"streaming" | "non-streaming", string> = {
+  streaming: "Live captions",
+  "non-streaming": "Highest accuracy",
 };
 
 export function ModelCard() {
@@ -85,6 +90,7 @@ export function ModelCard() {
     try {
       await api.setSettings({ engine: engineKey, stt_model: modelId });
       await useStore.getState().refreshAll();
+      api.warmupModel(modelId, engineKey).catch(() => {});
     } catch (e) {
       setError(String(e));
     }
@@ -120,7 +126,7 @@ export function ModelCard() {
                 : "bg-white text-black hover:bg-black/10"
             } ${tab === "non-streaming" ? "border-l-2" : ""}`}
           >
-            {tab}
+             {SECTION_LABELS[tab]}
           </button>
         ))}
       </div>

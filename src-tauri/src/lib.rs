@@ -1,4 +1,5 @@
 mod commands;
+mod autostart;
 mod db;
 mod dictation;
 mod dock;
@@ -43,12 +44,15 @@ pub fn run() {
             commands::complete_onboarding,
             commands::get_history,
             commands::delete_history,
+            commands::update_history,
             commands::clear_history,
             commands::get_dictionary,
             commands::add_dictionary_word,
             commands::remove_dictionary_word,
             commands::paste_clipboard,
             commands::copy_text,
+            commands::undo_last_insert,
+            commands::warmup_model,
             commands::word_stats,
             commands::reset_word_stats,
             commands::export_history,
@@ -79,6 +83,10 @@ pub fn run() {
                 continuous: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 stream: Arc::new(Mutex::new(None)),
                 stream_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                last_inserted: Arc::new(Mutex::new(None)),
+                stt_engine: Arc::new(Mutex::new(None)),
+                streaming_engine: Arc::new(Mutex::new(None)),
+                vad: Arc::new(Mutex::new(None)),
             };
             app.manage(state);
 

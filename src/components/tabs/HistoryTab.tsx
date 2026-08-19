@@ -26,6 +26,9 @@ export function HistoryTab() {
   const [query, setQuery] = useState("");
   const [exported, setExported] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editText, setEditText] = useState("");
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -64,10 +67,27 @@ export function HistoryTab() {
   };
 
   const handleDelete = async (id: number) => {
+    if (!window.confirm("Delete this dictation?")) return;
     try {
       await api.deleteHistory(id);
       await useStore.getState().refreshAll();
     } catch {}
+  };
+
+  const beginEdit = (entry: api.HistoryEntry) => {
+    setEditingId(entry.id);
+    setEditText(entry.text);
+  };
+
+  const saveEdit = async () => {
+    if (editingId === null || !editText.trim()) return;
+    try {
+      await api.updateHistory(editingId, editText);
+      setEditingId(null);
+      await useStore.getState().refreshAll();
+    } catch (e) {
+      setExportError(String(e));
+    }
   };
 
   const handleClearAll = async () => {
@@ -141,10 +161,29 @@ export function HistoryTab() {
             <TableBody>
               {filtered.map((entry) => (
                 <TableRow key={entry.id}>
-                  <TableCell className="max-w-0 truncate whitespace-nowrap">
-                    <span className="block max-w-[280px] truncate font-medium">
-                      {entry.text}
-                    </span>
+                  <TableCell className="max-w-0">
+                    {editingId === entry.id ? (
+                      <div className="flex min-w-[220px] flex-col gap-2">
+                        <textarea
+                          value={editText}
+                          onChange={(event) => setEditText(event.target.value)}
+                          rows={3}
+                          className="w-full border-2 border-black bg-white p-2 text-sm"
+                        />
+                        <div className="flex gap-1">
+                          <Button size="sm" onClick={saveEdit}>Save</Button>
+                          <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>Cancel</Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        className={`block max-w-[360px] text-left font-medium ${expandedId === entry.id ? "whitespace-pre-wrap" : "truncate"}`}
+                        onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
+                        title="Click to expand"
+                      >
+                        {entry.text}
+                      </button>
+                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground tabular-nums">
                     {formatDate(entry.created_at)}
@@ -154,7 +193,10 @@ export function HistoryTab() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <Button size="sm" variant="ghost" onClick={() => handleInsert(entry.text)}>
+                       <Button size="sm" variant="ghost" onClick={() => beginEdit(entry)}>
+                         Edit
+                       </Button>
+                       <Button size="sm" variant="ghost" onClick={() => handleInsert(entry.text)}>
                         Re-insert
                       </Button>
                       <Button size="sm" variant="ghost" onClick={() => handleCopy(entry.text)}>

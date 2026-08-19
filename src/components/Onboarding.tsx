@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { MicTest } from "@/components/MicTest";
 import { ModelCard } from "@/components/ModelCard";
 
-const STEPS = ["Mic test", "Models", "Hotkey"] as const;
+const STEPS = ["Microphone", "Speech model", "Shortcut"] as const;
 
 export function Onboarding() {
   const [step, setStep] = useState(1);
@@ -46,10 +46,10 @@ export function Onboarding() {
             <span className="flex size-6 items-center justify-center border-2 border-black bg-black text-xs font-bold text-white">
               OD
             </span>
-            <DialogTitle>Setup — 3 steps</DialogTitle>
+             <DialogTitle>Setup — 3 quick steps</DialogTitle>
           </div>
           <DialogDescription>
-            A few quick checks before you can start dictating.
+             Test your microphone, choose how speech is recognized, and learn your shortcut.
           </DialogDescription>
         </DialogHeader>
 

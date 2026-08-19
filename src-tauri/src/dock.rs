@@ -7,6 +7,7 @@ const TOLERANCE: i32 = 2;
 
 static LAST_ASSERT_MS: AtomicU64 = AtomicU64::new(0);
 static CAPTION_WIDTH: AtomicU32 = AtomicU32::new(0);
+static LAST_SHAPED: AtomicU32 = AtomicU32::new(0);
 
 pub fn window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("dock")
@@ -36,9 +37,45 @@ fn bottom_right(win: &WebviewWindow, width: u32, height: u32) -> PhysicalPositio
 pub fn init(app: &AppHandle) {
     if let Some(win) = window(app) {
         let _ = win.set_always_on_top(true);
-        let _ = win.hide();
+        let _ = win.show();
     }
+    #[cfg(target_os = "linux")]
+    shape_input(app);
     enforce(app);
+}
+
+/// Restricts the dock's input region to the bottom strip where the content
+/// renders, so the transparent upper part of the window doesn't intercept
+/// clicks. Must run on the main thread.
+#[cfg(target_os = "linux")]
+fn shape_input(app: &AppHandle) {
+    use gtk::cairo::{RectangleInt, Region};
+    use gtk::prelude::*;
+
+    let Some(win) = window(app) else { return };
+    let Ok(vbox) = win.default_vbox() else { return };
+
+    let mut widget: Option<gtk::Widget> = Some(vbox.upcast());
+    while let Some(current) = widget {
+        if let Ok(gtk_window) = current.clone().downcast::<gtk::Window>() {
+            let (w, h) = gtk_window.size();
+            if w <= 0 || h <= 0 {
+                return;
+            }
+            let key = ((w as u32) << 16) | (h as u32);
+            if LAST_SHAPED.load(Ordering::Relaxed) == key {
+                return;
+            }
+            let strip = DOCK_SIZE as i32;
+            let rect = RectangleInt::new(0, h - strip, w, strip);
+            let region = Region::create_rectangle(&rect);
+            gtk_window.input_shape_combine_region(Some(&region));
+            LAST_SHAPED.store(key, Ordering::Relaxed);
+            log::info!("dock: input shape {w}x{h} bottom {strip}px");
+            return;
+        }
+        widget = current.parent();
+    }
 }
 
 pub fn ensure(app: &AppHandle) {
@@ -79,31 +116,43 @@ fn apply_dock_size(app: &AppHandle) {
 /// Fixed width of the caption strip; the pill truncates long text.
 const CAPTION_STRIP_WIDTH: u32 = 210;
 
+fn emit_dock_event(app: &AppHandle, event: &str, payload: serde_json::Value) {
+    let event = event.to_string();
+    let payload = serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string());
+    let app = app.clone();
+    let inner = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(win) = window(&inner) else { return };
+        let script = format!(
+            "window.dispatchEvent(new CustomEvent({event:?}, {{ detail: {payload} }}));",
+            event = format!("opendictate:{event}"),
+        );
+        let _ = win.eval(&script);
+    });
+}
+
 /// Shows a live caption strip in the dock while streaming; pass `None` to
-/// hide the dock (the window is a fixed-size strip that never resizes).
+/// return the dock to its idle state (the window stays visible so the user
+/// always has the on-screen mic control).
 pub fn set_caption(app: &AppHandle, text: Option<&str>) {
     match text.map(str::trim).filter(|t| !t.is_empty()) {
         Some(text) => {
             CAPTION_WIDTH.store(CAPTION_STRIP_WIDTH, Ordering::Relaxed);
             log::info!("dock: caption set: {text:?}");
-            let _ = app.emit(
+            emit_dock_event(
+                app,
                 "partial",
                 serde_json::json!({ "text": text, "streaming": true }),
             );
-            if let Some(win) = window(app) {
-                let _ = win.show();
-            }
         }
         None => {
             CAPTION_WIDTH.store(0, Ordering::Relaxed);
             log::info!("dock: caption cleared");
-            let _ = app.emit(
+            emit_dock_event(
+                app,
                 "partial",
                 serde_json::json!({ "text": "", "streaming": false }),
             );
-            if let Some(win) = window(app) {
-                let _ = win.hide();
-            }
         }
     }
     apply_dock_size(app);
@@ -111,7 +160,10 @@ pub fn set_caption(app: &AppHandle, text: Option<&str>) {
 
 pub fn ensure_on_main(app: &AppHandle) {
     #[cfg(target_os = "linux")]
-    stick_to_all_workspaces(app);
+    {
+        stick_to_all_workspaces(app);
+        shape_input(app);
+    }
     ensure(app);
 }
 
@@ -157,12 +209,14 @@ fn stick_to_all_workspaces(app: &AppHandle) {
 }
 
 pub fn set_state(app: &AppHandle, status: &str, message: Option<&str>) {
+    let payload = serde_json::json!({
+        "state": status,
+        "message": message,
+    });
+    emit_dock_event(app, "overlay-state", payload.clone());
     let _ = app.emit(
         "overlay-state",
-        serde_json::json!({
-            "state": status,
-            "message": message,
-        }),
+        payload,
     );
     crate::tray::apply_state_icon(app, status);
 }

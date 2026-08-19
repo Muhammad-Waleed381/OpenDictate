@@ -112,6 +112,14 @@ pub fn delete_history(conn: &Connection, id: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
+pub fn update_history(conn: &Connection, id: i64, text: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE history SET text = ?1 WHERE id = ?2",
+        rusqlite::params![text.trim(), id],
+    )?;
+    Ok(())
+}
+
 pub fn clear_history(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM history", [])?;
     Ok(())
@@ -133,14 +141,21 @@ pub fn get_dictionary(conn: &Connection) -> rusqlite::Result<Vec<DictEntry>> {
 
 pub fn add_dictionary_word(conn: &Connection, word: &str) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR IGNORE INTO dictionary (word, created_at) VALUES (?1, ?2)",
-        rusqlite::params![word.to_lowercase(), now_timestamp()],
+        "INSERT INTO dictionary (word, created_at)
+         SELECT ?1, ?2
+         WHERE NOT EXISTS (
+             SELECT 1 FROM dictionary WHERE word COLLATE NOCASE = ?1
+         )",
+        rusqlite::params![word.trim(), now_timestamp()],
     )?;
     Ok(())
 }
 
 pub fn remove_dictionary_word(conn: &Connection, word: &str) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM dictionary WHERE word = ?1", [word.to_lowercase()])?;
+    conn.execute(
+        "DELETE FROM dictionary WHERE word COLLATE NOCASE = ?1",
+        [word.trim()],
+    )?;
     Ok(())
 }
 
@@ -189,5 +204,25 @@ mod tests {
             .unwrap();
         assert!(raw.contains("\"stt_model\""));
         assert!(!raw.contains("sttModel"));
+    }
+
+    #[test]
+    fn dictionary_preserves_casing_and_deduplicates_case_insensitively() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE dictionary (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                word TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        add_dictionary_word(&conn, "iPhone").unwrap();
+        add_dictionary_word(&conn, "iphone").unwrap();
+
+        let words = get_dictionary(&conn).unwrap();
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].word, "iPhone");
     }
 }

@@ -7,7 +7,7 @@ use sherpa_onnx::{
 
 use crate::error::{CoreError, Result};
 
-const MAX_STT_THREADS: usize = 4;
+const MAX_STT_THREADS: usize = 8;
 
 /// Streaming (online) recognizer backed by sherpa-onnx `OnlineRecognizer`
 /// (NeMo/parakeet unified transducer models).
