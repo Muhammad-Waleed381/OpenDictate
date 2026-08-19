@@ -26,8 +26,9 @@ When the toggle is enabled:
   replaced only when it appears as its own token, never inside another word
   ("periodontist" is untouched).
 - The word "point" is NOT mapped, preserving decimals ("three point five").
-- Mapping runs before `clean_text`, so a mapped `.?!` still triggers sentence
-  capitalization and space-stripping.
+- Mapping runs first in the pipeline, so a mapped `.?!` still triggers sentence
+  capitalization and space-stripping, and punctuation words win over dictionary
+  terms.
 - Live streaming partial captions are NOT mapped (avoids transient flicker);
   only the committed final text is mapped.
 
@@ -45,7 +46,7 @@ pub fn map_spoken_punctuation(text: &str) -> String
 Offline path (`process_utterance`, `src-tauri/src/dictation.rs` ~469-470):
 
 ```
-raw → correct_dictionary_terms → map_spoken_punctuation → clean_text
+raw → map_spoken_punctuation → correct_dictionary_terms → clean_text
 ```
 
 Streaming path (endpoint handler, `src-tauri/src/dictation.rs` ~361-373):
