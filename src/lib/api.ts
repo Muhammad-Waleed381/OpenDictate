@@ -30,6 +30,7 @@ export interface Settings {
   vad_sensitivity: number;
   continuous: boolean;
   autostart: boolean;
+  spoken_punctuation: boolean;
 }
 
 export type SettingsPatch = Partial<
@@ -44,6 +45,7 @@ export type SettingsPatch = Partial<
     | "vad_sensitivity"
     | "continuous"
     | "autostart"
+    | "spoken_punctuation"
   >
 >;
 

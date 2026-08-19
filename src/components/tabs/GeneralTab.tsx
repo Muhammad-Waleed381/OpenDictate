@@ -180,6 +180,13 @@ export function GeneralTab() {
     } catch {}
   };
 
+  const handleSpokenPunctuationChange = async (enabled: boolean) => {
+    try {
+      await api.setSettings({ spoken_punctuation: enabled });
+      useStore.getState().refreshAll();
+    } catch {}
+  };
+
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -262,6 +269,20 @@ export function GeneralTab() {
           id="autostart"
           checked={settings?.autostart ?? false}
           onCheckedChange={handleAutostartChange}
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="spoken-punctuation">Spoken punctuation</Label>
+          <p className="text-xs text-muted-foreground">
+            Say “period”, “comma”, “question mark”, or “exclamation point” to insert punctuation.
+          </p>
+        </div>
+        <Switch
+          id="spoken-punctuation"
+          checked={settings?.spoken_punctuation ?? false}
+          onCheckedChange={handleSpokenPunctuationChange}
         />
       </div>
 
