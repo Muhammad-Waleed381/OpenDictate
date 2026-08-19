@@ -367,7 +367,10 @@ fn spawn_streaming_loop(app: &AppHandle, state: &AppState) {
             }
 
             if pipe.recognizer.is_endpoint(&pipe.session) {
-                let text = pipe.recognizer.result(&pipe.session);
+                let mut text = pipe.recognizer.result(&pipe.session);
+                if spoken_punctuation_enabled(&state_from_app(&app)) {
+                    text = opendictate_core::text::map_spoken_punctuation(&text);
+                }
                 let duration_ms = pipe.session.started_at.elapsed().as_millis() as u64;
                 if !text.is_empty() {
                     let _ = commit_text(
@@ -414,7 +417,10 @@ fn stop_streaming(app: &AppHandle, state: &AppState) -> Result<TranscriptResult,
     }
 
     pipe.recognizer.accept(&pipe.session, &tail);
-    let text = pipe.recognizer.result(&pipe.session);
+    let mut text = pipe.recognizer.result(&pipe.session);
+    if spoken_punctuation_enabled(state) {
+        text = opendictate_core::text::map_spoken_punctuation(&text);
+    }
     let duration_ms = pipe.session.started_at.elapsed().as_millis() as u64;
     let result = TranscriptResult {
         text: text.clone(),
