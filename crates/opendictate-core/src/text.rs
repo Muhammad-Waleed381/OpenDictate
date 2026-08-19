@@ -155,6 +155,13 @@ pub fn map_spoken_punctuation(text: &str) -> String {
         }
         out.push(symbol);
         cursor = end;
+        // The model may already have emitted the symbol after the spoken
+        // word (e.g. Whisper outputs "period.") — drop the duplicate.
+        let rest = &text[cursor..];
+        let skipped = rest.trim_start();
+        if skipped.starts_with(symbol) {
+            cursor += (rest.len() - skipped.len()) + symbol.len_utf8();
+        }
     }
     out.push_str(&text[cursor..]);
     out
@@ -226,5 +233,19 @@ mod tests {
     #[test]
     fn trims_leading_whitespace_and_preserves_trailing() {
         assert_eq!(map_spoken_punctuation("  period  "), ".  ");
+    }
+
+    #[test]
+    fn collapses_duplicate_symbol_when_model_already_punctuated() {
+        assert_eq!(
+            map_spoken_punctuation("This is just a test of period. What is this?"),
+            "This is just a test of. What is this?"
+        );
+    }
+
+    #[test]
+    fn collapses_duplicate_symbol_separated_by_whitespace() {
+        assert_eq!(map_spoken_punctuation("go period ."), "go.");
+        assert_eq!(map_spoken_punctuation("really question mark ?"), "really?");
     }
 }
