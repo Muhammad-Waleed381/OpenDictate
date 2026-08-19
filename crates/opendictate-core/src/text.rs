@@ -103,6 +103,8 @@ pub fn correct_dictionary_terms(text: &str, terms: &[String]) -> String {
 
 /// Maps spoken punctuation words to their symbols. Case-insensitive,
 /// standalone-token only — "point" is preserved so decimals survive.
+/// Each symbol attaches to the preceding word (trailing gap whitespace is
+/// trimmed), while whitespace between consecutive mapped symbols is preserved.
 pub fn map_spoken_punctuation(text: &str) -> String {
     const PHRASES: &[(&[&str], char)] = &[
         (&["period"], '.'),
@@ -130,6 +132,8 @@ pub fn map_spoken_punctuation(text: &str) -> String {
             .max_by_key(|(length, _)| *length);
 
         if let Some((length, symbol)) = matched {
+            // Previous replacement ended exactly at the token before this match,
+            // so the inter-symbol gap must be preserved.
             let prev_taken = index > 0
                 && !replacements.is_empty()
                 && tokens[index - 1].end == replacements.last().unwrap().1;
@@ -212,5 +216,15 @@ mod tests {
     #[test]
     fn matching_is_case_insensitive() {
         assert_eq!(map_spoken_punctuation("Period Comma"), ". ,");
+    }
+
+    #[test]
+    fn preserves_gap_between_consecutive_identical_symbols() {
+        assert_eq!(map_spoken_punctuation("period period"), ". .");
+    }
+
+    #[test]
+    fn trims_leading_whitespace_and_preserves_trailing() {
+        assert_eq!(map_spoken_punctuation("  period  "), ".  ");
     }
 }
