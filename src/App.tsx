@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Settings, Activity, BookOpen, History, FileText, House } from "lucide-react";
 import { Onboarding } from "@/components/Onboarding";
+import { Toaster } from "@/components/ui/toast";
 import { DockButton } from "@/components/DockButton";
 import { HomeTab } from "@/components/tabs/HomeTab";
 import { SettingsTab } from "@/components/tabs/SettingsTab";
@@ -223,6 +224,7 @@ export function MainApp() {
         <span className="text-muted-foreground tabular-nums">v0.1.0</span>
       </footer>
       {settings && !settings.onboarded && <Onboarding />}
+      <Toaster />
     </div>
   );
 }
