@@ -10,6 +10,7 @@ import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ModelCard } from "@/components/ModelCard";
 import { useTheme } from "@/lib/theme";
+import { toast } from "@/components/ui/toast";
 
 const KEY_NAMES: Record<string, string> = {
   " ": "space",
@@ -159,7 +160,9 @@ export function SettingsTab() {
     try {
       await api.setMic(name);
       useStore.getState().setMic(name);
-    } catch {}
+    } catch (e) {
+      toast.error(`Microphone switch failed: ${String(e)}`);
+    }
   };
 
   const handleLanguageChange = async (language: string | null) => {
@@ -167,7 +170,9 @@ export function SettingsTab() {
     try {
       await api.setSettings({ language });
       useStore.getState().refreshAll();
-    } catch {}
+    } catch (e) {
+      toast.error(`Language change failed: ${String(e)}`);
+    }
   };
 
   const persistToggle = async (
@@ -184,6 +189,7 @@ export function SettingsTab() {
       if (request === toggleRequest.current) {
         const latest = await api.getSettings().catch(() => null);
         if (latest) useStore.getState().setSettings(latest);
+        toast.error("Could not save setting — reverted");
       }
     }
   };
@@ -205,7 +211,9 @@ export function SettingsTab() {
     volumeTimer.current = window.setTimeout(async () => {
       try {
         await api.setSettings({ audio_feedback_volume: value });
-      } catch {}
+      } catch (e) {
+        toast.error(`Could not save volume: ${String(e)}`);
+      }
     }, 150);
   };
 

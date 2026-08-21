@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useRecording } from "@/lib/useRecording";
+import { toast } from "@/components/ui/toast";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
@@ -47,7 +48,6 @@ function ReadyStrip() {
   const catalog = useStore((s) => s.catalog);
   const modelProgress = useStore((s) => s.modelProgress);
   const [downloading, setDownloading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const activeModel = catalog.find((m) => m.id === settings?.stt_model);
   const progress = activeModel
@@ -61,18 +61,20 @@ function ReadyStrip() {
     try {
       await api.setMic(name);
       useStore.getState().setMic(name);
-    } catch {}
+      toast.success(`Microphone: ${micLabel(name, mics)}`);
+    } catch (e) {
+      toast.error(`Microphone switch failed: ${String(e)}`);
+    }
   };
 
   const handleDownload = async () => {
     if (!activeModel) return;
     setDownloading(true);
-    setError(null);
     try {
       await api.ensureModel(activeModel.id);
       await useStore.getState().refreshAll();
     } catch (e) {
-      setError(String(e));
+      toast.error(String(e));
     } finally {
       setDownloading(false);
     }
@@ -157,11 +159,6 @@ function ReadyStrip() {
           </CardContent>
         </Card>
       </div>
-      {error && (
-        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
-          ✕ {error}
-        </div>
-      )}
     </div>
   );
 }
@@ -216,7 +213,9 @@ function LastResultPanel() {
               try {
                 await api.undoLastInsert();
                 setUndone(true);
-              } catch {}
+              } catch (e) {
+                toast.error(String(e));
+              }
             }}
           >
             {undone ? "Undone" : "Undo"}

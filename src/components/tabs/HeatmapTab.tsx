@@ -3,6 +3,7 @@ import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { Card } from "@/components/ui/card";
 
 const DAY_MS = 86_400_000;
 
@@ -88,8 +89,8 @@ export function HeatmapTab() {
     try {
       await api.setSettings({ heatmap_color: hex });
       await useStore.getState().refreshAll();
-    } catch {
-      // ignore transient save failures
+    } catch (e) {
+      toast.error(`Could not save color: ${String(e)}`);
     }
   };
 
@@ -173,8 +174,7 @@ export function HeatmapTab() {
       })
     : "—";
 
-  const statCard =
-    "flex flex-col gap-1 border-2 border-black bg-white p-4 shadow-[4px_4px_0_0_#E8E8E8]";
+  const statCard = "gap-1 p-4";
 
   const cellsByCol: HeatmapCell[][] = useMemo(() => {
     const cols: HeatmapCell[][] = Array.from({ length: 53 }, () => []);
@@ -190,23 +190,23 @@ export function HeatmapTab() {
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div className={statCard}>
+        <Card size="sm" className={statCard}>
           <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
             Words transcribed
           </span>
           <span className="text-3xl font-black tabular-nums">
             {totals.total_words.toLocaleString()}
           </span>
-        </div>
-        <div className={statCard}>
+        </Card>
+        <Card size="sm" className={statCard}>
           <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
             Dictations
           </span>
           <span className="text-3xl font-black tabular-nums">
             {totals.total_sessions.toLocaleString()}
           </span>
-        </div>
-        <div className={statCard}>
+        </Card>
+        <Card size="sm" className={statCard}>
           <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
             Day streak
           </span>
@@ -214,8 +214,8 @@ export function HeatmapTab() {
             {totals.streak_days}
             <span className="ml-1 text-sm font-bold text-muted-foreground">days</span>
           </span>
-        </div>
-        <div className={statCard}>
+        </Card>
+        <Card size="sm" className={statCard}>
           <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
             Best day
           </span>
@@ -225,10 +225,10 @@ export function HeatmapTab() {
           <span className="text-xs font-bold text-muted-foreground">
             {totals.best_words > 0 ? `words · ${bestLabel}` : "—"}
           </span>
-        </div>
+        </Card>
       </div>
 
-      <div className="border-2 border-black bg-white p-5 shadow-[6px_6px_0_0_#E8E8E8]">
+      <Card className="p-5">
         <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3">
           <div className="flex items-baseline gap-2">
             <h3 className="text-sm font-black tracking-widest uppercase">
@@ -262,7 +262,7 @@ export function HeatmapTab() {
             ))}
             <label
               title="Custom color"
-              className="relative flex size-5 cursor-pointer items-center justify-center border-2 border-black/20 bg-white"
+              className="relative flex size-5 cursor-pointer items-center justify-center border-2 border-black bg-white"
             >
               <input
                 type="color"
@@ -321,7 +321,7 @@ export function HeatmapTab() {
                             month: "short",
                             day: "numeric",
                           })} — ${cell.words} word${cell.words === 1 ? "" : "s"}`}
-                          className="size-[13px] border-2 border-black/5 bg-zinc-100"
+                          className="size-[13px] border-2 border-black/5 bg-muted"
                           style={bg ? { backgroundColor: bg } : undefined}
                         />
                       );
@@ -337,7 +337,7 @@ export function HeatmapTab() {
                   <span key={l.level} className="flex items-center gap-1">
                     {l.label && <span>{l.label}</span>}
                     <span
-                      className="size-[11px] border-2 border-black/5 bg-zinc-100"
+                      className="size-[11px] border-2 border-black/5 bg-muted"
                       style={bg ? { backgroundColor: bg } : undefined}
                     />
                   </span>
@@ -346,7 +346,7 @@ export function HeatmapTab() {
             </div>
           </div>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

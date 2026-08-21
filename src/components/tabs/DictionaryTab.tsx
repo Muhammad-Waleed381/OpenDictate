@@ -5,12 +5,12 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "@/components/ui/toast";
 
 export function DictionaryTab() {
   const dictionary = useStore((s) => s.dictionary);
   const [word, setWord] = useState("");
   const [bulkWords, setBulkWords] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
 
   const handleAdd = async () => {
     const trimmed = word.trim();
@@ -18,9 +18,11 @@ export function DictionaryTab() {
     try {
       await api.addDictionaryWord(trimmed);
       setWord("");
-      setMessage(`Added “${trimmed}”`);
+      toast.success(`Added “${trimmed}”`);
       await useStore.getState().refreshAll();
-    } catch {}
+    } catch (e) {
+      toast.error(String(e));
+    }
   };
 
   const handleBulkAdd = async () => {
@@ -32,9 +34,11 @@ export function DictionaryTab() {
     try {
       for (const value of words) await api.addDictionaryWord(value);
       setBulkWords("");
-      setMessage(`Added ${words.length} term${words.length === 1 ? "" : "s"}`);
+      toast.success(`Added ${words.length} term${words.length === 1 ? "" : "s"}`);
       await useStore.getState().refreshAll();
-    } catch {}
+    } catch (e) {
+      toast.error(String(e));
+    }
   };
 
   const handleExport = async () => {
@@ -47,7 +51,7 @@ export function DictionaryTab() {
     link.download = "opendictate-dictionary.txt";
     link.click();
     URL.revokeObjectURL(url);
-    setMessage("Dictionary exported");
+    toast.success("Dictionary exported");
   };
 
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -59,17 +63,22 @@ export function DictionaryTab() {
       .filter(Boolean);
     try {
       for (const value of words) await api.addDictionaryWord(value);
-      setMessage(`Imported ${words.length} term${words.length === 1 ? "" : "s"}`);
+      toast.success(`Imported ${words.length} term${words.length === 1 ? "" : "s"}`);
       await useStore.getState().refreshAll();
-    } catch {}
+    } catch (e) {
+      toast.error(String(e));
+    }
     event.target.value = "";
   };
 
   const handleRemove = async (w: string) => {
     try {
       await api.removeDictionaryWord(w);
+      toast.success(`Removed “${w}”`);
       await useStore.getState().refreshAll();
-    } catch {}
+    } catch (e) {
+      toast.error(String(e));
+    }
   };
 
   return (
@@ -107,11 +116,6 @@ export function DictionaryTab() {
           </label>
         </div>
       </div>
-      {message && (
-        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
-          ✓ {message}
-        </div>
-      )}
       {dictionary.length === 0 ? (
         <div className="border-2 border-dashed border-black p-6 text-center">
           <p className="text-sm font-bold uppercase tracking-wider">
@@ -128,7 +132,7 @@ export function DictionaryTab() {
               {entry.word}
               <button
                 onClick={() => handleRemove(entry.word)}
-                className="flex size-4 items-center justify-center border border-black bg-white text-xs font-bold transition-colors hover:bg-black hover:text-white"
+                className="flex size-4 items-center justify-center border border-black bg-white text-xs font-bold transition-colors hover:bg-destructive hover:text-destructive-foreground"
                 aria-label={`Remove ${entry.word}`}
               >
                 ×
