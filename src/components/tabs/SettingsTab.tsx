@@ -96,7 +96,7 @@ function HotkeyCapture() {
       <Label htmlFor="hotkey">Global hotkey</Label>
       <div className="flex items-center gap-2">
         <div
-          className={`flex h-10 flex-1 items-center border-2 border-black bg-white px-3 font-bold tracking-widest uppercase ${
+          className={`flex h-10 flex-1 items-center border-2 border-border bg-card px-3 font-bold tracking-widest uppercase ${
             capturing ? "animate-od-blink" : ""
           }`}
           onClick={() => setCapturing(true)}
@@ -133,7 +133,7 @@ function HotkeyCapture() {
             : "Click Capture, then press your combination."}
       </p>
       {error && (
-        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
+        <div className="border-2 border-primary bg-primary px-2 py-1.5 text-xs font-bold text-primary-foreground uppercase">
           ✕ {error}
         </div>
       )}

@@ -149,12 +149,12 @@ export function HistoryTab() {
         </Button>
       </div>
       {exported && (
-        <div className="flex flex-wrap items-center gap-2 border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
+        <div className="flex flex-wrap items-center gap-2 border-2 border-primary bg-primary px-2 py-1.5 text-xs font-bold text-primary-foreground uppercase">
           <span className="truncate">✓ Exported — {exported}</span>
           <Button
             size="sm"
             variant="outline"
-            className="ml-auto border-white text-white shadow-none"
+            className="ml-auto border-primary-foreground text-primary-foreground shadow-none"
             onClick={handleReveal}
           >
             Show in folder
@@ -170,7 +170,7 @@ export function HistoryTab() {
           </CardContent>
         </Card>
       ) : filtered.length === 0 ? (
-        <div className="border-2 border-dashed border-black p-6 text-center">
+        <div className="border-2 border-dashed border-border p-6 text-center">
           <p className="text-sm font-bold uppercase tracking-wider">
             {history.length === 0
               ? "No dictations yet"

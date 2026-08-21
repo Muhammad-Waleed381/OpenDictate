@@ -260,7 +260,7 @@ export function HeatmapTab() {
           <div className="ml-auto flex items-center gap-3">
             <button
               onClick={handleReset}
-              className="cursor-pointer border-2 border-black/30 px-2 py-0.5 text-[10px] font-bold tracking-widest text-muted-foreground uppercase transition-colors hover:border-red-500 hover:text-red-500"
+              className="cursor-pointer border-2 border-border/30 px-2 py-0.5 text-[10px] font-bold tracking-widest text-muted-foreground uppercase transition-colors hover:border-red-500 hover:text-red-500"
             >
               Reset stats
             </button>
@@ -274,14 +274,14 @@ export function HeatmapTab() {
                 title={p.name}
                 onClick={() => handleColor(p.hex)}
                 className={`size-5 cursor-pointer border-2 ${
-                  color === p.hex ? "border-black" : "border-black/20"
+                  color === p.hex ? "border-primary" : "border-border/20"
                 }`}
                 style={{ backgroundColor: p.hex }}
               />
             ))}
             <label
               title="Custom color"
-              className="relative flex size-5 cursor-pointer items-center justify-center border-2 border-black bg-white"
+              className="relative flex size-5 cursor-pointer items-center justify-center border-2 border-border bg-card"
             >
               <input
                 type="color"
@@ -290,7 +290,7 @@ export function HeatmapTab() {
                 className="size-0 cursor-pointer opacity-0"
               />
               <span
-                className="size-2.5 border border-black"
+                  className="size-2.5 border border-border"
                 style={{ backgroundColor: color }}
               />
             </label>
@@ -340,7 +340,7 @@ export function HeatmapTab() {
                             month: "short",
                             day: "numeric",
                           })} — ${cell.words} word${cell.words === 1 ? "" : "s"}`}
-                          className="size-[13px] border-2 border-black/5 bg-muted"
+                          className="size-[13px] border-2 border-border/5 bg-muted"
                           style={bg ? { backgroundColor: bg } : undefined}
                         />
                       );
@@ -356,7 +356,7 @@ export function HeatmapTab() {
                   <span key={l.level} className="flex items-center gap-1">
                     {l.label && <span>{l.label}</span>}
                     <span
-                      className="size-[11px] border-2 border-black/5 bg-muted"
+                      className="size-[11px] border-2 border-border/5 bg-muted"
                       style={bg ? { backgroundColor: bg } : undefined}
                     />
                   </span>

@@ -43,7 +43,7 @@ export function Onboarding() {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <div className="flex items-center gap-2">
-            <span className="flex size-6 items-center justify-center border-2 border-black bg-black text-xs font-bold text-white">
+            <span className="flex size-6 items-center justify-center border-2 border-primary bg-primary text-xs font-bold text-primary-foreground">
               OD
             </span>
              <DialogTitle>Setup — 3 quick steps</DialogTitle>
@@ -62,12 +62,12 @@ export function Onboarding() {
               <div key={label} className="flex flex-1 items-center">
                 <div className="flex flex-col items-center gap-1.5">
                   <span
-                    className={`flex size-8 items-center justify-center border-2 border-black text-xs font-bold transition-all duration-200 ease-spring ${
+                    className={`flex size-8 items-center justify-center border-2 border-primary text-xs font-bold transition-all duration-200 ease-spring ${
                       complete
-                        ? "bg-black text-white"
+                        ? "bg-primary text-primary-foreground"
                         : active
-                          ? "bg-black text-white shadow-[3px_3px_0_0_#E8E8E8]"
-                          : "bg-white text-muted-foreground"
+                          ? "bg-primary text-primary-foreground shadow-brutal"
+                          : "bg-card text-muted-foreground"
                     }`}
                   >
                     {complete ? "✓" : `0${n}`}
@@ -83,7 +83,7 @@ export function Onboarding() {
                 {i < STEPS.length - 1 && (
                   <span
                     className={`mx-2 mb-5 h-0.5 flex-1 ${
-                      complete || (active && n === step) ? "bg-black" : "bg-muted-foreground/40"
+                      complete || (active && n === step) ? "bg-primary" : "bg-muted-foreground/40"
                     }`}
                   />
                 )}
@@ -92,12 +92,12 @@ export function Onboarding() {
           })}
         </div>
 
-        <div className="flex flex-col gap-4 border-2 border-black bg-white p-4 shadow-[4px_4px_0_0_#E8E8E8]">
+        <div className="flex flex-col gap-4 border-2 border-border bg-card p-4 shadow-brutal">
           {step === 1 && <MicTest />}
           {step === 2 && <ModelCard />}
           {step === 3 && (
             <div className="flex flex-col items-center gap-4 py-2">
-              <span className="border-2 border-black bg-black px-4 py-2 text-lg font-bold tracking-widest text-white uppercase shadow-[4px_4px_0_0_#E8E8E8]">
+              <span className="border-2 border-primary bg-primary px-4 py-2 text-lg font-bold tracking-widest text-primary-foreground uppercase shadow-brutal">
                 {formatHotkey(settings?.hotkey ?? "ctrl+alt+space")}
               </span>
               <p className="text-center text-sm">

@@ -165,7 +165,7 @@ export function SnippetsTab() {
         <Button variant="outline" onClick={handleExport} disabled={snippets.length === 0}>
           Export snippets
         </Button>
-        <label className="inline-flex cursor-pointer items-center border-2 border-black bg-white px-3 py-2 text-xs font-bold uppercase shadow-[3px_3px_0_0_#E8E8E8] hover:bg-black hover:text-white">
+        <label className="inline-flex cursor-pointer items-center border-2 border-border bg-card px-3 py-2 text-xs font-bold uppercase shadow-brutal hover:bg-primary hover:text-primary-foreground">
           Import snippets
           <input type="file" accept=".json" className="sr-only" onChange={handleImport} />
         </label>
@@ -177,7 +177,7 @@ export function SnippetsTab() {
       </div>
 
       {snippets.length === 0 ? (
-        <div className="border-2 border-dashed border-black p-6 text-center">
+        <div className="border-2 border-dashed border-border p-6 text-center">
           <p className="text-sm font-bold uppercase tracking-wider">No snippets yet</p>
           <p className="mt-1 text-sm text-muted-foreground">
             Add a template above, then dictate “insert snippet &lt;trigger&gt;” to expand it.
@@ -185,7 +185,7 @@ export function SnippetsTab() {
           </p>
         </div>
       ) : (
-        <div className="border-2 border-black">
+        <div className="border-2 border-border">
           <Table>
             <TableHeader>
               <TableRow>

@@ -89,11 +89,11 @@ function ReadyStrip() {
           <div className="flex items-center justify-between">
             <Label>Microphone</Label>
             {micReady ? (
-              <span className="border border-black bg-black px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-white">
+              <span className="border border-primary bg-primary px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-primary-foreground">
                 ✓ Ready
               </span>
             ) : (
-              <span className="border border-black px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
+              <span className="border border-border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
                 Needs setup
               </span>
             )}
@@ -124,11 +124,11 @@ function ReadyStrip() {
           <div className="flex items-center justify-between">
             <Label>Model</Label>
             {modelReady ? (
-              <span className="border border-black bg-black px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-white">
+              <span className="border border-primary bg-primary px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-primary-foreground">
                 ✓ Ready
               </span>
             ) : (
-              <span className="border border-black px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
+              <span className="border border-border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
                 Needs download
               </span>
             )}
@@ -194,13 +194,13 @@ function LastResultPanel() {
     <div className="flex flex-col gap-2">
       <SectionTitle>Last result</SectionTitle>
       {!lastResult ? (
-        <div className="border-2 border-dashed border-black px-4 py-3 text-sm text-muted-foreground">
+        <div className="border-2 border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
           Nothing inserted yet — dictate something and it will show up here.
         </div>
       ) : (
         <Card>
           <CardContent className="flex items-center gap-3 p-4">
-            <span className="flex h-5 shrink-0 items-center border-2 border-black bg-black px-1.5 text-[10px] font-bold tracking-wider text-white">
+            <span className="flex h-5 shrink-0 items-center border-2 border-primary bg-primary px-1.5 text-[10px] font-bold tracking-wider text-primary-foreground">
               INSERTED ✓
             </span>
           <span className="truncate text-sm font-medium">“{lastResult.text}”</span>
@@ -244,17 +244,17 @@ function LiveCaptionsPanel() {
       <SectionTitle>Live captions</SectionTitle>
       <Card className="bg-primary text-primary-foreground">
         <CardContent className="flex items-center gap-3 px-4 py-2.5">
-          <span className="flex h-5 shrink-0 items-center border-2 border-white bg-white px-1.5 text-[10px] font-bold tracking-wider text-black">
+          <span className="flex h-5 shrink-0 items-center border-2 border-primary-foreground bg-primary-foreground px-1.5 text-[10px] font-bold tracking-wider text-primary">
             LIVE
           </span>
-          <span className="size-2 shrink-0 animate-od-blink bg-white" />
+          <span className="size-2 shrink-0 animate-od-blink bg-primary-foreground" />
           <span className="truncate text-sm font-medium">
             {partial ? `“${partial}”` : "Speak to see live captions…"}
           </span>
         </CardContent>
       </Card>
       {!streaming && (
-        <div className="border-2 border-black bg-white px-3 py-2 text-xs font-bold tracking-wider uppercase">
+        <div className="border-2 border-border bg-card px-3 py-2 text-xs font-bold tracking-wider uppercase">
           ⚠ Live captions require a streaming model — switch to the Parakeet
           streaming model in Settings.
         </div>

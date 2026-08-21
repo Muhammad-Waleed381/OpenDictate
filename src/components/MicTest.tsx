@@ -76,14 +76,14 @@ export function MicTest() {
           {testing ? "■ Stop" : "● Start"}
         </Button>
       </div>
-      <div className="flex h-8 items-end gap-[3px] border-2 border-black bg-white p-1.5">
+      <div className="flex h-8 items-end gap-[3px] border-2 border-border bg-card p-1.5">
         {Array.from({ length: 24 }, (_, i) => {
           const sample = i / 23;
           const lit = level > sample;
           return (
             <span
               key={i}
-              className={`flex-1 transition-colors duration-75 ${lit ? "bg-black" : "bg-muted"}`}
+              className={`flex-1 transition-colors duration-75 ${lit ? "bg-primary" : "bg-muted"}`}
             />
           );
         })}
@@ -91,19 +91,19 @@ export function MicTest() {
       <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider">
         <span className="tabular-nums">Peak {(peak * 100).toFixed(0)}%</span>
         {verdict === "working" && (
-          <span className="flex items-center gap-1.5 border-2 border-black bg-black px-2 py-0.5 text-white">
+          <span className="flex items-center gap-1.5 border-2 border-primary bg-primary px-2 py-0.5 text-primary-foreground">
             ✓ Mic working
           </span>
         )}
         {verdict === "quiet" && (
-          <span className="flex animate-od-blink items-center gap-1.5 border-2 border-black bg-white px-2 py-0.5">
+          <span className="flex animate-od-blink items-center gap-1.5 border-2 border-border bg-card px-2 py-0.5">
             ✕ Too quiet
           </span>
         )}
         {testing && <span className="animate-od-blink text-muted-foreground">Listening…</span>}
       </div>
       {error && (
-        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
+        <div className="border-2 border-primary bg-primary px-2 py-1.5 text-xs font-bold text-primary-foreground uppercase">
           ✕ {error}
         </div>
       )}

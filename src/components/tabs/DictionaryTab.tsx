@@ -110,14 +110,14 @@ export function DictionaryTab() {
           <Button variant="outline" onClick={handleExport} disabled={dictionary.length === 0}>
             Export dictionary
           </Button>
-          <label className="inline-flex cursor-pointer items-center border-2 border-black bg-white px-3 py-2 text-xs font-bold uppercase shadow-[3px_3px_0_0_#E8E8E8] hover:bg-black hover:text-white">
+          <label className="inline-flex cursor-pointer items-center border-2 border-border bg-card px-3 py-2 text-xs font-bold uppercase shadow-brutal hover:bg-primary hover:text-primary-foreground">
             Import dictionary
             <input type="file" accept=".txt,.csv" className="sr-only" onChange={handleImport} />
           </label>
         </div>
       </div>
       {dictionary.length === 0 ? (
-        <div className="border-2 border-dashed border-black p-6 text-center">
+        <div className="border-2 border-dashed border-border p-6 text-center">
           <p className="text-sm font-bold uppercase tracking-wider">
             No custom words yet
           </p>
@@ -132,7 +132,7 @@ export function DictionaryTab() {
               {entry.word}
               <button
                 onClick={() => handleRemove(entry.word)}
-                className="flex size-4 items-center justify-center border border-black bg-white text-xs font-bold transition-colors hover:bg-destructive hover:text-destructive-foreground"
+                className="flex size-4 items-center justify-center border border-border bg-card text-xs font-bold transition-colors hover:bg-destructive hover:text-destructive-foreground"
                 aria-label={`Remove ${entry.word}`}
               >
                 ×

@@ -124,15 +124,15 @@ export function ModelCard() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex border-2 border-black">
+      <div className="flex border-2 border-border">
         {(["streaming", "non-streaming"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setView(tab)}
-            className={`flex-1 border-black px-3 py-2 text-xs font-bold tracking-widest uppercase ${
+            className={`flex-1 border-border px-3 py-2 text-xs font-bold tracking-widest uppercase ${
               view === tab
-                ? "bg-black text-white"
-                : "bg-white text-black hover:bg-black/10"
+                ? "bg-primary text-primary-foreground"
+                : "bg-card text-foreground hover:bg-accent"
             } ${tab === "non-streaming" ? "border-l-2" : ""}`}
           >
              {SECTION_LABELS[tab]}
@@ -163,8 +163,8 @@ export function ModelCard() {
                   className={`flex flex-col gap-2 border-2 p-3 ${
                     model.available
                       ? isActive
-                        ? "border-black bg-black text-white"
-                        : "border-black bg-white"
+                        ? "border-border bg-primary text-primary-foreground"
+                        : "border-border bg-card"
                       : "border-muted bg-muted"
                   } ${i > 0 ? "border-t-0" : ""}`}
                 >
@@ -173,8 +173,8 @@ export function ModelCard() {
                       className={`flex size-5 shrink-0 items-center justify-center border-2 text-[10px] font-bold ${
                         model.available
                           ? isActive
-                            ? "border-white text-black bg-white"
-                            : "border-black bg-black text-white"
+                            ? "border-primary-foreground bg-primary-foreground text-primary"
+                            : "border-primary bg-primary text-primary-foreground"
                           : "border-muted-foreground/50 text-muted-foreground"
                       }`}
                     >
@@ -185,7 +185,7 @@ export function ModelCard() {
                     </span>
                     <span
                       className={`shrink-0 text-[11px] font-bold tracking-wider uppercase tabular-nums ${
-                        isActive ? "text-white/70" : "text-muted-foreground"
+                        isActive ? "text-primary-foreground/70" : "text-muted-foreground"
                       }`}
                     >
                       {size !== null
@@ -199,8 +199,8 @@ export function ModelCard() {
                         <span
                           className={`border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
                             isActive
-                              ? "border-white text-black bg-white"
-                              : "border-black bg-black text-white"
+                              ? "border-primary-foreground text-primary bg-primary-foreground"
+                              : "border-primary bg-primary text-primary-foreground"
                           }`}
                         >
                           ✓ Installed
@@ -208,7 +208,7 @@ export function ModelCard() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className={isActive ? "text-white hover:bg-white/20 hover:text-white" : "text-muted-foreground"}
+                          className={isActive ? "text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground" : "text-muted-foreground"}
                           onClick={() => handleDelete(model.id)}
                         >
                           Delete
@@ -218,7 +218,7 @@ export function ModelCard() {
                       <Button
                         size="sm"
                         variant={isActive ? "outline" : "default"}
-                        className={isActive ? "border-white text-white shadow-none" : ""}
+                        className={isActive ? "border-primary-foreground text-primary-foreground shadow-none" : ""}
                         onClick={() => handleDownload(model.id)}
                         disabled={busy}
                       >
@@ -232,7 +232,7 @@ export function ModelCard() {
                     {model.engine_key != null &&
                       model.installed &&
                       (isActive ? (
-                        <span className="ml-auto animate-od-blink border border-white px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
+                        <span className="ml-auto animate-od-blink border border-primary-foreground px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
                           In use
                         </span>
                       ) : (
@@ -282,7 +282,7 @@ export function ModelCard() {
       </div>
 
       {error && (
-        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
+        <div className="border-2 border-primary bg-primary px-2 py-1.5 text-xs font-bold text-primary-foreground uppercase">
           ✕ {error}
         </div>
       )}
