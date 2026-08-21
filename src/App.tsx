@@ -10,6 +10,7 @@ import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui/toast";
 import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
 import { DockButton } from "@/components/DockButton";
+import { useRecording } from "@/lib/useRecording";
 import { HomeTab } from "@/components/tabs/HomeTab";
 import { SettingsTab } from "@/components/tabs/SettingsTab";
 import { DictionaryTab } from "@/components/tabs/DictionaryTab";
@@ -65,42 +66,12 @@ function useOpenDictateEvents() {
 }
 
 function RecordingButton() {
-  const recording = useStore((s) => s.recording);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleClick = async () => {
-    setError(null);
-    if (recording) {
-      try {
-        const result = await api.stopRecording();
-        if (result?.text) {
-          useStore.setState({ lastResult: result });
-        }
-      } catch (e) {
-        setError(String(e));
-      }
-      useStore.getState().setRecording(false);
-    } else {
-      try {
-        await api.startRecording("dictate");
-        useStore.getState().setRecording(true);
-      } catch (e) {
-        setError(String(e));
-      }
-    }
-  };
+  const { recording, toggle } = useRecording();
 
   return (
-    <>
-      <Button onClick={handleClick} variant={recording ? "outline" : "default"} size="sm">
-        {recording ? "■ STOP" : "● RECORD"}
-      </Button>
-      {error && (
-        <span className="absolute right-6 top-full z-10 mt-1 max-w-xs border-2 border-white bg-black px-2 py-1 text-[10px] font-bold tracking-wider text-white uppercase">
-          ✕ {error}
-        </span>
-      )}
-    </>
+    <Button onClick={toggle} variant={recording ? "outline" : "default"} size="sm">
+      {recording ? "■ STOP" : "● RECORD"}
+    </Button>
   );
 }
 

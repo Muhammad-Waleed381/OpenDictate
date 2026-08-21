@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRecording } from "@/lib/useRecording";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
@@ -166,33 +167,12 @@ function ReadyStrip() {
 }
 
 function RecordButton() {
-  const recording = useStore((s) => s.recording);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleClick = async () => {
-    setError(null);
-    if (recording) {
-      try {
-        const result = await api.stopRecording();
-        if (result?.text) useStore.setState({ lastResult: result });
-      } catch (e) {
-        setError(String(e));
-      }
-      useStore.getState().setRecording(false);
-    } else {
-      try {
-        await api.startRecording("dictate");
-        useStore.getState().setRecording(true);
-      } catch (e) {
-        setError(String(e));
-      }
-    }
-  };
+  const { recording, toggle } = useRecording();
 
   return (
     <div className="flex flex-col gap-2">
       <Button
-        onClick={handleClick}
+        onClick={toggle}
         variant={recording ? "outline" : "default"}
         className={`h-16 w-full text-lg font-bold tracking-widest uppercase ${
           recording ? "animate-od-blink" : ""
@@ -205,11 +185,6 @@ function RecordButton() {
           ? "Recording — press the global hotkey to stop."
           : "Dictate — press Record or your global hotkey."}
       </p>
-      {error && (
-        <div className="w-full border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
-          ✕ {error}
-        </div>
-      )}
     </div>
   );
 }
