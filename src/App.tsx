@@ -163,7 +163,7 @@ export function MainApp() {
                 )}
               >
                 {tab === t.id && (
-                  <span className="absolute inset-y-0 left-0 w-1 bg-brand" aria-hidden />
+                  <span className="absolute inset-y-0 left-0 w-1 bg-brand-foreground" aria-hidden />
                 )}
                 <t.icon className="size-4 shrink-0" strokeWidth={2.5} />
                 {!collapsed && t.label}
