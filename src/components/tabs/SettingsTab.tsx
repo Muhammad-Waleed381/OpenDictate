@@ -6,6 +6,7 @@ import { formatHotkey } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ModelCard } from "@/components/ModelCard";
 import { useTheme } from "@/lib/theme";
@@ -344,15 +345,13 @@ export function SettingsTab() {
           <Label htmlFor="audio-feedback-volume" className="shrink-0">
             Volume
           </Label>
-          <input
+          <Slider
             id="audio-feedback-volume"
-            type="range"
+            className="flex-1"
             min={0}
             max={100}
             value={Math.round((settings?.audio_feedback_volume ?? 0.5) * 100)}
-            onChange={(e) => handleVolumeChange(Number(e.target.value) / 100)}
-            className="h-2 flex-1 cursor-pointer appearance-none border-2 border-black bg-white"
-            style={{ accentColor: "#0F172A" }}
+            onChange={(v) => handleVolumeChange(v / 100)}
           />
           <span className="w-12 text-right text-xs font-bold tabular-nums">
             {Math.round((settings?.audio_feedback_volume ?? 0.5) * 100)}%

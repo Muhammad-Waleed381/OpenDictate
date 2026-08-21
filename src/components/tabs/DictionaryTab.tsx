@@ -2,6 +2,7 @@ import { useState, type ChangeEvent } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
@@ -87,12 +88,11 @@ export function DictionaryTab() {
         </Button>
       </div>
       <div className="flex flex-col gap-2">
-        <textarea
+        <Textarea
           value={bulkWords}
           onChange={(event) => setBulkWords(event.target.value)}
           placeholder="Paste several terms, one per line or separated by commas…"
           rows={3}
-          className="w-full resize-y border-2 border-black bg-white px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-black"
         />
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={handleBulkAdd} disabled={!bulkWords.trim()}>

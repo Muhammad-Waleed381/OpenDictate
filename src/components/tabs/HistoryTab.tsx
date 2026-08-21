@@ -3,8 +3,10 @@ import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -168,7 +170,7 @@ export function HistoryTab() {
           </p>
         </div>
       ) : (
-        <div className="border-2 border-black shadow-[6px_6px_0_0_#E8E8E8]">
+        <Card>
           <Table>
             <TableHeader>
               <TableRow>
@@ -184,11 +186,11 @@ export function HistoryTab() {
                   <TableCell className="max-w-0">
                     {editingId === entry.id ? (
                       <div className="flex min-w-[220px] flex-col gap-2">
-                        <textarea
+                        <Textarea
                           value={editText}
                           onChange={(event) => setEditText(event.target.value)}
                           rows={3}
-                          className="w-full border-2 border-black bg-white p-2 text-sm"
+                          aria-label="Edit dictation text"
                         />
                         <div className="flex gap-1">
                           <Button size="sm" onClick={saveEdit}>Save</Button>
@@ -231,7 +233,7 @@ export function HistoryTab() {
               ))}
             </TableBody>
           </Table>
-        </div>
+        </Card>
       )}
     </div>
   );

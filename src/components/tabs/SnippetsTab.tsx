@@ -3,7 +3,9 @@ import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -118,7 +120,8 @@ export function SnippetsTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-2 border-2 border-black bg-white p-3">
+      <Card>
+        <CardContent className="flex flex-col gap-2 p-3">
         <div className="flex flex-wrap items-center gap-2">
           <Input
             value={trigger}
@@ -139,14 +142,14 @@ export function SnippetsTab() {
             From last dictation
           </Button>
         </div>
-        <textarea
+        <Textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
           placeholder="Template text that gets inserted when you say: “insert snippet <trigger>”…"
           rows={3}
-          className="w-full resize-y border-2 border-black bg-white px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-black"
         />
-      </div>
+        </CardContent>
+      </Card>
 
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" onClick={handleExport} disabled={snippets.length === 0}>
@@ -204,12 +207,11 @@ export function SnippetsTab() {
                       />
                     </TableCell>
                     <TableCell className="align-top">
-                      <textarea
+                      <Textarea
                         value={editText}
                         onChange={(e) => setEditText(e.target.value)}
                         rows={3}
                         aria-label="Edit snippet text"
-                        className="w-full resize-y border-2 border-black bg-white px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-black"
                       />
                     </TableCell>
                     <TableCell className="align-top">
