@@ -4,20 +4,20 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "group/button inline-flex shrink-0 items-center justify-center rounded-none border-2 border-black bg-clip-padding text-sm font-bold uppercase tracking-wide whitespace-nowrap transition-all duration-150 ease-spring outline-none select-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none aria-invalid:border-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/button inline-flex shrink-0 items-center justify-center rounded-none border-2 border-border bg-clip-padding text-sm font-bold uppercase tracking-wide whitespace-nowrap transition-all duration-150 ease-spring outline-none select-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none aria-invalid:border-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground shadow-[3px_3px_0_0_#000] hover:shadow-[1px_1px_0_0_#000] hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none",
+          "bg-primary text-primary-foreground shadow-brutal hover:shadow-brutal-hover hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none",
         outline:
-          "border-black bg-background text-foreground shadow-[3px_3px_0_0_#000] hover:bg-accent hover:shadow-[1px_1px_0_0_#000] hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none aria-expanded:bg-accent",
+          "border-border bg-background text-foreground shadow-brutal hover:bg-accent hover:shadow-brutal-hover hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none aria-expanded:bg-accent",
         secondary:
-          "bg-secondary text-secondary-foreground shadow-[3px_3px_0_0_#000] hover:bg-accent hover:shadow-[1px_1px_0_0_#000] hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none",
+          "bg-secondary text-secondary-foreground shadow-brutal hover:bg-accent hover:shadow-brutal-hover hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none",
         ghost:
           "border-transparent bg-transparent text-foreground shadow-none hover:bg-accent active:translate-y-px",
         destructive:
-          "bg-destructive text-destructive-foreground border-destructive shadow-[3px_3px_0_0_#000] hover:shadow-[1px_1px_0_0_#000] hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none",
+          "bg-destructive text-destructive-foreground border-destructive shadow-brutal hover:shadow-brutal-hover hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none",
         link: "border-transparent bg-transparent text-primary underline-offset-4 hover:underline shadow-none",
       },
       size: {
