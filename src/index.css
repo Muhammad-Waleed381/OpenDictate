@@ -40,8 +40,10 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
-    --radius-sm: 0;
-    --radius-md: 0;
+    --color-brand: var(--brand);
+    --color-brand-foreground: var(--brand-foreground);
+    --radius-sm: 0.25rem;
+    --radius-md: 0.375rem;
     --radius-lg: 0;
     --radius-xl: 0;
     --radius-2xl: 0;
@@ -66,11 +68,13 @@
     --muted-foreground: #525252;
     --accent: #E8E8E8;
     --accent-foreground: #000000;
-    --destructive: #000000;
+    --brand: #2545D3;
+    --brand-foreground: #FFFFFF;
+    --destructive: #C62828;
     --destructive-foreground: #FFFFFF;
     --border: #000000;
     --input: #000000;
-    --ring: #000000;
+    --ring: #2545D3;
     --chart-1: #000000;
     --chart-2: #333333;
     --chart-3: #666666;
@@ -84,43 +88,47 @@
     --sidebar-accent: #E8E8E8;
     --sidebar-accent-foreground: #000000;
     --sidebar-border: #000000;
-    --sidebar-ring: #000000;
+    --sidebar-ring: #2545D3;
+    --od-shadow: #1a1a1a;
 }
 
 .dark {
-    --background: #FFFFFF;
-    --foreground: #000000;
-    --card: #FFFFFF;
-    --card-foreground: #000000;
-    --popover: #FFFFFF;
-    --popover-foreground: #000000;
-    --primary: #000000;
-    --primary-foreground: #FFFFFF;
-    --secondary: #F2F2F2;
-    --secondary-foreground: #000000;
-    --muted: #F2F2F2;
-    --muted-foreground: #525252;
-    --accent: #E8E8E8;
-    --accent-foreground: #000000;
-    --destructive: #000000;
+    --background: #111111;
+    --foreground: #F2F2F2;
+    --card: #1A1A1A;
+    --card-foreground: #F2F2F2;
+    --popover: #1A1A1A;
+    --popover-foreground: #F2F2F2;
+    --primary: #F2F2F2;
+    --primary-foreground: #111111;
+    --secondary: #262626;
+    --secondary-foreground: #F2F2F2;
+    --muted: #262626;
+    --muted-foreground: #A3A3A3;
+    --accent: #262626;
+    --accent-foreground: #F2F2F2;
+    --brand: #8FA6FF;
+    --brand-foreground: #0A1030;
+    --destructive: #EF5350;
     --destructive-foreground: #FFFFFF;
-    --border: #000000;
-    --input: #000000;
-    --ring: #000000;
-    --chart-1: #000000;
-    --chart-2: #333333;
-    --chart-3: #666666;
-    --chart-4: #999999;
-    --chart-5: #CCCCCC;
+    --border: #3A3A3A;
+    --input: #3A3A3A;
+    --ring: #8FA6FF;
+    --chart-1: #F2F2F2;
+    --chart-2: #C9C9C9;
+    --chart-3: #999999;
+    --chart-4: #666666;
+    --chart-5: #3D3D3D;
     --radius: 0rem;
-    --sidebar: #FFFFFF;
-    --sidebar-foreground: #000000;
-    --sidebar-primary: #000000;
-    --sidebar-primary-foreground: #FFFFFF;
-    --sidebar-accent: #E8E8E8;
-    --sidebar-accent-foreground: #000000;
-    --sidebar-border: #000000;
-    --sidebar-ring: #000000;
+    --sidebar: #161616;
+    --sidebar-foreground: #F2F2F2;
+    --sidebar-primary: #F2F2F2;
+    --sidebar-primary-foreground: #111111;
+    --sidebar-accent: #262626;
+    --sidebar-accent-foreground: #F2F2F2;
+    --sidebar-border: #3A3A3A;
+    --sidebar-ring: #8FA6FF;
+    --od-shadow: rgba(0, 0, 0, 0.55);
 }
 
 @layer base {
@@ -148,23 +156,32 @@
 
 @layer components {
   .brutal {
-    @apply border-2 border-black;
-    box-shadow: 4px 4px 0 0 #000;
+    @apply border-2 border-border;
+    box-shadow: 4px 4px 0 0 var(--od-shadow);
   }
   .brutal-sm {
-    @apply border-2 border-black;
-    box-shadow: 2px 2px 0 0 #000;
+    @apply border-2 border-border;
+    box-shadow: 2px 2px 0 0 var(--od-shadow);
   }
   .brutal-lg {
-    @apply border-2 border-black;
-    box-shadow: 8px 8px 0 0 #000;
+    @apply border-2 border-border;
+    box-shadow: 8px 8px 0 0 var(--od-shadow);
   }
   .brutal-pressed {
     transform: translate(2px, 2px);
-    box-shadow: 0 0 0 0 #000;
+    box-shadow: 0 0 0 0 var(--od-shadow);
+  }
+  .dark .brutal,
+  .dark .brutal-sm,
+  .dark .brutal-lg {
+    box-shadow: 4px 4px 12px var(--od-shadow);
+  }
+  .dark .brutal-pressed {
+    transform: none;
+    box-shadow: none;
   }
   .brutal-inset {
-    box-shadow: inset 3px 3px 0 0 #E8E8E8;
+    box-shadow: inset 3px 3px 0 0 var(--accent);
   }
   .hatch {
     background-image: repeating-linear-gradient(
@@ -279,4 +296,16 @@
 
 @utility animate-od-ping {
   animation: od-ping 1.4s var(--ease-fluid) infinite;
+}
+
+@utility shadow-brutal {
+  box-shadow: 3px 3px 0 0 var(--od-shadow);
+}
+
+@utility shadow-brutal-hover {
+  box-shadow: 1px 1px 0 0 var(--od-shadow);
+}
+
+@utility shadow-brutal-none {
+  box-shadow: 0 0 0 0 var(--od-shadow);
 }

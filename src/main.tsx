@@ -4,8 +4,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MainApp, DockApp } from "./App";
 import "./index.css";
 
-document.documentElement.classList.add("dark");
-
 async function main() {
   let isDock = false;
   try {
