@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MainApp, DockApp } from "./App";
+import { initTheme } from "@/lib/theme";
 import "./index.css";
 
 async function main() {
@@ -12,6 +13,7 @@ async function main() {
     isDock = new URLSearchParams(window.location.search).get("window") === "dock";
   }
   if (isDock) document.documentElement.classList.add("dock-page");
+  if (!isDock) initTheme();
 
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
