@@ -244,7 +244,7 @@ export function SnippetsTab() {
                         <Button size="icon-sm" variant="ghost" title="Copy text" onClick={() => handleCopySnippet(entry.text)}>
                           <Copy />
                         </Button>
-                        <Button size="icon-sm" variant="ghost" title="Delete" onClick={() => handleDelete(entry.id, entry.trigger)}>
+                        <Button size="icon-sm" variant="destructive" title="Delete" onClick={() => handleDelete(entry.id, entry.trigger)}>
                           <Trash2 />
                         </Button>
                       </div>
