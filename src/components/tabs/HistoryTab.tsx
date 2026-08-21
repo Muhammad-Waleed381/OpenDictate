@@ -5,6 +5,8 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "@/components/ui/toast";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Table,
   TableBody,
@@ -67,11 +69,20 @@ export function HistoryTab() {
   };
 
   const handleDelete = async (id: number) => {
-    if (!window.confirm("Delete this dictation?")) return;
+    const ok = await confirmDialog({
+      title: "Delete dictation?",
+      description: "This entry will be removed permanently.",
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteHistory(id);
+      toast.success("Deleted");
       await useStore.getState().refreshAll();
-    } catch {}
+    } catch (e) {
+      toast.error(String(e));
+    }
   };
 
   const beginEdit = (entry: api.HistoryEntry) => {
@@ -91,11 +102,20 @@ export function HistoryTab() {
   };
 
   const handleClearAll = async () => {
-    if (!window.confirm("Clear all history? This cannot be undone.")) return;
+    const ok = await confirmDialog({
+      title: "Clear all history?",
+      description: "Every dictation entry will be removed permanently. This cannot be undone.",
+      confirmLabel: "Clear all",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await api.clearHistory();
+      toast.success("History cleared");
       await useStore.getState().refreshAll();
-    } catch {}
+    } catch (e) {
+      toast.error(String(e));
+    }
   };
 
   return (

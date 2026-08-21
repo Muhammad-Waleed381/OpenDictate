@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
+import { toast } from "@/components/ui/toast";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 const DAY_MS = 86_400_000;
 
@@ -92,12 +94,19 @@ export function HeatmapTab() {
   };
 
   const handleReset = async () => {
-    if (!window.confirm("Reset all word activity? This clears the heatmap and counters permanently.")) return;
+    const ok = await confirmDialog({
+      title: "Reset statistics?",
+      description: "All word counts and streaks will be zeroed.",
+      confirmLabel: "Reset",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await api.resetWordStats();
+      toast.success("Statistics reset");
       await useStore.getState().refreshAll();
-    } catch {
-      // ignore transient failures
+    } catch (e) {
+      toast.error(String(e));
     }
   };
 

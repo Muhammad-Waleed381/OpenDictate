@@ -3,6 +3,8 @@ import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { toast } from "@/components/ui/toast";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
@@ -97,12 +99,19 @@ export function ModelCard() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm(`Delete ${id} from disk?`)) return;
+    const ok = await confirmDialog({
+      title: "Delete model?",
+      description: `${id} will be removed from disk.`,
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await api.removeModel(id);
+      toast.success(`Deleted ${id}`);
       await useStore.getState().refreshAll();
     } catch (e) {
-      setError(String(e));
+      toast.error(String(e));
     }
   };
 

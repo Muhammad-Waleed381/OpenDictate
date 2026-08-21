@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Settings, Activity, BookOpen, History, FileText, House } from "lucide-react";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui/toast";
+import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
 import { DockButton } from "@/components/DockButton";
 import { HomeTab } from "@/components/tabs/HomeTab";
 import { SettingsTab } from "@/components/tabs/SettingsTab";
@@ -225,6 +226,7 @@ export function MainApp() {
       </footer>
       {settings && !settings.onboarded && <Onboarding />}
       <Toaster />
+      <ConfirmDialogHost />
     </div>
   );
 }
