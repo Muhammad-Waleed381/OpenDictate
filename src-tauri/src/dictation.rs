@@ -45,6 +45,7 @@ pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String
     dock::set_caption(app, Some("listening…"));
     if !test {
         notify::notify("Dictation on", "Recording — press Ctrl+K to stop");
+        play_sound(state, crate::audio::SoundEvent::Listening);
     }
 
     if streaming {
@@ -132,6 +133,21 @@ fn spoken_punctuation_enabled(state: &AppState) -> bool {
         .lock()
         .map(|s| s.spoken_punctuation)
         .unwrap_or(false)
+}
+
+fn audio_feedback(state: &AppState) -> (bool, f32) {
+    state
+        .settings
+        .lock()
+        .map(|s| (s.audio_feedback, s.audio_feedback_volume))
+        .unwrap_or((false, 0.5))
+}
+
+fn play_sound(state: &AppState, event: crate::audio::SoundEvent) {
+    let (enabled, volume) = audio_feedback(state);
+    if enabled {
+        crate::audio::play_event(volume, event);
+    }
 }
 
 fn sensitivity(state: &AppState) -> f32 {
@@ -353,6 +369,9 @@ fn spawn_streaming_loop(app: &AppHandle, state: &AppState) {
             };
             if !samples.is_empty() {
                 pipe.recognizer.accept(&pipe.session, &samples);
+                // Decode everything accepted so far; without this the decode
+                // queue grows unboundedly and partials lag further behind.
+                pipe.recognizer.drain(&pipe.session);
             }
 
             if pipe.recognizer.is_ready(&pipe.session) {
@@ -373,14 +392,17 @@ fn spawn_streaming_loop(app: &AppHandle, state: &AppState) {
                 }
                 let duration_ms = pipe.session.started_at.elapsed().as_millis() as u64;
                 if !text.is_empty() {
-                    let _ = commit_text(
-                        &app,
-                        &state_from_app(&app),
-                        &text,
-                        duration_ms,
-                        true,
-                        false,
-                    );
+                    let handled = handle_snippet_command(&app, &state_from_app(&app), &text);
+                    if handled.is_none() {
+                        let _ = commit_text(
+                            &app,
+                            &state_from_app(&app),
+                            &text,
+                            duration_ms,
+                            true,
+                            false,
+                        );
+                    }
                 }
                 pipe.recognizer.reset(&mut pipe.session);
             }
@@ -417,6 +439,17 @@ fn stop_streaming(app: &AppHandle, state: &AppState) -> Result<TranscriptResult,
     }
 
     pipe.recognizer.accept(&pipe.session, &tail);
+    // The online decoder lags behind real time; drain everything accepted so
+    // the final transcript reflects the whole utterance. This can take a
+    // while on slow CPUs — keep the dock caption alive while it runs.
+    log::info!("streaming stop: draining decode backlog");
+    let drain_started = Instant::now();
+    dock::set_caption(app, Some("finalizing…"));
+    pipe.recognizer.drain(&pipe.session);
+    log::info!(
+        "streaming stop: drained in {} ms",
+        drain_started.elapsed().as_millis()
+    );
     let mut text = pipe.recognizer.result(&pipe.session);
     if spoken_punctuation_enabled(state) {
         text = opendictate_core::text::map_spoken_punctuation(&text);
@@ -432,9 +465,20 @@ fn stop_streaming(app: &AppHandle, state: &AppState) -> Result<TranscriptResult,
     dock::set_caption(app, None);
 
     if !test && !text.is_empty() {
-        let _ = commit_text(app, state, &text, duration_ms, true, true);
+        let snippet_text = handle_snippet_command(app, state, &text);
+        if let Some(snippet_text) = snippet_text {
+            if !snippet_text.is_empty() {
+                return Ok(TranscriptResult {
+                    text: snippet_text,
+                    duration_ms,
+                });
+            }
+        } else {
+            let _ = commit_text(app, state, &text, duration_ms, true, true);
+        }
     } else if !test {
         notify::notify("No speech detected", "Try again or check your microphone");
+        play_sound(state, crate::audio::SoundEvent::Error);
         let app = app.clone();
         std::thread::spawn(move || {
             dock::set_caption(&app, Some("no speech detected"));
@@ -461,6 +505,7 @@ fn process_utterance(
         } else {
             dock::set_caption(app, Some("no speech detected"));
             notify::notify("No speech detected", "Try again or check your microphone");
+            play_sound(state, crate::audio::SoundEvent::Error);
             let app = app.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(2200));
@@ -488,6 +533,13 @@ fn process_utterance(
     let corrected = opendictate_core::text::correct_dictionary_terms(&mapped, &dictionary);
     let text = inject::clean_text(&corrected);
     let duration_ms = speech.speech_duration_ms;
+
+    if let Some(snippet_text) = handle_snippet_command(app, state, &text) {
+        return Ok(TranscriptResult {
+            text: snippet_text,
+            duration_ms,
+        });
+    }
 
     if test {
         dock::set_caption(app, None);
@@ -523,6 +575,95 @@ fn show_inserted(app: &AppHandle, text: &str) {
         dock::set_caption(&app, None);
         dock::set_state(&app, "hidden", None);
     });
+}
+
+/// Detects an `insert snippet <name>` command. Snippet triggers are restricted
+/// to a single word, so only the first word after the prefix is treated as the
+/// name; any remaining words are dictated normally after the snippet text is
+/// inserted. The snippet is resolved with a best-effort fuzzy match on its
+/// trigger, injected alongside the tail, and dock/notification feedback is
+/// driven. Returns `Some(inserted_text)` — or `Some("")` when the name could
+/// not be resolved. Returns `None` when the text is not a snippet command, so
+/// callers fall through to normal dictation. Snippet expansions never write
+/// history entries.
+fn handle_snippet_command(app: &AppHandle, state: &AppState, text: &str) -> Option<String> {
+    const PREFIX: &str = "insert snippet";
+    let lowered = text.trim().to_lowercase();
+    let rest = lowered.strip_prefix(PREFIX)?.trim();
+    if rest.is_empty() {
+        return None;
+    }
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let name = parts.next().unwrap_or("");
+    if name.is_empty() {
+        return None;
+    }
+    let tail = parts.next().unwrap_or("").trim();
+
+    let snippet = match state.db.lock() {
+        Ok(conn) => match db::list_snippets(&conn) {
+            Ok(list) => {
+                let triggers: Vec<String> = list
+                    .iter()
+                    .filter(|s| opendictate_core::text::is_single_word(&s.trigger))
+                    .map(|s| s.trigger.clone())
+                    .collect();
+                let matched = opendictate_core::text::fuzzy_match_trigger(name, &triggers, 0.6);
+                matched.and_then(|(trigger, _)| {
+                    list.into_iter().find(|s| s.trigger == trigger)
+                })
+            }
+            Err(e) => {
+                log::warn!("snippet lookup failed: {e}");
+                return Some(String::new());
+            }
+        },
+        Err(e) => {
+            log::warn!("snippet lookup failed: {e}");
+            return Some(String::new());
+        }
+    };
+
+    let snippet = match snippet {
+        Some(snippet) => snippet,
+        None => {
+            let message = format!("Snippet not found: \"{name}\"");
+            dock::set_state(app, "error", Some(&message));
+            notify::notify("Snippet not found", &message);
+            play_sound(state, crate::audio::SoundEvent::Error);
+            return Some(String::new());
+        }
+    };
+
+    let inserted = if tail.is_empty() {
+        snippet.text.clone()
+    } else {
+        format!("{} {}", snippet.text.trim(), tail)
+    };
+
+    if let Err(e) = inject::inject_text(app, &inserted, &insert_mode(state)) {
+        let message = format!("failed to paste: {e}");
+        dock::set_state(app, "error", Some(&message));
+        notify::notify("Dictation error", &format!("Failed to insert snippet: {e}"));
+        play_sound(state, crate::audio::SoundEvent::Error);
+        return Some(String::new());
+    }
+    if let Ok(mut last) = state.last_inserted.lock() {
+        *last = Some(inserted.clone());
+    }
+
+    let _ = app.emit(
+        "transcript",
+        serde_json::json!({ "text": inserted, "injected": true }),
+    );
+    let _ = app.emit(
+        "overlay-state",
+        serde_json::json!({ "state": "inserted", "message": null }),
+    );
+    notify::notify("Snippet inserted", &format!("\"{}\"", snippet.trigger));
+    play_sound(state, crate::audio::SoundEvent::Inserted);
+    show_inserted(app, &inserted);
+    Some(inserted)
 }
 
 /// Emits the transcript, persists it, injects it and drives dock feedback.
@@ -562,11 +703,13 @@ fn commit_text(
         if let Err(e) = inject::inject_text(app, text, &insert_mode(state)) {
             dock::set_state(app, "error", Some(&format!("failed to paste: {e}")));
             notify::notify("Dictation error", &format!("Failed to insert text: {e}"));
+            play_sound(state, crate::audio::SoundEvent::Error);
             return Err(e);
         }
         if let Ok(mut last) = state.last_inserted.lock() {
             *last = Some(text.to_string());
         }
+        play_sound(state, crate::audio::SoundEvent::Inserted);
     }
 
     if !continuous || finish {
