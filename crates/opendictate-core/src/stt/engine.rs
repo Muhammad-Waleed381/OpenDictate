@@ -166,6 +166,11 @@ impl SttEngine {
 
         // Whisper models have a hard 30-second context window.
         // Longer audio must be chunked or sherpa-onnx silently truncates.
+        //
+        // The NeMo transducer/CTC (Parakeet) offline models do NOT need this:
+        // they accept arbitrarily long audio in a single pass (verified
+        // empirically; sherpa-onnx only *advises* <=30s for offline models).
+        // Streaming models feed samples incrementally and are unaffected too.
         if self.kind == ModelKind::Whisper && audio.len() > WHISPER_CHUNK_SAMPLES {
             let mut results = Vec::new();
             for chunk in audio.chunks(WHISPER_CHUNK_SAMPLES) {
