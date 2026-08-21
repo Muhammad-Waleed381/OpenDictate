@@ -13,20 +13,30 @@ pub const MAX_RECORDING_SAMPLES: usize = (SAMPLE_RATE * MAX_RECORDING_SECS as u3
 const STATE_IDLE: u8 = 0;
 const STATE_RECORDING: u8 = 1;
 
-struct StreamHandle(Option<cpal::Stream>);
+/// Which capture backend is currently driving the shared buffer.
+enum CaptureHandle {
+    /// cpal/ALSA capture stream (kept alive for its Drop impl).
+    Alsa(#[allow(dead_code)] cpal::Stream),
+    /// PulseAudio capture thread (Linux only).
+    #[cfg(target_os = "linux")]
+    Pulse(std::thread::JoinHandle<()>),
+    None,
+}
 
 // SAFETY: cpal::Stream is !Send+!Sync as a conservative platform marker. The
-// underlying capture handles (ALSA, PulseAudio, WASAPI, CoreAudio) are safe to
-// move between threads when access is serialized through a Mutex, and the
-// stream is only ever dropped from the thread that holds the lock.
-unsafe impl Send for StreamHandle {}
-unsafe impl Sync for StreamHandle {}
+// underlying capture handles are safe to move between threads when access is
+// serialized through the Mutex, and the stream is only ever dropped from the
+// thread that holds the lock.
+#[repr(transparent)]
+struct SharedCaptureHandle(Mutex<CaptureHandle>);
+unsafe impl Send for SharedCaptureHandle {}
+unsafe impl Sync for SharedCaptureHandle {}
 
 pub struct AudioRecorder {
     state: Arc<AtomicU8>,
     buffer: Arc<Mutex<Vec<f32>>>,
     stop_signal: Arc<AtomicBool>,
-    stream: Arc<Mutex<StreamHandle>>,
+    stream: Arc<SharedCaptureHandle>,
     started_at: Arc<Mutex<Option<Instant>>>,
 }
 
@@ -124,7 +134,7 @@ impl AudioRecorder {
             state: Arc::new(AtomicU8::new(STATE_IDLE)),
             buffer: Arc::new(Mutex::new(Vec::new())),
             stop_signal: Arc::new(AtomicBool::new(false)),
-            stream: Arc::new(Mutex::new(StreamHandle(None))),
+            stream: Arc::new(SharedCaptureHandle(Mutex::new(CaptureHandle::None))),
             started_at: Arc::new(Mutex::new(None)),
         }
     }
@@ -137,7 +147,49 @@ impl AudioRecorder {
         self.start_with_device(device)
     }
 
-    pub fn start_with_name(&self, name: &str) -> Result<()> {
+    /// Starts recording from a stored mic id.
+    ///
+    ///   - `"default"` / empty → the system default input (cpal/ALSA).
+    ///   - `"pulse:<source>"` → that exact PulseAudio source (Linux).
+    ///   - anything else → a cpal device name, falling back to the default.
+    pub fn start_with_name(&self, id: &str) -> Result<()> {
+        let trimmed = id.trim();
+        if trimmed.is_empty() || trimmed == "default" {
+            return self.start();
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(source) = crate::audio::pulse::pulse_source_name(trimmed) {
+            if !source.is_empty() {
+                return self.start_pulse(source);
+            }
+        }
+        self.start_with_cpal_name(trimmed)
+    }
+
+    /// PulseAudio capture from a named source (Linux).
+    #[cfg(target_os = "linux")]
+    pub fn start_pulse(&self, source: &str) -> Result<()> {
+        if self.state.load(Ordering::SeqCst) != STATE_IDLE {
+            return Err(CoreError::Audio(
+                "recording already in progress".to_string(),
+            ));
+        }
+        self.stop_signal.store(false, Ordering::SeqCst);
+        self.buffer.lock().map(|mut b| b.clear()).unwrap();
+
+        let handle = crate::audio::pulse::spawn_capture(
+            source,
+            Arc::clone(&self.stop_signal),
+            Arc::clone(&self.buffer),
+            Arc::clone(&self.started_at),
+        )?;
+        self.stream.0.lock().map(|mut s| *s = CaptureHandle::Pulse(handle)).unwrap();
+        self.state.store(STATE_RECORDING, Ordering::SeqCst);
+        log::info!("pulse recording started: {source}");
+        Ok(())
+    }
+
+    fn start_with_cpal_name(&self, name: &str) -> Result<()> {
         let host = cpal::default_host();
         let device = host
             .input_devices()
@@ -287,7 +339,7 @@ impl AudioRecorder {
             .play()
             .map_err(|e| CoreError::Audio(format!("failed to start stream: {e}")))?;
 
-        self.stream.lock().map(|mut s| s.0 = Some(stream)).unwrap();
+        self.stream.0.lock().map(|mut s| *s = CaptureHandle::Alsa(stream)).unwrap();
         self.started_at
             .lock()
             .map(|mut t| *t = Some(Instant::now()))
@@ -297,12 +349,26 @@ impl AudioRecorder {
         Ok(())
     }
 
+    /// Stops the active capture backend: drops the cpal stream or joins the
+    /// PulseAudio thread. Must only be called after `stop_signal` is set.
+    fn release_stream(&self) {
+        let mut guard = self.stream.0.lock().unwrap_or_else(|e| e.into_inner());
+        match std::mem::replace(&mut *guard, CaptureHandle::None) {
+            CaptureHandle::Alsa(_) => {}
+            #[cfg(target_os = "linux")]
+            CaptureHandle::Pulse(handle) => {
+                let _ = handle.join();
+            }
+            CaptureHandle::None => {}
+        }
+    }
+
     pub fn stop(&self) -> Result<Vec<f32>> {
         if self.state.load(Ordering::SeqCst) != STATE_RECORDING {
             return Err(CoreError::Audio("no recording in progress".to_string()));
         }
         self.stop_signal.store(true, Ordering::SeqCst);
-        self.stream.lock().map(|mut s| s.0 = None).unwrap();
+        self.release_stream();
         let audio = self
             .buffer
             .lock()
@@ -319,7 +385,7 @@ impl AudioRecorder {
             return Err(CoreError::Audio("no recording in progress".to_string()));
         }
         self.stop_signal.store(true, Ordering::SeqCst);
-        self.stream.lock().map(|mut s| s.0 = None).unwrap();
+        self.release_stream();
         self.buffer.lock().map(|mut b| *b = Vec::new()).unwrap();
         self.started_at.lock().map(|mut t| *t = None).unwrap();
         self.state.store(STATE_IDLE, Ordering::SeqCst);
