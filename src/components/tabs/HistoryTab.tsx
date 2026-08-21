@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { ClipboardPaste, Copy, Pencil, Trash2 } from "lucide-react";
@@ -28,6 +29,7 @@ function formatDate(value: string): string {
 
 export function HistoryTab() {
   const history = useStore((s) => s.history);
+  const hydrated = useStore((s) => s.hydrated);
   const [query, setQuery] = useState("");
   const [exported, setExported] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -159,7 +161,15 @@ export function HistoryTab() {
           </Button>
         </div>
       )}
-      {filtered.length === 0 ? (
+      {!hydrated ? (
+        <Card>
+          <CardContent className="flex flex-col gap-2 p-4">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </CardContent>
+        </Card>
+      ) : filtered.length === 0 ? (
         <div className="border-2 border-dashed border-black p-6 text-center">
           <p className="text-sm font-bold uppercase tracking-wider">
             {history.length === 0

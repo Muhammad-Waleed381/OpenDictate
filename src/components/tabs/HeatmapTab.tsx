@@ -4,6 +4,7 @@ import * as api from "@/lib/api";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const DAY_MS = 86_400_000;
 
@@ -81,6 +82,7 @@ interface HeatmapCell {
 
 export function HeatmapTab() {
   const stats = useStore((s) => s.stats);
+  const hydrated = useStore((s) => s.hydrated);
   const settings = useStore((s) => s.settings);
   const color = settings?.heatmap_color ?? DEFAULT_COLOR;
   const cellColors = useMemo(() => shadesFor(color), [color]);
@@ -189,44 +191,61 @@ export function HeatmapTab() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Card size="sm" className={statCard}>
-          <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
-            Words transcribed
-          </span>
-          <span className="text-3xl font-black tabular-nums">
-            {totals.total_words.toLocaleString()}
-          </span>
-        </Card>
-        <Card size="sm" className={statCard}>
-          <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
-            Dictations
-          </span>
-          <span className="text-3xl font-black tabular-nums">
-            {totals.total_sessions.toLocaleString()}
-          </span>
-        </Card>
-        <Card size="sm" className={statCard}>
-          <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
-            Day streak
-          </span>
-          <span className="text-3xl font-black tabular-nums">
-            {totals.streak_days}
-            <span className="ml-1 text-sm font-bold text-muted-foreground">days</span>
-          </span>
-        </Card>
-        <Card size="sm" className={statCard}>
-          <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
-            Best day
-          </span>
-          <span className="text-3xl font-black tabular-nums">
-            {totals.best_words.toLocaleString()}
-          </span>
-          <span className="text-xs font-bold text-muted-foreground">
-            {totals.best_words > 0 ? `words · ${bestLabel}` : "—"}
-          </span>
-        </Card>
-      </div>
+      {stats === null && !hydrated ? (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-24" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <Card size="sm" className={statCard}>
+            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+              Words transcribed
+            </span>
+            <span className="text-3xl font-black tabular-nums">
+              {totals.total_words.toLocaleString()}
+            </span>
+          </Card>
+          <Card size="sm" className={statCard}>
+            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+              Dictations
+            </span>
+            <span className="text-3xl font-black tabular-nums">
+              {totals.total_sessions.toLocaleString()}
+            </span>
+          </Card>
+          <Card size="sm" className={statCard}>
+            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+              Day streak
+            </span>
+            <span className="text-3xl font-black tabular-nums">
+              {totals.streak_days}
+              <span className="ml-1 text-sm font-bold text-muted-foreground">days</span>
+            </span>
+          </Card>
+          <Card size="sm" className={statCard}>
+            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+              Best day
+            </span>
+            <span className="text-3xl font-black tabular-nums">
+              {totals.best_words.toLocaleString()}
+            </span>
+            <span className="text-xs font-bold text-muted-foreground">
+              {totals.best_words > 0 ? `words · ${bestLabel}` : "—"}
+            </span>
+          </Card>
+        </div>
+      )}
+
+      {hydrated && totals.total_words === 0 && (
+        <div className="rounded-none border-2 border-dashed border-border p-6 text-center">
+          <p className="text-sm font-bold uppercase tracking-wider">No activity yet</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Word counts appear here after your first dictation — try the Home tab.
+          </p>
+        </div>
+      )}
 
       <Card className="p-5">
         <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3">

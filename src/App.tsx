@@ -155,13 +155,16 @@ export function MainApp() {
                 onClick={() => setTab(t.id)}
                 title={collapsed ? t.label : undefined}
                 className={cn(
-                  "flex cursor-pointer items-center text-xs font-bold tracking-wider uppercase transition-colors duration-150",
+                  "relative flex cursor-pointer items-center text-xs font-bold tracking-wider uppercase transition-colors duration-150",
                   collapsed ? "justify-center py-2" : "gap-2.5 justify-start px-4 py-2.5",
                   tab === t.id
                     ? "bg-brand text-brand-foreground"
                     : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground",
                 )}
               >
+                {tab === t.id && (
+                  <span className="absolute inset-y-0 left-0 w-1 bg-brand" aria-hidden />
+                )}
                 <t.icon className="size-4 shrink-0" strokeWidth={2.5} />
                 {!collapsed && t.label}
               </button>

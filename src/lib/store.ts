@@ -15,13 +15,16 @@ interface OpenDictateStore {
   settings: api.Settings | null;
   history: api.HistoryEntry[];
   dictionary: api.DictEntry[];
+  snippets: api.SnippetEntry[];
   recording: boolean;
   mic: string | null;
-  mics: string[];
+  mics: api.MicDevice[];
   modelProgress: ModelProgress[];
   lastResult: api.TranscriptResult | null;
   stats: api.WordStats | null;
   partial: string;
+  settingsRevision: number;
+  hydrated: boolean;
 
   setLevel: (level: number) => void;
   setOverlayState: (overlayState: api.OverlayState) => void;
@@ -30,9 +33,10 @@ interface OpenDictateStore {
   setSettings: (settings: api.Settings) => void;
   setHistory: (history: api.HistoryEntry[]) => void;
   setDictionary: (dictionary: api.DictEntry[]) => void;
+  setSnippets: (snippets: api.SnippetEntry[]) => void;
   setRecording: (recording: boolean) => void;
   setMic: (mic: string | null) => void;
-  setMics: (mics: string[]) => void;
+  setMics: (mics: api.MicDevice[]) => void;
   setModelProgress: (modelProgress: ModelProgress[]) => void;
   addModelProgress: (progress: ModelProgress) => void;
   setPartial: (text: string) => void;
@@ -43,14 +47,16 @@ interface OpenDictateStore {
   refreshAll: () => Promise<void>;
 }
 
-export const useStore = create<OpenDictateStore>()((set) => ({
+export const useStore = create<OpenDictateStore>()((set, get) => ({
   level: 0,
   overlayState: null,
   models: null,
   catalog: [],
   settings: null,
+  settingsRevision: 0,
   history: [],
   dictionary: [],
+  snippets: [],
   recording: false,
   mic: null,
   mics: [],
@@ -58,14 +64,17 @@ export const useStore = create<OpenDictateStore>()((set) => ({
   lastResult: null,
   stats: null,
   partial: "",
+  hydrated: false,
 
   setLevel: (level) => set({ level }),
   setOverlayState: (overlayState) => set({ overlayState }),
   setModels: (models) => set({ models }),
   setCatalog: (catalog) => set({ catalog }),
-  setSettings: (settings) => set({ settings }),
+  setSettings: (settings) =>
+    set((state) => ({ settings, settingsRevision: state.settingsRevision + 1 })),
   setHistory: (history) => set({ history }),
   setDictionary: (dictionary) => set({ dictionary }),
+  setSnippets: (snippets) => set({ snippets }),
   setRecording: (recording) => set({ recording }),
   setMic: (mic) => set({ mic }),
   setMics: (mics) => set({ mics }),
@@ -97,18 +106,25 @@ export const useStore = create<OpenDictateStore>()((set) => ({
   },
 
   refreshAll: async () => {
-    const [settings, models, catalog, history, dictionary, mics, mic, recording, stats] =
+    // Fetch settings independently and always apply it, so a failure in any
+    // other call (stats, catalog, etc.) can't block the UI from reflecting
+    // the real backend state.
+    const revision = get().settingsRevision;
+    const settings = await api.getSettings().catch(() => null);
+    if (settings && get().settingsRevision === revision) set({ settings });
+    const [models, catalog, history, dictionary, snippets, mics, mic, recording, stats] =
       await Promise.all([
-        api.getSettings(),
-        api.getModelsStatus(),
-        api.getModelsCatalog(),
-        api.getHistory(),
-        api.getDictionary(),
-        api.listMics(),
-        api.getMic(),
-        api.isRecording(),
-        api.getWordStats(),
+        api.getModelsStatus().catch(() => null),
+        api.getModelsCatalog().catch(() => []),
+        api.getHistory().catch(() => []),
+        api.getDictionary().catch(() => []),
+        api.listSnippets().catch(() => []),
+        api.listMics().catch(() => []),
+        api.getMic().catch(() => null),
+        api.isRecording().catch(() => false),
+        api.getWordStats().catch(() => null),
       ]);
-    set({ settings, models, catalog, history, dictionary, mics, mic, recording, stats });
+    set({ models, catalog, history, dictionary, snippets, mics, mic, recording, stats });
+    set({ hydrated: true });
   },
 }));
