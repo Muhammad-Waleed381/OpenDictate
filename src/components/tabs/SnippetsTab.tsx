@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { Copy, Pencil, Trash2 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -22,24 +23,21 @@ export function SnippetsTab() {
   const lastResult = useStore((s) => s.lastResult);
   const [trigger, setTrigger] = useState("");
   const [text, setText] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [exported, setExported] = useState<string | null>(null);
+  const [lastExportPath, setLastExportPath] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editTrigger, setEditTrigger] = useState("");
   const [editText, setEditText] = useState("");
 
   const handleAdd = async () => {
-    setError(null);
     if (!trigger.trim() || !text.trim()) return;
     try {
       await api.addSnippet(trigger, text);
       setTrigger("");
       setText("");
-      setMessage(`Added “${trigger.trim()}”`);
+      toast.success(`Added “${trigger.trim()}”`);
       await useStore.getState().refreshAll();
     } catch (e) {
-      setError(String(e));
+      toast.error(String(e));
     }
   };
 
@@ -47,7 +45,7 @@ export function SnippetsTab() {
     if (!lastResult?.text) return;
     setText(lastResult.text);
     setTrigger("");
-    setMessage("Filled from last dictation — give it a trigger name");
+    toast.info("Filled from last dictation — give it a trigger name");
   };
 
   const beginEdit = (entry: api.SnippetEntry) => {
@@ -57,15 +55,14 @@ export function SnippetsTab() {
   };
 
   const saveEdit = async (id: number) => {
-    setError(null);
     if (!editTrigger.trim() || !editText.trim()) return;
     try {
       await api.updateSnippet(id, editTrigger, editText);
       setEditingId(null);
-      setMessage("Snippet updated");
+      toast.success("Snippet updated");
       await useStore.getState().refreshAll();
     } catch (e) {
-      setError(String(e));
+      toast.error(String(e));
     }
   };
 
@@ -86,34 +83,47 @@ export function SnippetsTab() {
     }
   };
 
+  const revealExport = (path: string) => {
+    setLastExportPath(path);
+  };
+
   const handleExport = async () => {
-    setError(null);
     try {
       const path = await api.exportSnippets();
-      setExported(path);
+      revealExport(path);
+      toast.info(`Exported to ${path}`);
     } catch (e) {
-      setExported(null);
-      setError(String(e));
+      toast.error(String(e));
     }
   };
 
   const handleReveal = async () => {
-    if (!exported) return;
+    if (!lastExportPath) return;
     try {
-      await revealItemInDir(exported);
-    } catch {}
+      await revealItemInDir(lastExportPath);
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
+  const handleCopySnippet = async (text: string) => {
+    try {
+      await api.copyText(text);
+      toast.success("Copied");
+    } catch (e) {
+      toast.error(String(e));
+    }
   };
 
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    setError(null);
     try {
       const imported = await api.importSnippets(await file.text());
-      setMessage(`Imported ${imported} snippet${imported === 1 ? "" : "s"}`);
+      toast.success(`Imported ${imported} snippet${imported === 1 ? "" : "s"}`);
       await useStore.getState().refreshAll();
     } catch (e) {
-      setError(String(e));
+      toast.error(String(e));
     }
     event.target.value = "";
   };
@@ -159,23 +169,12 @@ export function SnippetsTab() {
           Import snippets
           <input type="file" accept=".json" className="sr-only" onChange={handleImport} />
         </label>
-        {exported && (
+        {lastExportPath && (
           <Button variant="outline" onClick={handleReveal}>
             Reveal export
           </Button>
         )}
       </div>
-
-      {message && (
-        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
-          ✓ {message}
-        </div>
-      )}
-      {error && (
-        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
-          ✕ {error}
-        </div>
-      )}
 
       {snippets.length === 0 ? (
         <div className="border-2 border-dashed border-black p-6 text-center">
@@ -215,13 +214,13 @@ export function SnippetsTab() {
                       />
                     </TableCell>
                     <TableCell className="align-top">
-                      <div className="flex flex-col gap-1.5">
+                      <div className="flex gap-1">
                         <Button size="sm" onClick={() => saveEdit(entry.id)}>
                           Save
                         </Button>
                         <Button
                           size="sm"
-                          variant="outline"
+                          variant="ghost"
                           onClick={() => setEditingId(null)}
                         >
                           Cancel
@@ -238,16 +237,15 @@ export function SnippetsTab() {
                       <span className="block truncate">{entry.text}</span>
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-col gap-1.5">
-                        <Button size="sm" variant="outline" onClick={() => beginEdit(entry)}>
-                          Edit
+                      <div className="flex items-center justify-end gap-1">
+                        <Button size="icon-sm" variant="ghost" title="Edit" onClick={() => beginEdit(entry)}>
+                          <Pencil />
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleDelete(entry.id, entry.trigger)}
-                        >
-                          Delete
+                        <Button size="icon-sm" variant="ghost" title="Copy text" onClick={() => handleCopySnippet(entry.text)}>
+                          <Copy />
+                        </Button>
+                        <Button size="icon-sm" variant="ghost" title="Delete" onClick={() => handleDelete(entry.id, entry.trigger)}>
+                          <Trash2 />
                         </Button>
                       </div>
                     </TableCell>

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { ClipboardPaste, Copy, Pencil, Trash2 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -29,7 +30,6 @@ export function HistoryTab() {
   const history = useStore((s) => s.history);
   const [query, setQuery] = useState("");
   const [exported, setExported] = useState<string | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
@@ -41,13 +41,13 @@ export function HistoryTab() {
   }, [history, query]);
 
   const handleExport = async (kind: api.ExportKind) => {
-    setExportError(null);
     try {
       const path = await api.exportHistory(kind);
       setExported(path);
+      toast.info(`Exported — ${path}`);
     } catch (e) {
       setExported(null);
-      setExportError(String(e));
+      toast.error(String(e));
     }
   };
 
@@ -55,19 +55,27 @@ export function HistoryTab() {
     if (!exported) return;
     try {
       await revealItemInDir(exported);
-    } catch {}
+    } catch (e) {
+      toast.error(String(e));
+    }
   };
 
   const handleCopy = async (text: string) => {
     try {
       await api.copyText(text);
-    } catch {}
+      toast.success("Copied");
+    } catch (e) {
+      toast.error(String(e));
+    }
   };
 
   const handleInsert = async (text: string) => {
     try {
       await api.pasteClipboard(text);
-    } catch {}
+      toast.success("Sent to clipboard");
+    } catch (e) {
+      toast.error(String(e));
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -99,7 +107,7 @@ export function HistoryTab() {
       setEditingId(null);
       await useStore.getState().refreshAll();
     } catch (e) {
-      setExportError(String(e));
+      toast.error(String(e));
     }
   };
 
@@ -149,11 +157,6 @@ export function HistoryTab() {
           >
             Show in folder
           </Button>
-        </div>
-      )}
-      {exportError && (
-        <div className="border-2 border-black bg-black px-2 py-1.5 text-xs font-bold text-white uppercase">
-          ✕ {exportError}
         </div>
       )}
       {filtered.length === 0 ? (
@@ -215,17 +218,17 @@ export function HistoryTab() {
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">
-                       <Button size="sm" variant="ghost" onClick={() => beginEdit(entry)}>
-                         Edit
-                       </Button>
-                       <Button size="sm" variant="ghost" onClick={() => handleInsert(entry.text)}>
-                        Re-insert
+                      <Button size="icon-sm" variant="ghost" title="Edit" onClick={() => beginEdit(entry)}>
+                        <Pencil />
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => handleCopy(entry.text)}>
-                        Copy
+                      <Button size="icon-sm" variant="ghost" title="Re-insert" onClick={() => handleInsert(entry.text)}>
+                        <ClipboardPaste />
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => handleDelete(entry.id)}>
-                        Delete
+                      <Button size="icon-sm" variant="ghost" title="Copy" onClick={() => handleCopy(entry.text)}>
+                        <Copy />
+                      </Button>
+                      <Button size="icon-sm" variant="destructive" title="Delete" onClick={() => handleDelete(entry.id)}>
+                        <Trash2 />
                       </Button>
                     </div>
                   </TableCell>
