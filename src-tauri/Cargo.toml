@@ -1,7 +1,7 @@
 [package]
 name = "opendictate"
 version.workspace = true
-description = "OpenDictate — local-first voice dictation for Linux"
+description = "OpenDictate — local-first voice dictation for your desktop"
 authors = ["Muhammad-Waleed381"]
 edition.workspace = true
 license.workspace = true
