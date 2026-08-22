@@ -234,10 +234,6 @@ function LastResultPanel() {
 
 function LiveCaptionsPanel() {
   const partial = useStore((s) => s.partial);
-  const settings = useStore((s) => s.settings);
-  const catalog = useStore((s) => s.catalog);
-  const activeModel = catalog.find((m) => m.id === settings?.stt_model);
-  const streaming = !!activeModel?.streaming;
 
   return (
     <div className="flex flex-col gap-2">
@@ -253,12 +249,6 @@ function LiveCaptionsPanel() {
           </span>
         </CardContent>
       </Card>
-      {!streaming && (
-        <div className="border-2 border-border bg-card px-3 py-2 text-xs font-bold tracking-wider uppercase">
-          ⚠ Live captions require a streaming model — switch to the Parakeet
-          streaming model in Settings.
-        </div>
-      )}
     </div>
   );
 }
