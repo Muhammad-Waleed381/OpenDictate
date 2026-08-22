@@ -29,6 +29,13 @@ pub struct StreamingSession {
 
 impl StreamingRecognizer {
     pub fn new(model_dir: &Path) -> Result<Self> {
+        Self::new_for(model_dir, Some("nemo_transducer"))
+    }
+
+    /// Same as [`new`] but with an explicit sherpa `model_type`. Pass `None`
+    /// to let sherpa auto-detect (required for non-NeMo engines like
+    /// zipformer, where a wrong hint aborts feature setup).
+    pub fn new_for(model_dir: &Path, model_type: Option<&str>) -> Result<Self> {
         if !model_dir.exists() {
             return Err(CoreError::Transcription(format!(
                 "streaming model directory not found at {}",
@@ -92,7 +99,7 @@ impl StreamingRecognizer {
                 tokens: Some(tokens.to_string_lossy().to_string()),
                 num_threads: n_threads,
                 provider: Some("cpu".to_string()),
-                model_type: Some("nemo_transducer".to_string()),
+                model_type: model_type.map(|s| s.to_string()),
                 ..Default::default()
             },
             decoding_method: Some("greedy_search".to_string()),
@@ -129,12 +136,15 @@ impl StreamingRecognizer {
         }
     }
 
-    /// Feeds a chunk of waveform samples into the session. The caller is
-    /// responsible for tracking the capture-buffer watermark.
+    /// Feeds a chunk of waveform samples into the session. Does NOT decode:
+    /// engines differ in how many feature frames a decode consumes
+    /// (zipformer wants 39, NeMo accepts fewer), so decoding here would
+    /// underflow the buffer on small feeds. Callers gate decoding through
+    /// [`Self::is_ready`] / [`Self::drain`]. The capture-buffer watermark is
+    /// owned by the caller.
     pub fn accept(&self, session: &StreamingSession, samples: &[f32]) {
         if !samples.is_empty() {
             session.stream.accept_waveform(16000, samples);
-            self.recognizer.decode(&session.stream);
         }
     }
 
@@ -171,9 +181,15 @@ impl StreamingRecognizer {
     /// and returns the real-time factor (wall time / audio time). RTF < 1
     /// means the model can keep up with live audio on this CPU.
     pub fn benchmark_rtf(model_dir: &Path) -> Result<f32> {
+        Self::benchmark_rtf_for(model_dir, Some("nemo_transducer"))
+    }
+
+    /// [`benchmark_rtf`] with an explicit sherpa `model_type` (see
+    /// [`new_for`]).
+    pub fn benchmark_rtf_for(model_dir: &Path, model_type: Option<&str>) -> Result<f32> {
         const BENCH_SECONDS: f32 = 3.0;
         const SAMPLES_PER_CHUNK: usize = 1600; // 100 ms
-        let recognizer = Self::new(model_dir)?;
+        let recognizer = Self::new_for(model_dir, model_type)?;
         let session = recognizer.create_session(None);
 
         // Deterministic pseudo-noise with speech-like energy; encoder cost is
@@ -244,6 +260,8 @@ mod tests {
         for slice in wave.samples().chunks(chunk) {
             recognizer.accept(&session, slice);
             if recognizer.is_ready(&session) {
+                // accept() only feeds; decoding is explicit and gated.
+                recognizer.drain(&session);
                 let text = recognizer.result(&session);
                 if !text.is_empty() {
                     partials.push(text.clone());
@@ -259,6 +277,7 @@ mod tests {
         }
 
         assert!(!partials.is_empty(), "expected partial hypotheses");
+        recognizer.drain(&session);
         let final_text = recognizer.result(&session);
         assert!(!final_text.is_empty(), "expected a final hypothesis");
         eprintln!("partials={partials:?}");
