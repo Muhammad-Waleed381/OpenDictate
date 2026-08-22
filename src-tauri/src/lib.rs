@@ -109,6 +109,7 @@ pub fn run() {
                 }
             }
             let _ = hotkey::register(handle, &handle.state::<AppState>(), &settings.hotkey);
+            #[cfg(target_os = "linux")]
             hotkey::install_socket_toggle(handle.clone(), socket_path);
             dock::init(handle);
 

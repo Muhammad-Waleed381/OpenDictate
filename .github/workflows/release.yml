@@ -1,0 +1,77 @@
+name: Release
+
+# Builds signed-free installers for all three platforms on version tags.
+# Windows: NSIS .exe + MSI. macOS: universal .dmg/.app. Linux: .deb/.AppImage.
+#
+# Local cross-compilation is not possible (sherpa-onnx builds C++ per
+# platform), so CI is the only place these artifacts are produced.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+          - platform: windows-latest
+            args: ""
+          - platform: ubuntu-22.04
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Linux system deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libpulse-dev libudev-dev cmake
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build the app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "OpenDictate ${{ github.ref_name }}"
+          releaseBody: |
+            OpenDictate — local-first voice dictation.
+
+            - Windows: `.msi` / `.exe` (NSIS) installers
+            - macOS: universal `.dmg` (Apple Silicon + Intel)
+            - Linux: `.deb` and `.AppImage`
+
+            Models download inside the app on first run; everything stays local.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

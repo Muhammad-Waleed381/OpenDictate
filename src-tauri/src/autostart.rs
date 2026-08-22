@@ -1,8 +1,13 @@
-use std::fs;
+// Launch-at-login. Linux writes a freedesktop `.desktop` entry into the
+// user's autostart directory; other platforms are not wired up yet and
+// report unsupported instead of silently doing nothing.
 
-use tauri::{AppHandle, Manager};
+/// Enables or disables launch-at-login.
+#[cfg(target_os = "linux")]
+pub fn set_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use std::fs;
+    use tauri::Manager;
 
-pub fn set_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
     let dir = app
         .path()
         .config_dir()
@@ -26,4 +31,9 @@ pub fn set_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
         "[Desktop Entry]\nType=Application\nName=OpenDictate\nExec=\"{executable}\"\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
     );
     fs::write(file, desktop).map_err(|e| format!("failed to enable autostart: {e}"))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn set_enabled(_app: &tauri::AppHandle, _enabled: bool) -> Result<(), String> {
+    Err("autostart is not supported on this platform yet".to_string())
 }
