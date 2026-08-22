@@ -2,7 +2,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use crate::state::{DictEntry, HistoryEntry, Settings};
+use crate::state::{DictEntry, HistoryEntry, Settings, SnippetEntry};
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
@@ -28,6 +28,12 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
             day TEXT PRIMARY KEY,
             words INTEGER NOT NULL DEFAULT 0,
             sessions INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS snippets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trigger TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL
         );",
     )?;
     let backfilled: i64 = conn.query_row("SELECT COUNT(*) FROM daily_stats", [], |r| r.get(0))?;
@@ -159,6 +165,59 @@ pub fn remove_dictionary_word(conn: &Connection, word: &str) -> rusqlite::Result
     Ok(())
 }
 
+pub fn list_snippets(conn: &Connection) -> rusqlite::Result<Vec<SnippetEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, trigger, text, created_at FROM snippets ORDER BY trigger COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(SnippetEntry {
+            id: r.get(0)?,
+            trigger: r.get(1)?,
+            text: r.get(2)?,
+            created_at: r.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Inserts a snippet unless the trigger is already taken (case-insensitively).
+/// Returns whether the row was inserted.
+pub fn add_snippet(conn: &Connection, trigger: &str, text: &str) -> rusqlite::Result<bool> {
+    let inserted = conn.execute(
+        "INSERT INTO snippets (trigger, text, created_at)
+         SELECT ?1, ?2, ?3
+         WHERE NOT EXISTS (
+             SELECT 1 FROM snippets WHERE trigger COLLATE NOCASE = ?1
+         )",
+        rusqlite::params![trigger.trim(), text.trim(), now_timestamp()],
+    )?;
+    Ok(inserted == 1)
+}
+
+/// Updates a snippet's trigger and text unless the id is missing or the new
+/// trigger collides with a different row. Returns whether a row was updated.
+pub fn update_snippet(
+    conn: &Connection,
+    id: i64,
+    trigger: &str,
+    text: &str,
+) -> rusqlite::Result<bool> {
+    let updated = conn.execute(
+        "UPDATE snippets SET trigger = ?1, text = ?2
+         WHERE id = ?3
+           AND NOT EXISTS (
+               SELECT 1 FROM snippets WHERE trigger COLLATE NOCASE = ?1 AND id != ?3
+           )",
+        rusqlite::params![trigger.trim(), text.trim(), id],
+    )?;
+    Ok(updated == 1)
+}
+
+pub fn remove_snippet(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
+    let removed = conn.execute("DELETE FROM snippets WHERE id = ?1", [id])?;
+    Ok(removed == 1)
+}
+
 pub fn word_stats(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
     let mut stmt = conn.prepare("SELECT day, words FROM daily_stats ORDER BY day")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
@@ -198,6 +257,8 @@ mod tests {
         assert!(s.onboarded);
         assert_eq!(s.stt_model, "parakeet-tdt-ctc-110m-int8");
         assert!(!s.spoken_punctuation);
+        assert!(!s.audio_feedback);
+        assert_eq!(s.audio_feedback_volume, 0.5);
 
         save_settings(&conn, &s).unwrap();
         let raw: String = conn
@@ -206,6 +267,15 @@ mod tests {
         assert!(raw.contains("\"stt_model\""));
         assert!(!raw.contains("sttModel"));
         assert!(raw.contains("\"spoken_punctuation\""));
+        assert!(raw.contains("\"audio_feedback\""));
+
+        let mut patched = s;
+        patched.audio_feedback = true;
+        patched.audio_feedback_volume = 0.25;
+        save_settings(&conn, &patched).unwrap();
+        let reloaded = load_settings(&conn);
+        assert!(reloaded.audio_feedback);
+        assert_eq!(reloaded.audio_feedback_volume, 0.25);
     }
 
     #[test]
@@ -226,5 +296,38 @@ mod tests {
         let words = get_dictionary(&conn).unwrap();
         assert_eq!(words.len(), 1);
         assert_eq!(words[0].word, "iPhone");
+    }
+
+    #[test]
+    fn snippets_crud_and_case_insensitive_triggers() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE snippets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trigger TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        assert!(add_snippet(&conn, "Signature", "Best regards").unwrap());
+        assert!(!add_snippet(&conn, "signature", "Other").unwrap(), "duplicate trigger rejected");
+        assert!(add_snippet(&conn, "Meeting notes", "Notes").unwrap());
+
+        let mut list = list_snippets(&conn).unwrap();
+        assert_eq!(list.len(), 2);
+        list.sort_by(|a, b| a.trigger.cmp(&b.trigger));
+        assert_eq!(list[0].trigger, "Meeting notes");
+
+        let sig = list_snippets(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|s| s.trigger.eq_ignore_ascii_case("signature"))
+            .unwrap();
+        assert!(update_snippet(&conn, sig.id, "Signature", "Best, Waleed").unwrap());
+        assert!(!update_snippet(&conn, sig.id, "meeting notes", "collides").unwrap(), "collision rejected");
+        assert!(remove_snippet(&conn, sig.id).unwrap());
+        assert_eq!(list_snippets(&conn).unwrap().len(), 1);
     }
 }
