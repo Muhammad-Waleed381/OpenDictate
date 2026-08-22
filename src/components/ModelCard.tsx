@@ -122,6 +122,8 @@ export function ModelCard() {
     .filter((m) => m.installed)
     .reduce((sum, m) => sum + (Number.isFinite(m.disk_bytes) ? m.disk_bytes : 0), 0);
   const sttModels = catalog.filter((m) => m.kind === "stt");
+  const captionModel = catalog.find((m) => m.kind === "caption");
+  const captionBusy = downloading === captionModel?.id;
   const visibleModels = sttModels.filter((m) => m.streaming === (view === "streaming"));
   const missingCount = visibleModels.filter((m) => m.available && !m.installed).length;
 
@@ -277,6 +279,37 @@ export function ModelCard() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {captionModel && (
+        <div className="flex flex-col gap-2 border-2 border-dashed border-border bg-card p-3">
+          <div className="flex items-center gap-2">
+            <span className="border border-border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-muted-foreground">
+              Built-in
+            </span>
+            <span className="text-sm font-bold uppercase tracking-wide">{captionModel.name}</span>
+            {captionModel.installed ? (
+              <span className="border border-border bg-primary px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-primary-foreground">
+                ✓ Ready
+              </span>
+            ) : (
+              <span className="ml-auto">
+                <Button size="sm" onClick={() => handleDownload(captionModel.id)} disabled={captionBusy}>
+                  {captionBusy ? "Downloading…" : "Download"}
+                </Button>
+              </span>
+            )}
+            {captionBusy && (
+              <Button size="icon-sm" variant="ghost" title="Cancel" onClick={() => handleDelete(captionModel.id)}>
+                ×
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Powers live captions during dictation — works with every model. Auto-fetched in the
+            background; safe to delete (it re-downloads on demand).
+          </p>
         </div>
       )}
 

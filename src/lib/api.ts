@@ -11,7 +11,7 @@ export interface ModelsStatus {
 export interface ModelInfo {
   id: string;
   name: string;
-  kind: "stt" | "vad";
+  kind: "stt" | "vad" | "caption";
   engine_key: string | null;
   size_bytes: number;
   disk_bytes: number;
