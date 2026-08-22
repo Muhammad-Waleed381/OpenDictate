@@ -202,6 +202,7 @@ fn gsettings_set(schema: &str, key: &str, value: &str) {
     }
 }
 
+#[cfg(unix)]
 pub fn install_socket_toggle(app: AppHandle, path: std::path::PathBuf) {
     let _ = std::fs::remove_file(&path);
     let listener = match std::os::unix::net::UnixListener::bind(&path) {
@@ -227,6 +228,9 @@ pub fn install_socket_toggle(app: AppHandle, path: std::path::PathBuf) {
     log::info!("toggle socket armed: {}", path.display());
 }
 
+/// Single-instance guard over the toggle socket. Unix only; other platforms
+/// have no socket yet, so a second instance is allowed to proceed.
+#[cfg(unix)]
 pub fn is_another_instance(path: &std::path::Path) -> bool {
     use std::io::Write;
     if let Ok(mut conn) = std::os::unix::net::UnixStream::connect(path) {
@@ -235,4 +239,9 @@ pub fn is_another_instance(path: &std::path::Path) -> bool {
     } else {
         false
     }
+}
+
+#[cfg(not(unix))]
+pub fn is_another_instance(_path: &std::path::Path) -> bool {
+    false
 }
