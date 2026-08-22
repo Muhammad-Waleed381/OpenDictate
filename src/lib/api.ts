@@ -4,6 +4,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 export interface ModelsStatus {
   stt_ready: boolean;
   vad_ready: boolean;
+  caption_ready: boolean;
+  streaming_rtf_x100: number;
 }
 
 export interface ModelInfo {
@@ -31,6 +33,8 @@ export interface Settings {
   continuous: boolean;
   autostart: boolean;
   spoken_punctuation: boolean;
+  audio_feedback: boolean;
+  audio_feedback_volume: number;
 }
 
 export type SettingsPatch = Partial<
@@ -46,6 +50,8 @@ export type SettingsPatch = Partial<
     | "continuous"
     | "autostart"
     | "spoken_punctuation"
+    | "audio_feedback"
+    | "audio_feedback_volume"
   >
 >;
 
@@ -60,6 +66,13 @@ export interface HistoryEntry {
 export interface DictEntry {
   id: number;
   word: string;
+  created_at: string;
+}
+
+export interface SnippetEntry {
+  id: number;
+  trigger: string;
+  text: string;
   created_at: string;
 }
 
@@ -116,10 +129,15 @@ export interface PartialPayload {
   streaming: boolean;
 }
 
+export interface MicDevice {
+  id: string;
+  label: string;
+}
+
 export type RecordingMode = "dictate" | "test";
 
-export function listMics(): Promise<string[]> {
-  return invoke<string[]>("list_mics");
+export function listMics(): Promise<MicDevice[]> {
+  return invoke<MicDevice[]>("list_mics");
 }
 
 export function getMic(): Promise<string | null> {
@@ -200,6 +218,30 @@ export function addDictionaryWord(word: string): Promise<void> {
 
 export function removeDictionaryWord(word: string): Promise<void> {
   return invoke<void>("remove_dictionary_word", { word });
+}
+
+export function listSnippets(): Promise<SnippetEntry[]> {
+  return invoke<SnippetEntry[]>("list_snippets");
+}
+
+export function addSnippet(trigger: string, text: string): Promise<void> {
+  return invoke<void>("add_snippet", { trigger, text });
+}
+
+export function updateSnippet(id: number, trigger: string, text: string): Promise<void> {
+  return invoke<void>("update_snippet", { id, trigger, text });
+}
+
+export function removeSnippet(id: number): Promise<void> {
+  return invoke<void>("remove_snippet", { id });
+}
+
+export function importSnippets(contents: string): Promise<number> {
+  return invoke<number>("import_snippets", { contents });
+}
+
+export function exportSnippets(): Promise<string> {
+  return invoke<string>("export_snippets");
 }
 
 export function pasteClipboard(text: string): Promise<void> {

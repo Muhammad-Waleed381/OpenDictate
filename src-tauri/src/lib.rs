@@ -1,4 +1,5 @@
 mod commands;
+mod audio;
 mod autostart;
 mod db;
 mod dictation;
@@ -49,6 +50,12 @@ pub fn run() {
             commands::get_dictionary,
             commands::add_dictionary_word,
             commands::remove_dictionary_word,
+            commands::list_snippets,
+            commands::add_snippet,
+            commands::update_snippet,
+            commands::remove_snippet,
+            commands::import_snippets,
+            commands::export_snippets,
             commands::paste_clipboard,
             commands::copy_text,
             commands::undo_last_insert,
@@ -86,6 +93,10 @@ pub fn run() {
                 last_inserted: Arc::new(Mutex::new(None)),
                 stt_engine: Arc::new(Mutex::new(None)),
                 streaming_engine: Arc::new(Mutex::new(None)),
+                caption_engine: Arc::new(Mutex::new(None)),
+                caption_stream: Arc::new(Mutex::new(None)),
+                caption_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                streaming_rtf_x100: Arc::new(std::sync::atomic::AtomicU32::new(0)),
                 vad: Arc::new(Mutex::new(None)),
             };
             app.manage(state);
@@ -100,6 +111,38 @@ pub fn run() {
             let _ = hotkey::register(handle, &handle.state::<AppState>(), &settings.hotkey);
             hotkey::install_socket_toggle(handle.clone(), socket_path);
             dock::init(handle);
+
+            // Background maintenance: fetch the small caption engine if it is
+            // missing, then measure how fast the selectable streaming STT
+            // model decodes on this CPU (drives the "too slow" badge).
+            let handle = handle.clone();
+            std::thread::spawn(move || {
+                let state = dictation::state_from_app(&handle);
+                if !opendictate_core::stt::models::is_caption_model_ready() {
+                    log::info!("fetching caption model in background");
+                    let _ = opendictate_core::stt::models::ensure_model(
+                        opendictate_core::stt::models::CAPTION_MODEL_ID,
+                        &mut |_, _, _| {},
+                    );
+                }
+                let model_id = {
+                    match state.settings.lock() {
+                        Ok(s) if !s.stt_model.is_empty() => s.stt_model.clone(),
+                        _ => opendictate_core::stt::models::STT_MODEL_ID.to_string(),
+                    }
+                };
+                use opendictate_core::stt::models;
+                if models::is_streaming_model(&model_id) && models::is_model_installed(&model_id) {
+                    match opendictate_core::stt::streaming::StreamingRecognizer::benchmark_rtf(
+                        &models::model_dir_for(&model_id),
+                    ) {
+                        Ok(rtf) => state
+                            .streaming_rtf_x100
+                            .store((rtf * 100.0) as u32, std::sync::atomic::Ordering::SeqCst),
+                        Err(e) => log::warn!("streaming benchmark failed: {e}"),
+                    }
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {

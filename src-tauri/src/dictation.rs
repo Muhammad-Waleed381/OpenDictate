@@ -61,6 +61,22 @@ pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String
     }
 
     spawn_level_emitter(app, state);
+    if models::is_caption_model_ready() {
+        spawn_caption_loop(app, state);
+    } else if !test {
+        // Captions are core UX: fetch the small caption engine quietly so
+        // the next dictation has them.
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            let st = state_from_app(&app2);
+            let _ = opendictate_core::stt::models::ensure_model(
+                models::CAPTION_MODEL_ID,
+                &mut |_file, _received, _total| {},
+            );
+            log::info!("caption model ensured for next dictation");
+            drop(st);
+        });
+    }
     Ok(())
 }
 
@@ -105,6 +121,8 @@ fn process_utterance_on_worker(
 pub fn cancel(app: &AppHandle, state: &AppState) -> Result<(), String> {
     state.set_continuous(false);
     state.set_streaming(false);
+    state.caption_active.store(false, Ordering::SeqCst);
+    *state.caption_stream.lock().map_err(|e| e.to_string())? = None;
     if !state.recorder.is_recording() {
         return Ok(());
     }
@@ -117,6 +135,10 @@ pub fn cancel(app: &AppHandle, state: &AppState) -> Result<(), String> {
     dock::set_caption(app, None);
     dock::set_state(app, "hidden", None);
     Ok(())
+}
+
+fn continuous_flag_from_app(app: &AppHandle) -> bool {
+    app.state::<AppState>().continuous.load(Ordering::SeqCst)
 }
 
 fn is_continuous_enabled(state: &AppState) -> bool {
@@ -376,7 +398,13 @@ fn spawn_streaming_loop(app: &AppHandle, state: &AppState) {
 
             if pipe.recognizer.is_ready(&pipe.session) {
                 let text = pipe.recognizer.result(&pipe.session);
-                if !text.is_empty() {
+                // When the zipformer caption engine is live it owns partial
+                // emission (it decodes in real time; this model may lag by
+                // minutes). Endpoint commits below still come from here.
+                let captions_owned = state_from_app(&app)
+                    .caption_active
+                    .load(Ordering::SeqCst);
+                if !text.is_empty() && !captions_owned {
                     let _ = app.emit(
                         "partial",
                         serde_json::json!({ "text": text, "streaming": true }),
@@ -412,6 +440,95 @@ fn spawn_streaming_loop(app: &AppHandle, state: &AppState) {
         }
         stream_active.store(false, Ordering::SeqCst);
         dock::set_caption(&app, None);
+    });
+}
+
+
+/// Live captions from the internal zipformer caption engine. Runs during any
+/// recording (offline or streaming accuracy path) and owns `partial`
+/// emission so captions stay real-time even when the selected STT model
+/// decodes slower than the mic speaks.
+fn spawn_caption_loop(app: &AppHandle, state: &AppState) {
+    const CAPTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+    let app = app.clone();
+    let recorder = Arc::clone(&state.recorder);
+    let caption_stream = Arc::clone(&state.caption_stream);
+    let caption_active = Arc::clone(&state.caption_active);
+
+    let Ok(mut cache) = state.caption_engine.lock() else {
+        log::warn!("captions unavailable: engine cache poisoned");
+        return;
+    };
+    let recognizer = if let Some(existing) = cache.as_ref() {
+        Arc::clone(&existing.recognizer)
+    } else {
+        let created = match StreamingRecognizer::new(&models::caption_model_dir()) {
+            Ok(r) => Arc::new(r),
+            Err(e) => {
+                log::warn!("captions unavailable: {e}");
+                return;
+            }
+        };
+        *cache = Some(crate::state::CachedStreamingEngine {
+            model_id: models::CAPTION_MODEL_ID.to_string(),
+            recognizer: Arc::clone(&created),
+        });
+        created
+    };
+    drop(cache);
+    // Captions never use dictionary hotwords; those belong to the accuracy
+    // model that produces the final transcript.
+    let session = recognizer.create_session(None);
+    *caption_stream.lock().unwrap_or_else(|e| e.into_inner()) = Some(StreamingPipe {
+        recognizer,
+        session,
+        watermark: 0,
+        total_fed: 0,
+    });
+    caption_active.store(true, Ordering::SeqCst);
+
+    std::thread::spawn(move || {
+        log::info!("caption loop: started");
+        let continuous = continuous_flag_from_app(&app);
+        while caption_active.load(Ordering::SeqCst)
+            && (recorder.is_recording() || continuous)
+        {
+            let mut pipe_guard = match caption_stream.lock() {
+                Ok(g) => g,
+                Err(_) => break,
+            };
+            let Some(pipe) = pipe_guard.as_mut() else {
+                break;
+            };
+            let samples = recorder.take_since(&mut pipe.watermark);
+            pipe.total_fed += samples.len();
+            if !samples.is_empty() {
+                pipe.recognizer.accept(&pipe.session, &samples);
+                pipe.recognizer.drain(&pipe.session);
+                drop(pipe_guard);
+                let text = {
+                    let guard = caption_stream.lock().unwrap_or_else(|e| e.into_inner());
+                    match guard.as_ref() {
+                        Some(p) => p.recognizer.result(&p.session),
+                        None => String::new(),
+                    }
+                };
+                if !text.is_empty() {
+                    let _ = app.emit(
+                        "partial",
+                        serde_json::json!({ "text": text, "streaming": true }),
+                    );
+                    dock::set_caption(&app, Some(&text));
+                }
+                std::thread::sleep(CAPTION_POLL_INTERVAL);
+                continue;
+            }
+            drop(pipe_guard);
+            std::thread::sleep(CAPTION_POLL_INTERVAL);
+        }
+        caption_active.store(false, Ordering::SeqCst);
+        *caption_stream.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        log::info!("caption loop: exited");
     });
 }
 

@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::audio::capture::SAMPLE_RATE;
+
 use sherpa_onnx::{
     OnlineModelConfig, OnlineRecognizer, OnlineRecognizerConfig, OnlineStream,
     OnlineTransducerModelConfig,
@@ -162,6 +164,40 @@ impl StreamingRecognizer {
         while self.recognizer.is_ready(&session.stream) {
             self.recognizer.decode(&session.stream);
         }
+    }
+
+    /// Measures this machine's decode speed against a fixed synthetic
+    /// workload: feeds `BENCH_SECONDS` of speech-like noise through the model
+    /// and returns the real-time factor (wall time / audio time). RTF < 1
+    /// means the model can keep up with live audio on this CPU.
+    pub fn benchmark_rtf(model_dir: &Path) -> Result<f32> {
+        const BENCH_SECONDS: f32 = 3.0;
+        const SAMPLES_PER_CHUNK: usize = 1600; // 100 ms
+        let recognizer = Self::new(model_dir)?;
+        let session = recognizer.create_session(None);
+
+        // Deterministic pseudo-noise with speech-like energy; encoder cost is
+        // amplitude-independent, so exact shape does not matter.
+        let mut seed = 0x2545_F491_u32;
+        let mut chunk = Vec::with_capacity(SAMPLES_PER_CHUNK);
+        let mut make_chunk = |chunk: &mut Vec<f32>| {
+            chunk.clear();
+            for _ in 0..SAMPLES_PER_CHUNK {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                chunk.push(((seed >> 16) as f32 / u16::MAX as f32 - 0.5) * 0.3);
+            }
+        };
+
+        let chunks = (BENCH_SECONDS * SAMPLE_RATE as f32) as usize / SAMPLES_PER_CHUNK;
+        let started = std::time::Instant::now();
+        for _ in 0..chunks {
+            make_chunk(&mut chunk);
+            recognizer.accept(&session, &chunk);
+            recognizer.drain(&session);
+        }
+        let rtf = started.elapsed().as_secs_f32() / BENCH_SECONDS;
+        log::info!("streaming benchmark: {model_dir:?} rtf={rtf:.2}");
+        Ok(rtf)
     }
 
     /// Starts a fresh utterance: resets the internal stream state and the

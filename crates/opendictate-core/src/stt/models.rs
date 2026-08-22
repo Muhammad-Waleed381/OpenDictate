@@ -27,6 +27,12 @@ const PARAKEET_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/d
 const PARAKEET_TDT_06B_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2";
 const PARAKEET_UNIFIED_EN_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming.tar.bz2";
 const PARAKEET_STREAMING_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-streaming-560ms.tar.bz2";
+/// Internal live-caption engine: a 20M-param zipformer transducer that decodes
+/// faster than real time even on low-power CPUs. Not user-selectable; it only
+/// ever powers partial captions while an accuracy model produces the final
+/// transcript.
+pub const CAPTION_MODEL_ID: &str = "streaming-zipformer-en-20m-2023-02-17";
+const CAPTION_MODEL_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2";
 const SILERO_VAD_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
 const WHISPER_TINY_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2";
@@ -76,6 +82,18 @@ const MODELS: &[ModelDef] = &[
         size_bytes: 104_337_827,
         url: PARAKEET_INT8_ARCHIVE,
         available: true,
+        streaming: false,
+    },
+    ModelDef {
+        id: CAPTION_MODEL_ID,
+        name: "Zipformer EN 20M (captions)",
+        kind: "caption",
+        engine_key: None,
+        size_bytes: 29_000_000,
+        url: CAPTION_MODEL_ARCHIVE,
+        available: true,
+        // Not a user-selectable STT model; `streaming` flags selectable
+        // engines only. This one powers live captions internally.
         streaming: false,
     },
     ModelDef {
@@ -212,6 +230,18 @@ pub fn is_whisper_model(id: &str) -> bool {
     )
 }
 
+pub fn caption_model_dir() -> PathBuf {
+    models_dir().join(CAPTION_MODEL_ID)
+}
+
+pub fn is_caption_model_ready() -> bool {
+    let dir = caption_model_dir();
+    valid_file_size(&dir.join("encoder.onnx"), STREAMING_PART_MIN_BYTES).is_some()
+        && valid_file_size(&dir.join("decoder.onnx"), STREAMING_PART_MIN_BYTES).is_some()
+        && valid_file_size(&dir.join("joiner.onnx"), STREAMING_PART_MIN_BYTES).is_some()
+        && valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
+}
+
 pub fn is_streaming_model(id: &str) -> bool {
     matches!(id, PARAKEET_STREAMING_MODEL_ID)
 }
@@ -263,7 +293,7 @@ pub fn is_model_installed(id: &str) -> bool {
         STT_MODEL_ID => is_parakeet_ready(),
         VAD_MODEL_ID => is_vad_ready(),
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => is_transducer_ready(id),
-        PARAKEET_STREAMING_MODEL_ID => is_transducer_ready(id),
+        PARAKEET_STREAMING_MODEL_ID | CAPTION_MODEL_ID => is_transducer_ready(id),
         WHISPER_TINY_MODEL_ID
         | WHISPER_BASE_MODEL_ID
         | WHISPER_SMALL_MODEL_ID
@@ -571,7 +601,9 @@ pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Re
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => {
             install_transducer_model(id, on_progress)
         }
-        PARAKEET_STREAMING_MODEL_ID => install_transducer_model(id, on_progress),
+        PARAKEET_STREAMING_MODEL_ID | CAPTION_MODEL_ID => {
+            install_transducer_model(id, on_progress)
+        }
         VAD_MODEL_ID => {
             log::info!("downloading silero VAD -> {}", vad_model_path().display());
             download_to_with_progress(

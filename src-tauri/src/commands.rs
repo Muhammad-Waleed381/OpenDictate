@@ -8,8 +8,36 @@ use crate::dictation;
 use crate::state::{AppState, ModelsStatus, TranscriptResult};
 
 #[tauri::command]
-pub fn list_mics() -> Vec<String> {
-    AudioRecorder::list_input_devices()
+pub fn list_mics() -> Vec<opendictate_core::audio::MicDevice> {
+    use opendictate_core::audio::MicDevice;
+
+    let mut mics = vec![MicDevice {
+        id: "default".to_string(),
+        label: "System default".to_string(),
+    }];
+
+    // Prefer PulseAudio sources when the server is reachable: they cover every
+    // mic the OS can access (built-in, USB, Bluetooth), which cpal/ALSA cannot.
+    #[cfg(target_os = "linux")]
+    if let Some(sources) = opendictate_core::audio::pulse::list_sources() {
+        if !sources.is_empty() {
+            for s in sources {
+                mics.push(MicDevice {
+                    id: format!("{}{}", opendictate_core::audio::pulse::PULSE_PREFIX, s.name),
+                    label: s.description,
+                });
+            }
+            return mics;
+        }
+    }
+
+    for name in AudioRecorder::list_input_devices() {
+        mics.push(MicDevice {
+            id: name.clone(),
+            label: name,
+        });
+    }
+    mics
 }
 
 #[tauri::command]
@@ -26,10 +54,14 @@ pub fn set_mic(name: String, state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn models_status() -> ModelsStatus {
+pub fn models_status(state: State<AppState>) -> ModelsStatus {
     ModelsStatus {
         stt_ready: models::is_stt_model_ready(),
         vad_ready: models::is_vad_ready(),
+        caption_ready: models::is_caption_model_ready(),
+        streaming_rtf_x100: state
+            .streaming_rtf_x100
+            .load(std::sync::atomic::Ordering::SeqCst),
     }
 }
 
@@ -192,6 +224,14 @@ pub fn set_settings(
     if let Some(spoken_punctuation) = settings.spoken_punctuation {
         current.spoken_punctuation = spoken_punctuation;
     }
+    if let Some(audio_feedback) = settings.audio_feedback {
+        current.audio_feedback = audio_feedback;
+    }
+    if let Some(audio_feedback_volume) = settings.audio_feedback_volume {
+        if (0.0..=1.0).contains(&audio_feedback_volume) {
+            current.audio_feedback_volume = audio_feedback_volume;
+        }
+    }
     let settings = current.clone();
     drop(current);
 
@@ -264,6 +304,103 @@ pub fn add_dictionary_word(word: String, state: State<AppState>) -> Result<(), S
 pub fn remove_dictionary_word(word: String, state: State<AppState>) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::remove_dictionary_word(&conn, &word).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_snippets(state: State<AppState>) -> Result<Vec<crate::state::SnippetEntry>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::list_snippets(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_snippet(
+    trigger: String,
+    text: String,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let trigger = trigger.trim().to_string();
+    let text = text.trim().to_string();
+    if trigger.is_empty() || text.is_empty() {
+        return Err("snippet trigger and text are required".to_string());
+    }
+    if !opendictate_core::text::is_single_word(&trigger) {
+        return Err("snippet trigger must be a single word".to_string());
+    }
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    if !db::add_snippet(&conn, &trigger, &text).map_err(|e| e.to_string())? {
+        return Err(format!("a snippet named \"{trigger}\" already exists"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_snippet(
+    id: i64,
+    trigger: String,
+    text: String,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let trigger = trigger.trim().to_string();
+    let text = text.trim().to_string();
+    if trigger.is_empty() || text.is_empty() {
+        return Err("snippet trigger and text are required".to_string());
+    }
+    if !opendictate_core::text::is_single_word(&trigger) {
+        return Err("snippet trigger must be a single word".to_string());
+    }
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    if !db::update_snippet(&conn, id, &trigger, &text).map_err(|e| e.to_string())? {
+        return Err(format!("a snippet named \"{trigger}\" already exists"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn remove_snippet(id: i64, state: State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::remove_snippet(&conn, id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+pub struct SnippetImport {
+    trigger: String,
+    text: String,
+}
+
+#[tauri::command]
+pub fn import_snippets(contents: String, state: State<AppState>) -> Result<usize, String> {
+    let entries: Vec<SnippetImport> = serde_json::from_str(&contents)
+        .map_err(|e| format!("invalid snippets JSON: {e}"))?;
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut imported = 0;
+    for entry in entries {
+        let trigger = entry.trigger.trim().to_string();
+        let text = entry.text.trim().to_string();
+        if trigger.is_empty() || text.is_empty() {
+            continue;
+        }
+        if !opendictate_core::text::is_single_word(&trigger) {
+            continue;
+        }
+        if db::add_snippet(&conn, &trigger, &text).map_err(|e| e.to_string())? {
+            imported += 1;
+        }
+    }
+    Ok(imported)
+}
+
+#[tauri::command]
+pub fn export_snippets(app: AppHandle, state: State<AppState>) -> Result<String, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let entries = db::list_snippets(&conn).map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let exports_dir = data_dir.join("exports");
+    std::fs::create_dir_all(&exports_dir).map_err(|e| e.to_string())?;
+    let path = exports_dir.join(format!("snippets-{}.json", db::now_timestamp()));
+    let contents = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
+    std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]

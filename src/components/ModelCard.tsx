@@ -44,6 +44,9 @@ export function ModelCard() {
   const catalog = useStore((s) => s.catalog);
   const settings = useStore((s) => s.settings);
   const modelProgress = useStore((s) => s.modelProgress);
+  const modelsStatus = useStore((s) => s.models);
+  const streamingTooSlow =
+    (modelsStatus?.streaming_rtf_x100 ?? 0) > 150 && (modelsStatus?.streaming_rtf_x100 ?? 0) !== 0;
   const [downloading, setDownloading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"streaming" | "non-streaming">(() => {
@@ -231,9 +234,16 @@ export function ModelCard() {
                     )}
                     {model.engine_key != null &&
                       model.installed &&
-                      (isActive ? (
+                      isActive ? (
                         <span className="ml-auto animate-od-blink border border-primary-foreground px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
                           In use
+                        </span>
+                      ) : streamingTooSlow && model.streaming ? (
+                        <span
+                          className="ml-auto border border-destructive px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-destructive"
+                          title={`This model decodes ~${((modelsStatus?.streaming_rtf_x100 ?? 0) / 100).toFixed(1)}x slower than real time on your CPU — dictation results would be delayed. Pick a non-streaming model instead.`}
+                        >
+                          Too slow for this CPU
                         </span>
                       ) : (
                         <Button
@@ -244,7 +254,7 @@ export function ModelCard() {
                         >
                           Use
                         </Button>
-                      ))}
+                      )}
                   </div>
                   {progress && (
                     <div className="flex flex-col gap-1">

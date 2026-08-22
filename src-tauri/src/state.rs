@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use opendictate_core::audio::capture::AudioRecorder;
@@ -20,6 +20,8 @@ pub struct SettingsPatch {
     pub continuous: Option<bool>,
     pub autostart: Option<bool>,
     pub spoken_punctuation: Option<bool>,
+    pub audio_feedback: Option<bool>,
+    pub audio_feedback_volume: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +45,10 @@ pub struct Settings {
     pub autostart: bool,
     #[serde(default)]
     pub spoken_punctuation: bool,
+    #[serde(default)]
+    pub audio_feedback: bool,
+    #[serde(default = "default_audio_feedback_volume")]
+    pub audio_feedback_volume: f32,
 }
 
 fn default_stt_model() -> String {
@@ -61,6 +67,10 @@ fn default_vad_sensitivity() -> f32 {
     0.5
 }
 
+fn default_audio_feedback_volume() -> f32 {
+    0.5
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -76,6 +86,8 @@ impl Default for Settings {
             continuous: false,
             autostart: false,
             spoken_punctuation: false,
+            audio_feedback: false,
+            audio_feedback_volume: default_audio_feedback_volume(),
         }
     }
 }
@@ -97,9 +109,19 @@ pub struct DictEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnippetEntry {
+    pub id: i64,
+    pub trigger: String,
+    pub text: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelsStatus {
     pub stt_ready: bool,
     pub vad_ready: bool,
+    pub caption_ready: bool,
+    pub streaming_rtf_x100: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +155,15 @@ pub struct AppState {
     pub continuous: Arc<AtomicBool>,
     pub stream: Arc<Mutex<Option<StreamingPipe>>>,
     pub stream_active: Arc<AtomicBool>,
+    /// Live-caption engine (small zipformer): runs during any recording and
+    /// owns `partial` emission; the selected accuracy model still produces
+    /// the final transcript.
+    pub caption_engine: Arc<Mutex<Option<CachedStreamingEngine>>>,
+    pub caption_stream: Arc<Mutex<Option<StreamingPipe>>>,
+    pub caption_active: Arc<AtomicBool>,
+    /// Measured decode speed of the selectable streaming STT model, x100
+    /// (e.g. 1500 = RTF 15.0). 0 = not benchmarked yet.
+    pub streaming_rtf_x100: Arc<AtomicU32>,
     pub last_inserted: Arc<Mutex<Option<String>>>,
     pub stt_engine: Arc<Mutex<Option<CachedSttEngine>>>,
     pub streaming_engine: Arc<Mutex<Option<CachedStreamingEngine>>>,
