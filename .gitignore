@@ -33,3 +33,5 @@ models
 
 # Playwright MCP session artifacts
 .playwright-mcp
+examples/
+stream-app-main.png
