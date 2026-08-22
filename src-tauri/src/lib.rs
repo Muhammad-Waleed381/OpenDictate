@@ -125,16 +125,14 @@ pub fn run() {
                         &mut |_, _, _| {},
                     );
                 }
-                let model_id = {
-                    match state.settings.lock() {
-                        Ok(s) if !s.stt_model.is_empty() => s.stt_model.clone(),
-                        _ => opendictate_core::stt::models::STT_MODEL_ID.to_string(),
-                    }
-                };
+                // Benchmark the selectable streaming model whenever it is on
+                // disk — independent of which model is currently selected —
+                // so its Models-tab badge reflects this CPU's capability.
                 use opendictate_core::stt::models;
-                if models::is_streaming_model(&model_id) && models::is_model_installed(&model_id) {
+                let streaming_id = models::PARAKEET_STREAMING_MODEL_ID;
+                if models::is_model_installed(streaming_id) {
                     match opendictate_core::stt::streaming::StreamingRecognizer::benchmark_rtf(
-                        &models::model_dir_for(&model_id),
+                        &models::model_dir_for(streaming_id),
                     ) {
                         Ok(rtf) => state
                             .streaming_rtf_x100
