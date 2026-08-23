@@ -109,9 +109,6 @@ function HotkeyCapture() {
             value=""
             readOnly
             onKeyDown={handleKeyDown}
-            onBlur={(e) => {
-              if (capturing && e.relatedTarget === null) inputRef.current?.focus();
-            }}
             aria-label="Press a key combination"
           />
         </div>
