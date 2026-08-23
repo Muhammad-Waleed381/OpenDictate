@@ -196,7 +196,7 @@ export function MainApp() {
         <span className="ml-auto hidden text-muted-foreground sm:inline">
           Local-first · zero telemetry · MIT
         </span>
-        <span className="text-muted-foreground tabular-nums">v0.1.0</span>
+        <span className="text-muted-foreground tabular-nums">{__APP_VERSION__}</span>
       </footer>
       {settings && !settings.onboarded && <Onboarding />}
       <Toaster />
