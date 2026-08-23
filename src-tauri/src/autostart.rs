@@ -34,6 +34,13 @@ pub fn set_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> 
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn set_enabled(_app: &tauri::AppHandle, _enabled: bool) -> Result<(), String> {
-    Err("autostart is not supported on this platform yet".to_string())
+pub fn set_enabled(_app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    // Disabling is a no-op when autostart was never set up, so it must
+    // succeed; only an explicit enable is unsupported. Callers log failures
+    // instead of failing the whole settings save.
+    if enabled {
+        Err("autostart is not supported on this platform yet".to_string())
+    } else {
+        Ok(())
+    }
 }

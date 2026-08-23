@@ -48,7 +48,37 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
     Ok(())
 }
 
+/// Serializes hotkey toggles. The global-shortcut handler runs on the MAIN
+/// thread on macOS (global-hotkey delivers via NSEvent monitor), and
+/// dictation::start/stop perform CoreAudio setup, notification calls and
+/// first-use engine loads that can block for seconds — running them inline
+/// froze the whole app. The work now happens on a worker thread; while one
+/// toggle is in flight, further presses are ignored (same net effect as the
+/// old main-thread serialization, minus the freeze).
+static TOGGLE_INFLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn toggle_dictation(app: &AppHandle) {
+    use std::sync::atomic::Ordering;
+    if TOGGLE_INFLIGHT.swap(true, Ordering::SeqCst) {
+        log::info!("toggle already in flight; ignoring");
+        return;
+    }
+    let app = app.clone();
+    let fallback = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("opendictate-toggle".to_string())
+        .spawn(move || {
+            toggle_dictation_sync(&app);
+            TOGGLE_INFLIGHT.store(false, Ordering::SeqCst);
+        });
+    if spawned.is_err() {
+        // Worker unavailable: run inline so the hotkey never goes dead.
+        toggle_dictation_sync(&fallback);
+        TOGGLE_INFLIGHT.store(false, Ordering::SeqCst);
+    }
+}
+
+fn toggle_dictation_sync(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };

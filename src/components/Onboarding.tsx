@@ -46,8 +46,14 @@ export function Onboarding() {
     }
   };
 
+  // ✕ and Escape route through onOpenChange; treat them as skip so the
+  // modal backdrop can never swallow every click with no way out.
+  const handleDismiss = () => {
+    void handleDone();
+  };
+
   return (
-    <Dialog open={!done} onOpenChange={() => {}} modal>
+    <Dialog open={!done} onOpenChange={(open) => { if (!open) handleDismiss(); }} modal>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <div className="flex items-center gap-2">
@@ -125,11 +131,9 @@ export function Onboarding() {
           >
             ← Back
           </Button>
-          {step === 1 && (
-            <Button variant="ghost" className="text-muted-foreground" onClick={handleDone}>
-              Skip setup →
-            </Button>
-          )}
+          <Button variant="ghost" className="text-muted-foreground" onClick={handleDone}>
+            Skip setup →
+          </Button>
           {step < STEPS.length ? (
             <Button
               onClick={() => setStep((s) => Math.min(STEPS.length, s + 1))}

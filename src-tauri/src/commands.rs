@@ -241,7 +241,13 @@ pub fn set_settings(
 
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::save_settings(&conn, &settings).map_err(|e| e.to_string())?;
-    crate::autostart::set_enabled(&app, settings.autostart)
+    // Autostart is best-effort: on platforms without support (or on fs
+    // errors) the save itself must still succeed, otherwise every settings
+    // write rejects and the UI appears broken.
+    if let Err(e) = crate::autostart::set_enabled(&app, settings.autostart) {
+        log::warn!("autostart update failed: {e}");
+    }
+    Ok(())
 }
 
 #[tauri::command]
