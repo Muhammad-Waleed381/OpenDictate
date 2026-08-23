@@ -35,3 +35,7 @@ models
 .playwright-mcp
 examples/
 stream-app-main.png
+
+# Private development docs
+.superpowers
+docs/superpowers
