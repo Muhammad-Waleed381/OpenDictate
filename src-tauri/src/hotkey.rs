@@ -17,6 +17,25 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
         return Ok(());
     }
 
+    // Double-tap gestures bypass the OS hotkey API entirely — see doubletap.rs
+    // for why Carbon cannot express them.
+    #[cfg(target_os = "macos")]
+    if let Some(modifier) = crate::doubletap::parse(key) {
+        if let Some(old) = current {
+            if crate::doubletap::parse(&old).is_none() {
+                let _ = app.global_shortcut().unregister(old.as_str());
+            }
+        }
+        crate::doubletap::arm(app, modifier);
+        if let Ok(mut current) = state.hotkey.lock() {
+            *current = Some(key.to_string());
+        }
+        log::info!("hotkey registered: {key} (double-tap gesture)");
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    crate::doubletap::disarm();
+
     // On GNOME (X11 or Wayland) the settings-daemon custom keybinding is the
     // single global path: the X11 grab would double-fire alongside it and
     // toggle start+stop in one press. Elsewhere (bare X11, other DEs) fall
@@ -36,7 +55,13 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
             .map_err(|e| format!("failed to register hotkey '{key}': {e}"))?;
 
         if let Some(old) = current {
-            let _ = app.global_shortcut().unregister(old.as_str());
+            #[cfg(target_os = "macos")]
+            let stale_chord = crate::doubletap::parse(&old).is_none();
+            #[cfg(not(target_os = "macos"))]
+            let stale_chord = true;
+            if stale_chord {
+                let _ = app.global_shortcut().unregister(old.as_str());
+            }
         }
     }
 

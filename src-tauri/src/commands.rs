@@ -134,19 +134,41 @@ pub fn warmup_model(
     Ok(())
 }
 
+// These three must be `async` so Tauri runs them on the async runtime. A
+// synchronous command body executes on the MAIN thread, and each of these
+// blocks for a long time: `dictation::stop` waits on the inference worker's
+// channel until transcription finishes, and start/cancel drive CoreAudio
+// setup and teardown. Running that on the main thread beachballs the whole
+// window until it returns. The hotkey path already hops to a worker thread
+// (see hotkey::toggle_dictation); this is the same fix for the UI path.
 #[tauri::command]
-pub fn start_recording(mode: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
-    dictation::start(&app, &state, mode == "test")
+pub async fn start_recording(mode: String, app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        dictation::start(&app, &state, mode == "test")
+    })
+    .await
+    .map_err(|e| format!("start_recording worker failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn stop_recording(app: AppHandle, state: State<AppState>) -> Result<TranscriptResult, String> {
-    dictation::stop(&app, &state)
+pub async fn stop_recording(app: AppHandle) -> Result<TranscriptResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        dictation::stop(&app, &state)
+    })
+    .await
+    .map_err(|e| format!("stop_recording worker failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn cancel_recording(app: AppHandle, state: State<AppState>) -> Result<(), String> {
-    dictation::cancel(&app, &state)
+pub async fn cancel_recording(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        dictation::cancel(&app, &state)
+    })
+    .await
+    .map_err(|e| format!("cancel_recording worker failed: {e}"))?
 }
 
 #[tauri::command]

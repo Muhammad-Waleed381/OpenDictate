@@ -211,9 +211,28 @@ pub fn undo_last_insert() -> Result<(), String> {
 fn send_combo(combo: Combo) -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
+    // macOS pastes and undoes with Command, not Control — Ctrl+V does nothing
+    // in virtually every Mac app, so clipboard insert mode and undo silently
+    // no-oped there. Windows keeps Control.
+    //
+    // The keys are raw virtual keycodes rather than Key::Unicode because enigo
+    // resolves Unicode through TSMGetInputSourceProperty, and HIToolbox asserts
+    // that call happens on the main dispatch queue. Injection runs on the
+    // inference worker, so the assert tripped and took the whole process down
+    // with SIGTRAP the moment a transcript was pasted. Raw keycodes skip the
+    // lookup, keeping injection off the main thread where it belongs.
+    #[cfg(target_os = "macos")]
+    let (accel, paste_key, undo_key) = (
+        Key::Meta,
+        Key::Other(0x09), // kVK_ANSI_V
+        Key::Other(0x06), // kVK_ANSI_Z
+    );
+    #[cfg(not(target_os = "macos"))]
+    let (accel, paste_key, undo_key) = (Key::Control, Key::Unicode('v'), Key::Unicode('z'));
+
     let (modifier, key) = match combo {
-        Combo::Paste => (Key::Control, Key::Unicode('v')),
-        Combo::Undo => (Key::Control, Key::Unicode('z')),
+        Combo::Paste => (accel, paste_key),
+        Combo::Undo => (accel, undo_key),
     };
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;

@@ -3,6 +3,8 @@ mod audio;
 mod autostart;
 mod db;
 mod dictation;
+#[cfg(target_os = "macos")]
+mod doubletap;
 mod dock;
 mod hotkey;
 mod inject;
@@ -65,6 +67,8 @@ pub fn run() {
             commands::export_history,
         ])
         .setup(|app| {
+            notify::init(&app.config().identifier);
+
             let data_dir = app
                 .path()
                 .app_data_dir()

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
-import { formatHotkey, cn } from "@/lib/utils";
+import { formatHotkey, cn, DEFAULT_HOTKEY } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Settings, Activity, BookOpen, History, FileText, House } from "lucide-react";
@@ -90,7 +90,7 @@ function Header() {
         </h1>
       </div>
       <Badge variant="outline" className="ml-auto border-border text-foreground shadow-none">
-        {formatHotkey(settings?.hotkey ?? "ctrl+alt+space")}
+        {formatHotkey(settings?.hotkey ?? DEFAULT_HOTKEY)}
       </Badge>
       <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider">
         <span

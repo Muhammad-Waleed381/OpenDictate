@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
-import { formatHotkey } from "@/lib/utils";
+import { formatHotkey, DEFAULT_HOTKEY, DOUBLE_TAP_OPTIONS, IS_MAC } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -60,7 +60,7 @@ function HotkeyCapture() {
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const current = formatHotkey(settings?.hotkey ?? "ctrl+alt+space");
+  const current = formatHotkey(settings?.hotkey ?? DEFAULT_HOTKEY);
 
   useEffect(() => {
     if (capturing) inputRef.current?.focus();
@@ -80,10 +80,15 @@ function HotkeyCapture() {
     }
     setError(null);
     setPreview(combo);
+    await applyHotkey(combo);
+  };
+
+  const applyHotkey = async (combo: string) => {
     try {
       await api.setSettings({ hotkey: combo });
       await useStore.getState().refreshAll();
       setCapturing(false);
+      setError(null);
       setApplied(true);
       setTimeout(() => setApplied(false), 1500);
     } catch (err) {
@@ -122,6 +127,25 @@ function HotkeyCapture() {
           </Button>
         )}
       </div>
+      {IS_MAC && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+            Or double-tap a modifier
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            {DOUBLE_TAP_OPTIONS.map((option) => (
+              <Button
+                key={option.value}
+                size="sm"
+                variant={settings?.hotkey === option.value ? "default" : "outline"}
+                onClick={() => applyHotkey(option.value)}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
       <p className="text-xs text-muted-foreground">
         {capturing
           ? "Press the keys now — Escape cancels."
