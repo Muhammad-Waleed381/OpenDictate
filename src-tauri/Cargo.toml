@@ -36,6 +36,12 @@ gtk = { version = "0.18", features = ["v3_24"] }
 enigo = "0.2"
 notify-rust = "4"
 
+# Raw HID event stream for double-tap modifier gestures, which Carbon's
+# RegisterEventHotKey (behind tauri-plugin-global-shortcut) cannot express.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.23"
+core-foundation = "0.9"
+
 [features]
 # Added automatically by `tauri build`. Serves the bundled frontend from the
 # embedded assets instead of `devUrl`. It must NOT be enabled on the `tauri`

@@ -265,8 +265,16 @@ impl AudioRecorder {
             sample_rate: cpal::SampleRate(native_rate),
             buffer_size: cpal::BufferSize::Default,
         };
+        // Log which device actually got opened. Several inputs can share a rate
+        // and channel count (a USB headset and the built-in mic are both 48 kHz
+        // mono here), so without the name the log cannot tell them apart — and
+        // "recording from the wrong mic" looks identical to "the model is
+        // broken": audio is captured, then the VAD reports no speech.
+        let device_name = device
+            .name()
+            .unwrap_or_else(|_| "<unknown device>".to_string());
         log::info!(
-            "capture: native {native_rate} Hz / {native_channels} ch, target {SAMPLE_RATE} Hz mono"
+            "capture: '{device_name}' native {native_rate} Hz / {native_channels} ch, target {SAMPLE_RATE} Hz mono"
         );
 
         let buffer = Arc::clone(&self.buffer);

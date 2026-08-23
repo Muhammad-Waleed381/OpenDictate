@@ -3,6 +3,8 @@ mod audio;
 mod autostart;
 mod db;
 mod dictation;
+#[cfg(target_os = "macos")]
+mod doubletap;
 mod dock;
 mod hotkey;
 mod inject;

@@ -211,9 +211,17 @@ pub fn undo_last_insert() -> Result<(), String> {
 fn send_combo(combo: Combo) -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 
+    // macOS pastes and undoes with Command, not Control — Ctrl+V does nothing
+    // in virtually every Mac app, so clipboard insert mode and undo silently
+    // no-oped there. Windows keeps Control.
+    #[cfg(target_os = "macos")]
+    let accel = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let accel = Key::Control;
+
     let (modifier, key) = match combo {
-        Combo::Paste => (Key::Control, Key::Unicode('v')),
-        Combo::Undo => (Key::Control, Key::Unicode('z')),
+        Combo::Paste => (accel, Key::Unicode('v')),
+        Combo::Undo => (accel, Key::Unicode('z')),
     };
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;

@@ -27,6 +27,21 @@ const MAC_MODIFIER_SYMBOLS: Record<string, string> = {
   control: "\u2303",
 };
 
+/** Returns the modifier of a `double:<modifier>` shortcut, or null. */
+export function parseDoubleTap(hotkey: string): string | null {
+  const t = hotkey.trim().toLowerCase();
+  return t.startsWith("double:") ? t.slice("double:".length) : null;
+}
+
+/** Gestures the backend can watch for. macOS only — see doubletap.rs. */
+export const DOUBLE_TAP_OPTIONS = [
+  { value: "double:fn", label: "Fn Fn" },
+  { value: "double:cmd", label: "\u2318 \u2318" },
+  { value: "double:ctrl", label: "\u2303 \u2303" },
+  { value: "double:alt", label: "\u2325 \u2325" },
+  { value: "double:shift", label: "\u21e7 \u21e7" },
+] as const;
+
 const capitalize = (part: string) =>
   part.charAt(0).toUpperCase() + part.slice(1);
 
@@ -35,6 +50,12 @@ const capitalize = (part: string) =>
  * platform spells them out joined by "+".
  */
 export function formatHotkey(hotkey: string): string {
+  const gesture = parseDoubleTap(hotkey);
+  if (gesture) {
+    const glyph =
+      MAC_MODIFIER_SYMBOLS[gesture] ?? capitalize(gesture === "fn" ? "fn" : gesture);
+    return `${glyph} ${glyph}`;
+  }
   const parts = hotkey
     .split("+")
     .map((part) => part.trim())
