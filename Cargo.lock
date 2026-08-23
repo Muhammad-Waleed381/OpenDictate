@@ -3460,7 +3460,7 @@ dependencies = [
 
 [[package]]
 name = "opendictate"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "enigo",
  "env_logger",
@@ -3482,7 +3482,7 @@ dependencies = [
 
 [[package]]
 name = "opendictate-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "bzip2 0.5.2",
  "cpal",

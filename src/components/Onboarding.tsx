@@ -117,6 +117,11 @@ export function Onboarding() {
           >
             ← Back
           </Button>
+          {step === 1 && (
+            <Button variant="ghost" className="text-muted-foreground" onClick={handleDone}>
+              Skip setup →
+            </Button>
+          )}
           {step < STEPS.length ? (
             <Button
               onClick={() => setStep((s) => Math.min(STEPS.length, s + 1))}

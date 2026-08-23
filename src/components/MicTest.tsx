@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 
 export function MicTest() {
   const [testing, setTesting] = useState(false);
+  const [noAudioHint, setNoAudioHint] = useState(false);
   const [peak, setPeak] = useState(0);
   const [verdict, setVerdict] = useState<"working" | "quiet" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -14,6 +15,7 @@ export function MicTest() {
     peakRef.current = 0;
     setPeak(0);
     setVerdict(null);
+    setNoAudioHint(false);
     setError(null);
     setTesting(true);
     try {
@@ -106,6 +108,13 @@ export function MicTest() {
         <div className="border-2 border-primary bg-primary px-2 py-1.5 text-xs font-bold text-primary-foreground uppercase">
           ✕ {error}
         </div>
+      )}
+      {noAudioHint && (
+        <p className="border-2 border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
+          No audio received. On macOS allow the microphone under System Settings →
+          Privacy &amp; Security → Microphone, then press Stop and Start again. Also
+          check the selected input device in Settings → Microphone.
+        </p>
       )}
     </div>
   );

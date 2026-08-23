@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Without this key macOS never shows the microphone permission prompt
+         and CoreAudio silently delivers no audio: capture starts, every
+         sample is zero, and the onboarding mic check hangs forever. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>OpenDictate transcribes your speech locally. The microphone is only used while dictation is active.</string>
+  </dict>
+</plist>

@@ -1,58 +1,61 @@
 {
- "$schema": "https://schema.tauri.app/config/2",
- "productName": "OpenDictate",
- "version": "0.1.1",
- "identifier": "com.opendictate.app",
- "build": {
-  "beforeDevCommand": "npm run dev",
-  "devUrl": "http://localhost:1420",
-  "beforeBuildCommand": "npm run build",
-  "frontendDist": "../dist"
- },
- "app": {
-  "windows": [
-   {
-    "label": "main",
-    "title": "OpenDictate",
-    "width": 800,
-    "height": 600,
-    "minWidth": 640,
-    "minHeight": 480,
-    "backgroundColor": "#0F172A"
-   },
-    {
-     "label": "dock",
-     "title": "OpenDictate",
-     "url": "index.html?window=dock",
-     "width": 210,
-     "height": 29,
-     "minWidth": 210,
-     "minHeight": 29,
-     "maxWidth": 210,
-     "maxHeight": 29,
-     "transparent": true,
-    "decorations": false,
-    "alwaysOnTop": true,
-    "skipTaskbar": true,
-    "focusable": false,
-    "resizable": false,
-    "shadow": false,
-    "visible": true
-   }
-  ],
-  "security": {
-   "csp": null
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenDictate",
+  "version": "0.1.2",
+  "identifier": "com.opendictate.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenDictate",
+        "width": 800,
+        "height": 600,
+        "minWidth": 640,
+        "minHeight": 480,
+        "backgroundColor": "#0F172A"
+      },
+      {
+        "label": "dock",
+        "title": "OpenDictate",
+        "url": "index.html?window=dock",
+        "width": 210,
+        "height": 29,
+        "minWidth": 210,
+        "minHeight": 29,
+        "maxWidth": 210,
+        "maxHeight": 29,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focusable": false,
+        "resizable": false,
+        "shadow": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "infoPlist": "Info.plist"
+    }
   }
- },
- "bundle": {
-  "active": true,
-  "targets": "all",
-  "icon": [
-   "icons/32x32.png",
-   "icons/128x128.png",
-   "icons/128x128@2x.png",
-   "icons/icon.icns",
-   "icons/icon.ico"
-  ]
- }
 }
