@@ -46,20 +46,32 @@ Grab an installer from [Releases](https://github.com/Muhammad-Waleed381/OpenDict
 - **Windows**: `.msi` or NSIS `.exe`
 - **macOS**: universal `.dmg`
 
-On first launch, pick a model in Settings → Models (the default Parakeet TDT 110M is ~100 MB) and press <kbd>Ctrl</kbd>+<kbd>K</kbd> to dictate.
-
-> Models are downloaded once from sherpa-onnx/HuggingFace release mirrors and stored under your user data directory. Nothing else ever touches the network.
+On first launch, pick a model in Settings → Models (the default Parakeet TDT 110M is ~104 MB) and press <kbd>Ctrl</kbd>+<kbd>K</kbd> to dictate.
 
 ## Choosing a model
 
-| Model | Size | Engine | Best for |
+### Speech-to-text engines
+
+| Model | Size | Type | Notes |
 |---|---|---|---|
-| Parakeet TDT 110M (int8) | ~104 MB | offline | Default — fast, accurate English on modest CPUs |
-| Parakeet TDT 0.6B v3 | ~650 MB | offline | Highest accuracy; still single-pass at stop |
-| Parakeet Unified EN 0.6B | ~650 MB | offline | Unified punctuation/casing out of the box |
-| Whisper tiny/base/small/turbo/medium | varies | offline (chunked) | Multilingual + widely known behavior |
-| Zipformer EN 20M | ~29 MB | internal | Live-captions engine only — auto-managed |
-| Parakeet Unified EN 0.6B Streaming | ~650 MB | streaming | Realtime decoding on fast CPUs; benchmarked at startup and flagged if your CPU can't keep up |
+| Parakeet TDT 110M (int8) | ~104 MB | offline | **Default.** Fast, accurate English on modest CPUs |
+| Parakeet TDT 0.6B v3 | ~487 MB | offline | Highest accuracy single-pass; multilingual |
+| Parakeet Unified EN 0.6B | ~501 MB | offline | Unified punctuation + casing out of the box |
+| Parakeet Unified EN 0.6B Streaming | ~501 MB | streaming | Realtime decoding; benchmarked at startup — flagged if your CPU can't keep up |
+| Whisper Tiny (en) | ~118 MB | offline (chunked) | Lightest Whisper; good for low-RAM machines |
+| Whisper Base (en) | ~209 MB | offline (chunked) | Step up from Tiny |
+| Whisper Small (en) | ~636 MB | offline (chunked) | Strong accuracy/speed trade-off |
+| Whisper Turbo (Large v3) | ~564 MB | offline (chunked) | Fastest large-model Whisper |
+| Whisper Medium (en) | ~1.9 GB | offline (chunked) | Highest Whisper accuracy; needs more RAM |
+
+### Internal models (auto-managed)
+
+| Model | Size | Purpose |
+|---|---|---|
+| Zipformer EN 20M | ~29 MB | Live captions — powers realtime partial text while you speak; runs alongside any accuracy model |
+| Silero VAD v4 | ~1.7 MB | Silence detection — separates speech from pauses automatically |
+
+> All models are downloaded once from sherpa-onnx release mirrors and stored locally. Nothing else touches the network.
 
 ## How it works
 
