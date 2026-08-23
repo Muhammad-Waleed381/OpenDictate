@@ -134,7 +134,7 @@ export function ModelCard() {
           <button
             key={tab}
             onClick={() => setView(tab)}
-            className={`flex-1 border-border px-3 py-2 text-xs font-bold tracking-widest uppercase ${
+            className={`min-w-0 flex-1 truncate border-border px-2 py-2 text-xs font-bold tracking-widest uppercase ${
               view === tab
                 ? "bg-primary text-primary-foreground"
                 : "bg-card text-foreground hover:bg-accent"
@@ -173,7 +173,7 @@ export function ModelCard() {
                       : "border-muted bg-muted"
                   } ${i > 0 ? "border-t-0" : ""}`}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <span
                       className={`flex size-5 shrink-0 items-center justify-center border-2 text-[10px] font-bold ${
                         model.available
@@ -189,7 +189,7 @@ export function ModelCard() {
                       {model.name}
                     </span>
                     <span
-                      className={`shrink-0 text-[11px] font-bold tracking-wider uppercase tabular-nums ${
+                      className={`min-w-0 truncate text-[11px] font-bold tracking-wider uppercase tabular-nums ${
                         isActive ? "text-primary-foreground/70" : "text-muted-foreground"
                       }`}
                     >
@@ -198,7 +198,7 @@ export function ModelCard() {
                         : "size unknown"}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
                     {model.installed ? (
                       <>
                         <span
@@ -284,7 +284,7 @@ export function ModelCard() {
 
       {captionModel && (
         <div className="flex flex-col gap-2 border-2 border-dashed border-border bg-card p-3">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span className="border border-border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-muted-foreground">
               Built-in
             </span>
@@ -313,8 +313,8 @@ export function ModelCard() {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="min-w-0 text-xs text-muted-foreground">
           {installedBytes > 0 ? `${formatBytes(installedBytes)} of model storage used` : "No models installed yet."}
         </p>
         {missingCount > 0 && (

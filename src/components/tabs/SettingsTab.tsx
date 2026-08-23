@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
-import { formatHotkey } from "@/lib/utils";
+import { formatHotkey, DEFAULT_HOTKEY } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -60,7 +60,7 @@ function HotkeyCapture() {
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const current = formatHotkey(settings?.hotkey ?? "ctrl+alt+space");
+  const current = formatHotkey(settings?.hotkey ?? DEFAULT_HOTKEY);
 
   useEffect(() => {
     if (capturing) inputRef.current?.focus();

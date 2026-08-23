@@ -71,10 +71,24 @@ fn default_audio_feedback_volume() -> f32 {
     0.5
 }
 
+/// macOS reserves the Ctrl+Alt/Option row for input-source switching and treats
+/// Cmd as the primary modifier, so `ctrl+alt+space` is both unidiomatic and
+/// liable to collide there. Cmd+Space (Spotlight) and Cmd+Option+Space (Finder
+/// search) are taken by the system; Cmd+Shift+Space is free.
+#[cfg(target_os = "macos")]
+pub fn default_hotkey() -> String {
+    "cmd+shift+space".to_string()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn default_hotkey() -> String {
+    "ctrl+alt+space".to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            hotkey: "ctrl+alt+space".to_string(),
+            hotkey: default_hotkey(),
             mic: None,
             engine: "parakeet".to_string(),
             language: "auto".to_string(),
