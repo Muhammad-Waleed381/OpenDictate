@@ -20,6 +20,7 @@ Cloud dictation is fast to build but slow to trust: your voice leaves the machin
 ## Features
 
 - **One hotkey, anywhere** — global shortcut starts/stops dictation; the transcript lands in whichever app has focus
+- **Double-tap gestures (macOS)** — trigger dictation with double-Fn or a double-tapped modifier, like Apple's own dictation
 - **Live captions while you speak** — a realtime zipformer engine streams partial text as you talk, independent of the model producing the final transcript
 - **Multiple engines, one interface** — NVIDIA Parakeet, Whisper, and streaming models managed in-app (download, install-state, disk usage, removal)
 - **Custom dictionary** — hotwords fed to the recognizer for names, jargon, and acronyms
@@ -36,7 +37,7 @@ Cloud dictation is fast to build but slow to trust: your voice leaves the machin
 |---|---|---|
 | Linux | ✅ Supported | X11/Wayland (GNOME-tested); ydotool/xdotool injection; dock overlay |
 | Windows | 🚧 Builds via CI | NSIS `.exe` + `.msi`; SendInput injection |
-| macOS | 🚧 Builds via CI | universal `.dmg` (Apple Silicon + Intel); CGEvent injection |
+| macOS | 🚧 Builds via CI | universal `.dmg` (Apple Silicon + Intel); CGEvent injection; ⌘-based paste/undo; native notifications; community-tested |
 
 ## Install
 
@@ -46,7 +47,7 @@ Grab an installer from [Releases](https://github.com/Muhammad-Waleed381/OpenDict
 - **Windows**: `.msi` or NSIS `.exe`
 - **macOS**: universal `.dmg`
 
-On first launch, pick a model in Settings → Models (the default Parakeet TDT 110M is ~104 MB) and press <kbd>Ctrl</kbd>+<kbd>K</kbd> to dictate.
+On first launch, pick a model in Settings → Models (the default Parakeet TDT 110M is ~104 MB) and press your dictation hotkey — <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> by default (<kbd>⌘</kbd>+<kbd>⇧</kbd>+<kbd>Space</kbd> on macOS). Remappable in Settings.
 
 ## Choosing a model
 
