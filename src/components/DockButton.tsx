@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Mic, X } from "lucide-react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
+import { tailForDisplay } from "@/lib/utils";
 
 export function DockButton() {
   const overlayState = useStore((s) => s.overlayState);
@@ -113,10 +114,11 @@ export function DockButton() {
 
   const listening = active;
   const processing = state === "transcribing";
-  const pillLabel =
+  const rawLabel =
     partial === "listening…" ? "RECORDING"
     : partial === "transcribing…" ? "PROCESSING"
     : partial;
+  const pillLabel = tailForDisplay(rawLabel, 46);
 
   return (
     <div className="flex h-full w-full items-end justify-between gap-2 pr-2 pl-3">

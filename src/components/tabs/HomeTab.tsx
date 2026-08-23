@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useRecording } from "@/lib/useRecording";
+import { tailForDisplay } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
 
 function formatBytes(bytes: number): string {
@@ -244,8 +245,10 @@ function LiveCaptionsPanel() {
             LIVE
           </span>
           <span className="size-2 shrink-0 animate-od-blink bg-primary-foreground" />
-          <span className="truncate text-sm font-medium">
-            {partial ? `“${partial}”` : "Speak to see live captions…"}
+          <span className="min-w-0 truncate text-sm font-medium">
+            {partial
+              ? `“${tailForDisplay(partial, 110)}”`
+              : "Speak to see live captions…"}
           </span>
         </CardContent>
       </Card>
