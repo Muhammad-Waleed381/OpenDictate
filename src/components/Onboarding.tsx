@@ -17,6 +17,14 @@ export function Onboarding() {
 
   const sttReady = models?.stt_ready ?? false;
 
+  // The dialog scrolls internally now (tall model grid); each step should
+  // open at its top, not wherever the previous step was scrolled to.
+  useEffect(() => {
+    document
+      .querySelector('[data-slot="dialog-content"]')
+      ?.scrollTo({ top: 0 });
+  }, [step]);
+
   useEffect(() => {
     const unlistenPromise = api.onModelsReady(() => {
       useStore.getState().refreshModels();
