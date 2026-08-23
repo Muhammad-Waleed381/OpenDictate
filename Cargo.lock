@@ -3460,7 +3460,7 @@ dependencies = [
 
 [[package]]
 name = "opendictate"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "core-foundation 0.9.4",
  "core-graphics 0.23.2",
@@ -3484,7 +3484,7 @@ dependencies = [
 
 [[package]]
 name = "opendictate-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "bzip2 0.5.2",
  "cpal",
