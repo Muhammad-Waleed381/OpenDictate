@@ -65,6 +65,8 @@ pub fn run() {
             commands::export_history,
         ])
         .setup(|app| {
+            notify::init(&app.config().identifier);
+
             let data_dir = app
                 .path()
                 .app_data_dir()
