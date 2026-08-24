@@ -35,10 +35,10 @@ gtk = { version = "0.18", features = ["v3_24"] }
 # ydotool/xdotool + notify-send paths.
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 enigo = "0.2"
+notify-rust = "4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.55"
-notify-rust = "4"
 
 # Raw HID event stream for double-tap modifier gestures, which Carbon's
 # RegisterEventHotKey (behind tauri-plugin-global-shortcut) cannot express.

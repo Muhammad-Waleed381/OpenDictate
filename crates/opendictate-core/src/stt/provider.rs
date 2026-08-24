@@ -98,6 +98,7 @@ impl Provider {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn which(bin: &str) -> bool {
     std::env::var_os("PATH")
         .map(|p| {
