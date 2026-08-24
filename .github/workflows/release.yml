@@ -102,7 +102,8 @@ jobs:
           if (-not (Test-Path "src-tauri\gpu-resources\onnxruntime_providers_cuda.dll")) { throw "CUDA provider dll missing from GPU archive" }
 
           $conf = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
-          $conf.bundle.resources = @("gpu-resources/*")
+          # bundle.resources may not exist yet; -Force creates or overwrites.
+          $conf.bundle | Add-Member -NotePropertyName resources -NotePropertyValue @("gpu-resources/*") -Force
           $conf | ConvertTo-Json -Depth 32 | Set-Content "src-tauri\tauri.conf.json"
 
           $manifest = "crates/opendictate-core/Cargo.toml"
