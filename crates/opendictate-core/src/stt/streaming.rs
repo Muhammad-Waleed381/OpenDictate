@@ -316,4 +316,29 @@ mod tests {
         eprintln!("partials={partials:?}");
         eprintln!("finalized utterances={finalized} final={final_text:?}");
     }
+
+    /// Requests the CUDA provider on whatever machine runs this test. On a
+    /// GPU-less box (the common case) creation must fail and land on CPU,
+    /// which is exactly the behavior every non-NVIDIA user depends on when
+    /// running a GPU-linked build. Requires the caption model installed and
+    /// skips silently otherwise; pair with `--features gpu-shared`.
+    #[test]
+    fn cuda_request_falls_back_to_cpu_without_gpu() {
+        use super::super::provider::{Provider, resolve};
+        let dir = crate::stt::models::caption_model_dir();
+        if !crate::stt::models::is_caption_model_ready() {
+            eprintln!("skipping: caption model not installed");
+            return;
+        }
+        // resolve() applies the hardware gate; on NVIDIA boxes the request
+        // legitimately survives and this test has nothing to prove.
+        let prov = resolve("cuda");
+        if prov == Provider::Cuda {
+            eprintln!("NVIDIA hardware present; skipping fallback assertion");
+            return;
+        }
+        let rec = StreamingRecognizer::new_with_provider(&dir, None, prov)
+            .expect("construction must succeed");
+        assert_eq!(rec.provider, "cpu");
+    }
 }

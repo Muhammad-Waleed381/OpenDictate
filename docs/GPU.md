@@ -55,7 +55,11 @@ testing new lib archives without cutting a release.
 | Path | Code | Fallback tested | Acceleration measured |
 |---|---|---|---|
 | CPU | ✅ | — | ✅ (RTF benchmark) |
-| CUDA | ✅ | ✅ (fails → CPU on non-NVIDIA machines) | ⏳ pending hardware run |
-| CoreML | ✅ plumbing only | ✅ same mechanism | ⏳ opt-in, untested |
+| CUDA | ✅ | ✅ **live** — gpu-linked build on a GPU-less machine resolves to CPU and loads the real model (`cuda_request_falls_back_to_cpu_without_gpu`) | ⏳ pending hardware run |
+| CoreML | ✅ plumbing only | ✅ hardware gate forces CPU off-macOS | ⏳ opt-in, untested |
+
+Hardware gating: providers are only *requested* when the machine plausibly
+has them (NVIDIA driver probe for CUDA), so reported providers are truthful.
+sherpa-onnx additionally degrades gracefully internally as a second net.
 
 When acceleration gets its first real measurement, record the RTF here.

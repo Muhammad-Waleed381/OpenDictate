@@ -41,6 +41,34 @@ impl Provider {
         }
     }
 
+    /// Whether this machine plausibly has the hardware/driver for the
+    /// provider. sherpa-onnx also degrades gracefully internally, but its
+    /// fallback is invisible to us — the recognizer reports the *requested*
+    /// provider even while executing on CPU. Gating here keeps our UI
+    /// truthful and skips pointless CUDA session attempts entirely.
+    pub fn hardware_available(self) -> bool {
+        match self {
+            Provider::Cpu => true,
+            Provider::Cuda => {
+                #[cfg(target_os = "linux")]
+                {
+                    std::path::Path::new("/proc/driver/nvidia").exists()
+                        || which("nvidia-smi")
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    std::path::Path::new(r"C:\Windows\System32\nvapi64.dll").exists()
+                        || which("nvidia-smi")
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+                {
+                    false
+                }
+            }
+            Provider::CoreMl => cfg!(target_os = "macos"),
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Provider::Cpu => "cpu",
@@ -54,13 +82,29 @@ impl Provider {
     }
 }
 
+fn which(bin: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|p| {
+            std::env::split_paths(&p).any(|dir| dir.join(bin).is_file())
+        })
+        .unwrap_or(false)
+}
+
 /// Resolves the provider to attempt for a given `settings.gpu` value:
 /// `"auto"` defers to [`Provider::auto`], anything else parses explicitly,
 /// and `"off"` / unknown fall back to CPU.
 pub fn resolve(mode: &str) -> Provider {
-    match mode.trim().to_lowercase().as_str() {
+    let requested = match mode.trim().to_lowercase().as_str() {
         "auto" => Provider::auto(),
         other => Provider::from_request(other),
+    };
+    // Downgrade before construction so the reported provider reflects
+    // reality and we never spin up a doomed CUDA session.
+    if requested.is_gpu() && !requested.hardware_available() {
+        log::info!("gpu mode '{}' requested but hardware unavailable; using cpu", requested.as_str());
+        Provider::Cpu
+    } else {
+        requested
     }
 }
 
@@ -83,7 +127,13 @@ mod tests {
         assert_ne!(Provider::auto(), Provider::CoreMl);
         assert_eq!(resolve("off"), Provider::Cpu);
         assert_eq!(resolve(""), Provider::Cpu);
-        assert_eq!(resolve("cuda"), Provider::Cuda);
+        // Explicit cuda resolves through the hardware gate: on GPU-less CI
+        // it must come back as CPU.
+        if !Provider::Cuda.hardware_available() {
+            assert_eq!(resolve("cuda"), Provider::Cpu);
+        } else {
+            assert_eq!(resolve("cuda"), Provider::Cuda);
+        }
     }
 
     #[test]
