@@ -69,7 +69,12 @@ jobs:
         run: |
           curl -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-cuda-12.x-cudnn-9.x-onnxruntime1.27.1-linux-x64-gpu.tar.bz2" -o /tmp/libs.tbz2
           mkdir -p "$HOME/gpu-libs" && tar -xf /tmp/libs.tbz2 -C "$HOME/gpu-libs"
-          echo "SHERPA_ONNX_LIB_DIR=$(find "$HOME/gpu-libs" -type f -name 'libsherpa-onnx-c-api.so' | head -1 | xargs dirname)" >> "$GITHUB_ENV"
+          LIBDIR=$(find "$HOME/gpu-libs" -type f -name 'libsherpa-onnx-c-api.so' | head -1 | xargs dirname)
+          echo "SHERPA_ONNX_LIB_DIR=$LIBDIR" >> "$GITHUB_ENV"
+          # linuxdeploy resolves NEEDED chains with ldd: make the CUDA/cuDNN
+          # libraries visible, and never strip a GPU-linked binary.
+          echo "LD_LIBRARY_PATH=$LIBDIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          echo "NO_STRIP=true" >> "$GITHUB_ENV"
           # tauri-cli cannot pass --no-default-features to cargo, so select
           # the shared link mode by flipping the manifest default instead.
           sed -i 's/^default = \["cpu-static"\]/default = ["gpu-shared"]/' crates/opendictate-core/Cargo.toml
@@ -79,12 +84,27 @@ jobs:
         if: ${{ matrix.platform == 'windows-latest' }}
         shell: pwsh
         run: |
-          curl.exe -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-cuda-12.x-cudnn-9.x-win-x64-cuda.tar.bz2" -o "$env:RUNNER_TEMP\libs.zip"
-          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\gpu-libs" | Out-Null
-          tar -xf "$env:RUNNER_TEMP\libs.zip" -C "$env:USERPROFILE\gpu-libs"
-          $dll = Get-ChildItem -Recurse "$env:USERPROFILE\gpu-libs" -Filter "sherpa-onnx-c-api.dll" | Select-Object -First 1
-          if (-not $dll) { throw "sherpa-onnx-c-api.dll not found in archive" }
-          "SHERPA_ONNX_LIB_DIR=$($dll.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          # The CUDA archive carries runtime DLLs but no import libraries,
+          # so we LINK against the CPU shared archive (identical C API) and
+          # SHIP the CUDA DLLs as bundle resources — at runtime the loader
+          # prefers the copies installed next to the exe.
+          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\gpu-link", "$env:USERPROFILE\gpu-runtime", "src-tauri\gpu-resources" | Out-Null
+
+          curl.exe -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-win-x64-shared-MT-Release-lib.tar.bz2" -o "$env:RUNNER_TEMP\cpu.zip"
+          tar -xf "$env:RUNNER_TEMP\cpu.zip" -C "$env:USERPROFILE\gpu-link"
+          $linkLib = Get-ChildItem -Recurse "$env:USERPROFILE\gpu-link" -Filter "onnxruntime.lib" | Select-Object -First 1
+          if (-not $linkLib) { throw "onnxruntime.lib missing from CPU shared archive" }
+          "SHERPA_ONNX_LIB_DIR=$($linkLib.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          curl.exe -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-cuda-12.x-cudnn-9.x-win-x64-cuda.tar.bz2" -o "$env:RUNNER_TEMP\cuda.zip"
+          tar -xf "$env:RUNNER_TEMP\cuda.zip" -C "$env:USERPROFILE\gpu-runtime"
+          Get-ChildItem -Recurse "$env:USERPROFILE\gpu-runtime" -Filter "*.dll" | Copy-Item -Destination "src-tauri\gpu-resources"
+          if (-not (Test-Path "src-tauri\gpu-resources\onnxruntime_providers_cuda.dll")) { throw "CUDA provider dll missing from GPU archive" }
+
+          $conf = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
+          $conf.bundle.resources = @("gpu-resources/*")
+          $conf | ConvertTo-Json -Depth 32 | Set-Content "src-tauri\tauri.conf.json"
+
           $manifest = "crates/opendictate-core/Cargo.toml"
           (Get-Content $manifest) -replace '^default = \["cpu-static"\]', 'default = ["gpu-shared"]' | Set-Content $manifest
 
