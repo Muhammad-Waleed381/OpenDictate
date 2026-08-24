@@ -222,6 +222,19 @@ export function SettingsTab() {
   const handleAudioFeedbackChange = (enabled: boolean) =>
     persistToggle("audio_feedback", enabled);
 
+  const persistGpu = async (mode: "auto" | "off") => {
+    const current = useStore.getState().settings;
+    if (!current) return;
+    useStore.getState().setSettings({ ...current, gpu: mode });
+    try {
+      await api.setSettings({ gpu: mode });
+    } catch {
+      const latest = await api.getSettings().catch(() => null);
+      if (latest) useStore.getState().setSettings(latest);
+      toast.error("Could not save GPU setting — reverted");
+    }
+  };
+
   const volumeTimer = useRef<number | null>(null);
 
   const handleVolumeChange = (value: number) => {
@@ -324,6 +337,22 @@ export function SettingsTab() {
           id="continuous"
           checked={settings?.continuous ?? false}
           onCheckedChange={handleContinuousChange}
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="gpu">GPU acceleration</Label>
+          <p className="text-xs text-muted-foreground">
+            Experimental. Auto uses CUDA on Linux/Windows when the drivers and
+            libraries allow it; engines silently fall back to CPU otherwise.
+            Applies from the next dictation.
+          </p>
+        </div>
+        <Switch
+          id="gpu"
+          checked={(settings?.gpu ?? "off") !== "off"}
+          onCheckedChange={(enabled) => persistGpu(enabled ? "auto" : "off")}
         />
       </div>
 

@@ -5,6 +5,7 @@ use sherpa_onnx::{
     OfflineRecognizerConfig, OfflineTransducerModelConfig, OfflineWhisperModelConfig,
 };
 
+use super::provider::Provider;
 use crate::error::{CoreError, Result};
 
 const MIN_AUDIO_SAMPLES: usize = 3_200;
@@ -22,6 +23,8 @@ pub enum ModelKind {
 pub struct SttEngine {
     recognizer: OfflineRecognizer,
     kind: ModelKind,
+    /// Provider the engine actually came up on (after fallback).
+    pub provider: &'static str,
 }
 
 // SAFETY: OfflineRecognizer wraps the ONNX Runtime C API, which is documented
@@ -31,6 +34,36 @@ unsafe impl Sync for SttEngine {}
 
 impl SttEngine {
     pub fn new(model_dir: &Path, kind: ModelKind, language: Option<String>) -> Result<Self> {
+        Self::new_with_provider(model_dir, kind, language, Provider::Cpu)
+    }
+
+    /// [`new`] with an execution-provider request. GPU providers that fail
+    /// to create fall back to CPU transparently.
+    pub fn new_with_provider(
+        model_dir: &Path,
+        kind: ModelKind,
+        language: Option<String>,
+        requested: Provider,
+    ) -> Result<Self> {
+        match Self::build(model_dir, kind, language.clone(), requested) {
+            Ok(e) => Ok(e),
+            Err(err) if requested.is_gpu() => {
+                log::warn!(
+                    "provider '{}' unavailable ({err}); falling back to cpu",
+                    requested.as_str()
+                );
+                Self::build(model_dir, kind, language.clone(), Provider::Cpu)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn build(
+        model_dir: &Path,
+        kind: ModelKind,
+        language: Option<String>,
+        provider: Provider,
+    ) -> Result<Self> {
         if !model_dir.exists() {
             return Err(CoreError::Transcription(format!(
                 "STT model directory not found at {}",
@@ -69,7 +102,7 @@ impl SttEngine {
                     },
                     tokens: Some(tokens.to_string_lossy().to_string()),
                     num_threads: n_threads,
-                    provider: Some("cpu".to_string()),
+                    provider: Some(provider.as_str().to_string()),
                     model_type: Some("nemo_transducer".to_string()),
                     debug: false,
                     ..Default::default()
@@ -98,7 +131,7 @@ impl SttEngine {
                     },
                     tokens: Some(tokens.to_string_lossy().to_string()),
                     num_threads: n_threads,
-                    provider: Some("cpu".to_string()),
+                    provider: Some(provider.as_str().to_string()),
                     debug: false,
                     ..Default::default()
                 },
@@ -133,7 +166,7 @@ impl SttEngine {
                     },
                     tokens: Some(tokens_file.to_string_lossy().to_string()),
                     num_threads: n_threads,
-                    provider: Some("cpu".to_string()),
+                    provider: Some(provider.as_str().to_string()),
                     debug: false,
                     ..Default::default()
                 },
@@ -145,18 +178,24 @@ impl SttEngine {
         };
 
         let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| {
-            CoreError::Transcription(
-                "failed to create STT recognizer; check model files".to_string(),
-            )
+            CoreError::Transcription(format!(
+                "failed to create STT recognizer on provider '{}'; check model files",
+                provider.as_str()
+            ))
         })?;
 
         log::info!(
-            "STT engine loaded from {} ({n_threads} threads, {:?})",
+            "STT engine loaded from {} ({n_threads} threads, {:?}, provider {})",
             model_dir.display(),
-            kind
+            kind,
+            provider.as_str()
         );
 
-        Ok(Self { recognizer, kind })
+        Ok(Self {
+            recognizer,
+            kind,
+            provider: provider.as_str(),
+        })
     }
 
     pub fn transcribe(&self, audio: &[f32], hotwords: Option<&str>) -> Result<String> {

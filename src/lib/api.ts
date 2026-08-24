@@ -5,6 +5,8 @@ export interface ModelsStatus {
   stt_ready: boolean;
   vad_ready: boolean;
   caption_ready: boolean;
+  gpu_mode: string;
+  gpu_active: boolean;
   streaming_rtf_x100: number;
 }
 
@@ -21,6 +23,7 @@ export interface ModelInfo {
 }
 
 export interface Settings {
+  gpu?: string;
   hotkey: string;
   mic: string | null;
   engine: string;
@@ -40,6 +43,7 @@ export interface Settings {
 export type SettingsPatch = Partial<
   Pick<
     Settings,
+    | "gpu"
     | "hotkey"
     | "engine"
     | "language"

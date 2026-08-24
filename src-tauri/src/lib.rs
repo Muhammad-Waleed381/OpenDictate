@@ -101,6 +101,7 @@ pub fn run() {
                 caption_stream: Arc::new(Mutex::new(None)),
                 caption_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 streaming_rtf_x100: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+                gpu_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 vad: Arc::new(Mutex::new(None)),
             };
             app.manage(state);

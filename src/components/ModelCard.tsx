@@ -282,6 +282,11 @@ export function ModelCard() {
         </div>
       )}
 
+      {modelsStatus?.gpu_active && (
+        <span className="w-fit border-2 border-primary bg-primary px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-primary-foreground">
+          GPU ✓ {modelsStatus.gpu_mode}
+        </span>
+      )}
       {captionModel && (
         <div className="flex flex-col gap-2 border-2 border-dashed border-border bg-card p-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">

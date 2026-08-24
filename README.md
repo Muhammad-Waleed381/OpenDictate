@@ -29,6 +29,7 @@ Cloud dictation is fast to build but slow to trust: your voice leaves the machin
 - **Insert modes** — auto / synthetic typing / clipboard paste
 - **History & activity** — searchable local history, re-insert anything, GitHub-style yearly activity heatmap
 - **Audio feedback** — synthesized start/success/error cues with volume control (no bundled assets)
+- **Experimental GPU acceleration** — opt-in CUDA support with automatic CPU fallback
 - **100% offline** — no accounts, no telemetry, no network calls after model downloads
 
 ## Platform support

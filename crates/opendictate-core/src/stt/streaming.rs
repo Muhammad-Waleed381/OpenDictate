@@ -7,6 +7,7 @@ use sherpa_onnx::{
     OnlineTransducerModelConfig,
 };
 
+use super::provider::Provider;
 use crate::error::{CoreError, Result};
 
 const MAX_STT_THREADS: usize = 8;
@@ -19,6 +20,8 @@ const MAX_STT_THREADS: usize = 8;
 /// app.
 pub struct StreamingRecognizer {
     recognizer: OnlineRecognizer,
+    /// Provider the recognizer actually came up on (after fallback).
+    pub provider: &'static str,
 }
 
 pub struct StreamingSession {
@@ -32,10 +35,35 @@ impl StreamingRecognizer {
         Self::new_for(model_dir, Some("nemo_transducer"))
     }
 
+    /// [`new_for`] with an execution-provider request. A GPU provider that
+    /// fails to create (missing libs, no drivers, unsupported model) falls
+    /// back to CPU transparently; `provider` reports what actually ran.
+    pub fn new_with_provider(
+        model_dir: &Path,
+        model_type: Option<&str>,
+        requested: Provider,
+    ) -> Result<Self> {
+        match Self::build(model_dir, model_type, requested) {
+            Ok(r) => Ok(r),
+            Err(e) if requested.is_gpu() => {
+                log::warn!(
+                    "provider '{}' unavailable ({e}); falling back to cpu",
+                    requested.as_str()
+                );
+                Self::build(model_dir, model_type, Provider::Cpu)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Same as [`new`] but with an explicit sherpa `model_type`. Pass `None`
     /// to let sherpa auto-detect (required for non-NeMo engines like
     /// zipformer, where a wrong hint aborts feature setup).
     pub fn new_for(model_dir: &Path, model_type: Option<&str>) -> Result<Self> {
+        Self::build(model_dir, model_type, Provider::Cpu)
+    }
+
+    fn build(model_dir: &Path, model_type: Option<&str>, provider: Provider) -> Result<Self> {
         if !model_dir.exists() {
             return Err(CoreError::Transcription(format!(
                 "streaming model directory not found at {}",
@@ -98,7 +126,7 @@ impl StreamingRecognizer {
                 },
                 tokens: Some(tokens.to_string_lossy().to_string()),
                 num_threads: n_threads,
-                provider: Some("cpu".to_string()),
+                provider: Some(provider.as_str().to_string()),
                 model_type: model_type.map(|s| s.to_string()),
                 ..Default::default()
             },
@@ -112,17 +140,22 @@ impl StreamingRecognizer {
         };
 
         let recognizer = OnlineRecognizer::create(&config).ok_or_else(|| {
-            CoreError::Transcription(
-                "failed to create streaming recognizer; check model files".to_string(),
-            )
+            CoreError::Transcription(format!(
+                "failed to create streaming recognizer on provider '{}'; check model files",
+                provider.as_str()
+            ))
         })?;
 
         log::info!(
-            "streaming engine loaded from {} ({n_threads} threads)",
-            model_dir.display()
+            "streaming engine loaded from {} ({n_threads} threads, provider {})",
+            model_dir.display(),
+            provider.as_str()
         );
 
-        Ok(Self { recognizer })
+        Ok(Self {
+            recognizer,
+            provider: provider.as_str(),
+        })
     }
 
     pub fn create_session(&self, hotwords: Option<&str>) -> StreamingSession {

@@ -62,6 +62,8 @@ pub fn models_status(state: State<AppState>) -> ModelsStatus {
         streaming_rtf_x100: state
             .streaming_rtf_x100
             .load(std::sync::atomic::Ordering::SeqCst),
+        gpu_mode: current_gpu_mode(&state),
+        gpu_active: state.gpu_active.load(std::sync::atomic::Ordering::SeqCst),
     }
 }
 
@@ -176,6 +178,14 @@ pub fn is_recording(state: State<AppState>) -> bool {
     state.recorder.is_recording()
 }
 
+fn current_gpu_mode(state: &State<AppState>) -> String {
+    state
+        .settings
+        .lock()
+        .map(|s| s.gpu.clone())
+        .unwrap_or_else(|_| "off".to_string())
+}
+
 #[tauri::command]
 pub fn get_settings(state: State<AppState>) -> Result<crate::state::Settings, String> {
     state
@@ -197,12 +207,30 @@ pub fn set_settings(
             return Err("hotkey cannot be empty".to_string());
         }
     }
+    if let Some(gpu) = &settings.gpu {
+        let valid = matches!(
+            gpu.trim().to_lowercase().as_str(),
+            "" | "off" | "auto" | "cuda" | "coreml"
+        );
+        if !valid {
+            return Err("gpu must be one of: off, auto, cuda, coreml".to_string());
+        }
+    }
+    let gpu_changed = settings
+        .gpu
+        .as_ref()
+        .is_some_and(|g| !g.trim().is_empty() && g.trim().to_lowercase() != current.gpu);
     let hotkey_changed = settings
         .hotkey
         .as_ref()
         .is_some_and(|h| h != &current.hotkey);
     if let Some(hotkey) = &settings.hotkey {
         current.hotkey = hotkey.clone();
+    }
+    if let Some(gpu) = &settings.gpu {
+        if !gpu.trim().is_empty() {
+            current.gpu = gpu.trim().to_lowercase();
+        }
     }
     if let Some(engine) = &settings.engine {
         if !engine.is_empty() {
@@ -254,11 +282,28 @@ pub fn set_settings(
             current.audio_feedback_volume = audio_feedback_volume;
         }
     }
+    let gpu_mode_now = current.gpu.clone();
     let settings = current.clone();
     drop(current);
 
     if hotkey_changed {
         crate::hotkey::register(&app, &state, &settings.hotkey)?;
+    }
+
+    // Drop cached engines so a gpu-mode change takes effect on next use.
+    // The caption engine is intentionally left alone: the 20M zipformer is
+    // latency-critical and GPU adds nothing at that size.
+    if gpu_changed {
+        log::info!("gpu mode changed to '{}'; engines reload on next use", gpu_mode_now);
+        if let Ok(mut e) = state.stt_engine.lock() {
+            *e = None;
+        }
+        if let Ok(mut e) = state.streaming_engine.lock() {
+            *e = None;
+        }
+        state
+            .gpu_active
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     let conn = state.db.lock().map_err(|e| e.to_string())?;

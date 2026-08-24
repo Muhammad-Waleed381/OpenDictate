@@ -16,6 +16,21 @@ use crate::dock;
 use crate::notify;
 use crate::state::{AppState, HistoryEntry, StreamingPipe, TranscriptResult};
 
+
+/// Resolves the execution-provider to request for new engines from the
+/// current settings. "auto" defers to the platform policy in
+/// [`opendictate_core::stt::provider::Provider::auto`]; engines always fall
+/// back to CPU internally when a GPU provider cannot be created.
+fn desired_provider(state: &AppState) -> opendictate_core::stt::provider::Provider {
+    let mode = state
+        .settings
+        .lock()
+        .map(|s| s.gpu.clone())
+        .unwrap_or_default();
+    opendictate_core::stt::provider::resolve(&mode)
+}
+
+
 pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String> {
     if state.recorder.is_recording() {
         log::warn!("recording already in progress; cancelling stale recording");
@@ -302,7 +317,15 @@ pub fn spawn_streaming(app: &AppHandle, state: &AppState) -> Result<(), String> 
                 log::debug!("streaming engine cache hit for {}", model_id);
                 Arc::clone(&existing.recognizer)
             } else {
-                let created = Arc::new(StreamingRecognizer::new(&dir).map_err(|e| e.to_string())?);
+                let created = {
+                    let prov = desired_provider(state);
+                    let rec = StreamingRecognizer::new_with_provider(&dir, Some("nemo_transducer"), prov)
+                        .map_err(|e| e.to_string())?;
+                    if rec.provider != "cpu" {
+                        state.gpu_active.store(true, Ordering::SeqCst);
+                    }
+                    Arc::new(rec)
+                };
                 *cache = Some(crate::state::CachedStreamingEngine {
                     model_id: model_id.clone(),
                     recognizer: Arc::clone(&created),
@@ -310,7 +333,15 @@ pub fn spawn_streaming(app: &AppHandle, state: &AppState) -> Result<(), String> 
                 created
             }
         } else {
-            let created = Arc::new(StreamingRecognizer::new(&dir).map_err(|e| e.to_string())?);
+            let created = {
+                    let prov = desired_provider(state);
+                    let rec = StreamingRecognizer::new_with_provider(&dir, Some("nemo_transducer"), prov)
+                        .map_err(|e| e.to_string())?;
+                    if rec.provider != "cpu" {
+                        state.gpu_active.store(true, Ordering::SeqCst);
+                    }
+                    Arc::new(rec)
+                };
             *cache = Some(crate::state::CachedStreamingEngine {
                 model_id: model_id.clone(),
                 recognizer: Arc::clone(&created),
@@ -968,7 +999,15 @@ pub fn load_engine(state: &AppState) -> Result<Arc<SttEngine>, String> {
         ModelKind::NemoCtc
     };
     let load_started = Instant::now();
-    let engine = Arc::new(SttEngine::new(&dir, kind, Some(language)).map_err(|e| e.to_string())?);
+    let provider = desired_provider(state);
+    let engine = Arc::new({
+        let eng = SttEngine::new_with_provider(&dir, kind, Some(language), provider)
+            .map_err(|e| e.to_string())?;
+        if eng.provider != "cpu" {
+            state.gpu_active.store(true, Ordering::SeqCst);
+        }
+        eng
+    });
     let mut cache = state.stt_engine.lock().map_err(|e| e.to_string())?;
     if let Some(cached) = cache.as_ref() {
         if cached.model_id == model_id && cached.language == language_key {

@@ -1,0 +1,67 @@
+name: GPU build (experimental)
+
+# Builds an NVIDIA-CUDA-flavored Linux artifact by linking sherpa-onnx
+# against prebuilt GPU-enabled shared libraries instead of the default
+# static CPU build. Dispatch-only and fully parameterized: it never runs
+# as part of tagged releases until acceleration is verified on real
+# hardware.
+#
+# You must supply `libs_url`: a tar.bz2 (or tar.gz/zip) of a sherpa-onnx
+# shared-library build compiled WITH `-DSHERPA_ONNX_ENABLE_CUDA=ON`,
+# matching the version pinned in crates/opendictate-core/Cargo.toml
+# (static `.a` preferred — SHERPA_ONNX_LIB_DIR overrides the static path).
+# k2-fsa publishes such archives alongside their releases (names like
+# `sherpa-onnx-v<ver>-linux-x64-shared-cuda-lib.tar.bz2`). The extracted
+# directory must contain `libsherpa-onnx-c-api.so` / `libonnxruntime.so`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      libs_url:
+        description: "URL of a CUDA-enabled sherpa-onnx shared-lib archive"
+        required: true
+
+jobs:
+  cuda-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libasound2-dev libpulse-dev cmake bzip2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Download GPU libraries
+        run: |
+          mkdir -p "$HOME/gpu-libs"
+          curl -fL "${{ inputs.libs_url }}" -o /tmp/libs.archive
+          case /tmp/libs.archive in
+            *.zip) unzip /tmp/libs.archive -d "$HOME/gpu-libs" ;;
+            *) tar -xf /tmp/libs.archive -C "$HOME/gpu-libs" ;;
+          esac
+          find "$HOME/gpu-libs" -name "*.so" | head -20
+
+      - name: Build with CUDA libraries
+        run: |
+          LIBDIR=$(find "$HOME/gpu-libs" -type f \( -name 'libsherpa-onnx-c-api.a' -o -name 'libsherpa-onnx-c-api.so' \) | head -1 | xargs dirname)
+          echo "link dir: $LIBDIR"
+          export SHERPA_ONNX_LIB_DIR="$LIBDIR"
+          npm ci
+          npm run tauri build -- --bundles deb
+        shell: bash
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opendictate-linux-cuda
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb

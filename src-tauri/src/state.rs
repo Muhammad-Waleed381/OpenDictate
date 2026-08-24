@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SettingsPatch {
     pub hotkey: Option<String>,
+    pub gpu: Option<String>,
     pub engine: Option<String>,
     pub language: Option<String>,
     pub stt_model: Option<String>,
@@ -27,6 +28,9 @@ pub struct SettingsPatch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub hotkey: String,
+    /// Execution-provider mode: "off" (default) | "auto" | "cuda" | "coreml".
+    #[serde(default)]
+    pub gpu: String,
     pub mic: Option<String>,
     pub engine: String,
     pub language: String,
@@ -89,6 +93,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             hotkey: default_hotkey(),
+            gpu: "off".to_string(),
             mic: None,
             engine: "parakeet".to_string(),
             language: "auto".to_string(),
@@ -136,6 +141,10 @@ pub struct ModelsStatus {
     pub vad_ready: bool,
     pub caption_ready: bool,
     pub streaming_rtf_x100: u32,
+    /// Requested gpu mode ("off" | "auto" | "cuda" | "coreml").
+    pub gpu_mode: String,
+    /// True when an STT engine is actually running on a non-CPU provider.
+    pub gpu_active: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +187,8 @@ pub struct AppState {
     /// Measured decode speed of the selectable streaming STT model, x100
     /// (e.g. 1500 = RTF 15.0). 0 = not benchmarked yet.
     pub streaming_rtf_x100: Arc<AtomicU32>,
+    /// True when any STT engine is currently running on a non-CPU provider.
+    pub gpu_active: Arc<std::sync::atomic::AtomicBool>,
     pub last_inserted: Arc<Mutex<Option<String>>>,
     pub stt_engine: Arc<Mutex<Option<CachedSttEngine>>>,
     pub streaming_engine: Arc<Mutex<Option<CachedStreamingEngine>>>,
