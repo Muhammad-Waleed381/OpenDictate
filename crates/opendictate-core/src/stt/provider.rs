@@ -41,12 +41,28 @@ impl Provider {
         }
     }
 
+    /// Whether execution providers are compiled into the linked onnxruntime
+    /// at all.
+    ///
+    /// The default `cpu-static` link is a CPU-only build: sherpa-onnx accepts
+    /// the provider string, finds no such EP, logs "Fallback to cpu!" and
+    /// runs on CPU. That fallback is invisible to us, so without this check a
+    /// GPU provider is reported as active while every frame executes on CPU.
+    /// Only the `gpu-shared` link can carry EPs — see docs/GPU.md.
+    const fn gpu_providers_linked() -> bool {
+        cfg!(feature = "gpu-shared")
+    }
+
     /// Whether this machine plausibly has the hardware/driver for the
-    /// provider. sherpa-onnx also degrades gracefully internally, but its
-    /// fallback is invisible to us — the recognizer reports the *requested*
-    /// provider even while executing on CPU. Gating here keeps our UI
-    /// truthful and skips pointless CUDA session attempts entirely.
+    /// provider, **and** the binary was linked in a way that can use it.
+    /// sherpa-onnx also degrades gracefully internally, but its fallback is
+    /// invisible to us — the recognizer reports the *requested* provider even
+    /// while executing on CPU. Gating here keeps our UI truthful and skips
+    /// pointless GPU session attempts entirely.
     pub fn hardware_available(self) -> bool {
+        if self.is_gpu() && !Self::gpu_providers_linked() {
+            return false;
+        }
         match self {
             Provider::Cpu => true,
             Provider::Cuda => {
@@ -101,7 +117,15 @@ pub fn resolve(mode: &str) -> Provider {
     // Downgrade before construction so the reported provider reflects
     // reality and we never spin up a doomed CUDA session.
     if requested.is_gpu() && !requested.hardware_available() {
-        log::info!("gpu mode '{}' requested but hardware unavailable; using cpu", requested.as_str());
+        let reason = if Provider::gpu_providers_linked() {
+            "hardware unavailable"
+        } else {
+            "this build links a CPU-only onnxruntime"
+        };
+        log::info!(
+            "gpu mode '{}' requested but {reason}; using cpu",
+            requested.as_str()
+        );
         Provider::Cpu
     } else {
         requested
@@ -134,6 +158,21 @@ mod tests {
         } else {
             assert_eq!(resolve("cuda"), Provider::Cuda);
         }
+    }
+
+    /// The regression this guards: on a `cpu-static` build, requesting CoreML
+    /// on macOS passed the old gate (which only asked "is this a Mac?"), so
+    /// the engine reported `coreml` and the UI showed a "GPU ✓ coreml" chip
+    /// while sherpa-onnx had already fallen back to CPU internally.
+    #[test]
+    fn gpu_never_reported_when_no_providers_are_linked() {
+        if Provider::gpu_providers_linked() {
+            return;
+        }
+        assert_eq!(resolve("coreml"), Provider::Cpu);
+        assert_eq!(resolve("cuda"), Provider::Cpu);
+        assert!(!Provider::CoreMl.hardware_available());
+        assert!(!Provider::Cuda.hardware_available());
     }
 
     #[test]

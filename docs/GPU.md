@@ -56,7 +56,29 @@ testing new lib archives without cutting a release.
 |---|---|---|---|
 | CPU | ✅ | — | ✅ (RTF benchmark) |
 | CUDA | ✅ | ✅ **live** — gpu-linked build on a GPU-less machine resolves to CPU and loads the real model (`cuda_request_falls_back_to_cpu_without_gpu`) | ⏳ pending hardware run |
-| CoreML | ✅ plumbing only | ✅ hardware gate forces CPU off-macOS | ⏳ opt-in, untested |
+| CoreML | ✅ plumbing only | ✅ hardware gate forces CPU off-macOS, and the link-mode gate forces CPU on `cpu-static` builds | ❌ **measured: no acceleration** (see below) |
+
+### CoreML measurement, Apple M4 (10-core), macOS 26.5, `cpu-static` build
+
+Parakeet TDT 110M int8, identical 30s of speech, best of 8 runs:
+
+| Requested | Reported | Best | RTF | vs realtime |
+|---|---|---|---|---|
+| `cpu` | cpu | 0.527s | 0.0176 | 56.9x |
+| `coreml` | coreml | 0.500s | 0.0167 | 60.0x |
+
+The 5% gap is run-to-run noise, not acceleration — both ran on CPU.
+sherpa-onnx says so itself on the CoreML attempt:
+
+```
+session.cc:GetSessionOptionsImpl:354
+CoreML is for Apple only since onnxruntime>=1.15. Fallback to cpu!
+```
+
+The default `cpu-static` link has no execution providers compiled in, so the
+CoreML request is discarded internally. Note the engine still **reported**
+`coreml` before the link-mode gate was added — that is the false-positive
+`GPU ✓` chip this gate exists to prevent.
 
 Hardware gating: providers are only *requested* when the machine plausibly
 has them (NVIDIA driver probe for CUDA), so reported providers are truthful.
