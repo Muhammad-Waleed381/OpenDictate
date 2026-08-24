@@ -222,7 +222,8 @@ export function SettingsTab() {
   const handleAudioFeedbackChange = (enabled: boolean) =>
     persistToggle("audio_feedback", enabled);
 
-  const persistGpu = async (mode: "auto" | "off") => {
+  const handleGpuChange = async (mode: string | null) => {
+    if (!mode) return;
     const current = useStore.getState().settings;
     if (!current) return;
     useStore.getState().setSettings({ ...current, gpu: mode });
@@ -344,16 +345,21 @@ export function SettingsTab() {
         <div className="flex flex-col gap-1">
           <Label htmlFor="gpu">GPU acceleration</Label>
           <p className="text-xs text-muted-foreground">
-            Experimental. Auto uses CUDA on Linux/Windows when the drivers and
-            libraries allow it; engines silently fall back to CPU otherwise.
-            Applies from the next dictation.
+            Experimental. Engines silently fall back to CPU when a provider is
+            unavailable, and changes apply from the next dictation.
           </p>
         </div>
-        <Switch
-          id="gpu"
-          checked={(settings?.gpu ?? "off") !== "off"}
-          onCheckedChange={(enabled) => persistGpu(enabled ? "auto" : "off")}
-        />
+        <Select value={settings?.gpu ?? "off"} onValueChange={handleGpuChange}>
+          <SelectTrigger className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="off">Off (CPU)</SelectItem>
+            <SelectItem value="auto">Auto</SelectItem>
+            <SelectItem value="cuda">CUDA (NVIDIA)</SelectItem>
+            <SelectItem value="coreml">CoreML (Apple)</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="flex items-center justify-between gap-2">
