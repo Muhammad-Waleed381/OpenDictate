@@ -204,28 +204,34 @@ function LastResultPanel() {
             <span className="flex h-5 shrink-0 items-center border-2 border-primary bg-primary px-1.5 text-[10px] font-bold tracking-wider text-primary-foreground">
               INSERTED ✓
             </span>
-          <span className="truncate text-sm font-medium">“{lastResult.text}”</span>
-          <Button
-            size="sm"
-            variant="outline"
-            className="ml-auto shrink-0"
-            disabled={undone}
-            onClick={async () => {
-              try {
-                await api.undoLastInsert();
-                setUndone(true);
-              } catch (e) {
-                toast.error(String(e));
-              }
-            }}
-          >
-            {undone ? "Undone" : "Undo"}
-          </Button>
-          {lastResult.duration_ms > 0 && (
-            <span className="ml-auto shrink-0 text-xs font-bold text-muted-foreground tabular-nums">
-              {(lastResult.duration_ms / 1000).toFixed(1)}s
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+              “{lastResult.text}”
             </span>
-          )}
+            {/* Only the first item of the trailing group takes ml-auto. A
+                second one splits the free space between them instead of
+                pushing the group flush right, which left Undo stranded
+                mid-row with a gap before the duration. */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto shrink-0"
+              disabled={undone}
+              onClick={async () => {
+                try {
+                  await api.undoLastInsert();
+                  setUndone(true);
+                } catch (e) {
+                  toast.error(String(e));
+                }
+              }}
+            >
+              {undone ? "Undone" : "Undo"}
+            </Button>
+            {lastResult.duration_ms > 0 && (
+              <span className="shrink-0 text-xs font-bold text-muted-foreground tabular-nums">
+                {(lastResult.duration_ms / 1000).toFixed(1)}s
+              </span>
+            )}
           </CardContent>
         </Card>
       )}
