@@ -5,11 +5,19 @@ edition.workspace = true
 license.workspace = true
 description = "Core engine for OpenDictate: capture, VAD, transcription, injection"
 
+# Link-mode selection for sherpa-onnx. Default is the static CPU build;
+# `gpu-shared` switches to a shared-library link whose onnxruntime may
+# carry GPU execution providers (see docs/GPU.md).
+[features]
+default = ["cpu-static"]
+cpu-static = ["sherpa-onnx/static"]
+gpu-shared = ["sherpa-onnx/shared"]
+
 [dependencies]
 bzip2 = "0.5"
 cpal = "0.15"
 env_logger = "0.11"
-sherpa-onnx = "1.12"
+sherpa-onnx = { version = "1.12", default-features = false }
 tar = "0.4"
 thiserror = "2"
 log = "0.4"

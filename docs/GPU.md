@@ -20,29 +20,35 @@ opt-in support for GPU execution providers via ONNX Runtime.
   dictation — no restart needed. The tiny live-caption zipformer stays on
   CPU deliberately.
 
-## What a GPU build requires
+## Standard installers: CPU and GPU in one binary
 
-The default build statically links a CPU-only sherpa-onnx. To get CUDA:
+Release builds can link against a **shared** sherpa-onnx/onnxruntime that
+includes GPU execution providers. The resulting installer then supports
+both worlds from one download:
 
-1. Obtain a sherpa-onnx shared-library archive built with
-   `-DSHERPA_ONNX_ENABLE_CUDA=ON`, matching the version in
-   `crates/opendictate-core/Cargo.toml`. k2-fsa publishes these on their
-   GitHub releases (names like
-   `sherpa-onnx-v<ver>-linux-x64-shared-cuda-lib.tar.bz2`).
-2. Build normally with the libs on disk — the sys crate picks them up via
-   an env override (works with the default static link mode):
+- Machine has an NVIDIA GPU + drivers → `gpu = auto/cuda` engages CUDA.
+- Anything else → provider creation fails and engines fall back to CPU,
+  exactly like the classic build.
 
-   ```bash
-   export SHERPA_ONNX_LIB_DIR=/path/to/extracted/libs
-   npm run tauri build
-   ```
+Set the repository **variable** `CUDA_LIBS_URL` to a k2-fsa shared-lib
+archive built with `-DSHERPA_ONNX_ENABLE_CUDA=ON` (matching the
+sherpa-onnx version in `crates/opendictate-core/Cargo.toml`, e.g. names
+like `sherpa-onnx-v<ver>-linux-x64-shared-cuda-lib.tar.bz2`) and the next
+tagged Linux/Windows release picks it up automatically.
 
-3. Target machines need NVIDIA drivers; the CUDA provider libraries are
-   loaded at runtime by ONNX Runtime.
+Size note: those archives bundle CUDA runtime libraries, so GPU-enabled
+installers grow substantially (~hundreds of MB). Leave the variable unset
+for lean CPU-only releases.
 
-`.github/workflows/gpu-build.yml` automates step 2–3 for Linux as a
-dispatch-only job: supply `libs_url` and it uploads a `-cuda` .deb
-artifact. It intentionally never runs for tagged releases.
+### Locally
+
+```bash
+export SHERPA_ONNX_LIB_DIR=/path/to/extracted/shared-cuda-libs
+npm run tauri build -- --features gpu-shared
+```
+
+`.github/workflows/gpu-build.yml` remains as a dispatch-only sandbox for
+testing new lib archives without cutting a release.
 
 ## Status / verification matrix
 

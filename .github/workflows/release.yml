@@ -59,8 +59,23 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Optional GPU support: when the repo variable CUDA_LIBS_URL points at
+      # a k2-fsa shared-lib archive containing GPU execution providers, the
+      # standard installers link against it and gain CUDA capability (with
+      # silent CPU fallback on machines without NVIDIA drivers). Unset =
+      # classic static CPU build.
+      - name: Download optional GPU libraries (Linux/Windows)
+        if: ${{ matrix.platform != 'macos-latest' && vars.CUDA_LIBS_URL != '' }}
+        run: |
+          mkdir -p "$HOME/gpu-libs"
+          curl -fL "${{ vars.CUDA_LIBS_URL }}" -o /tmp/libs.archive
+          case /tmp/libs.archive in
+            *.zip) unzip -q /tmp/libs.archive -d "$HOME/gpu-libs" ;;
+            *) tar -xf /tmp/libs.archive -C "$HOME/gpu-libs" ;;
+          esac
+          echo "SHERPA_ONNX_LIB_DIR=$(find "$HOME/gpu-libs" -type f -name 'libsherpa-onnx-c-api*' | head -1 | xargs dirname)" >> "$GITHUB_ENV"
+
       - name: Build the app
-        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -76,4 +91,4 @@ jobs:
             Models download inside the app on first run; everything stays local.
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} ${{ matrix.platform != 'macos-latest' && vars.CUDA_LIBS_URL != '' && '--features gpu-shared' || '' }}
