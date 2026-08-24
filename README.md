@@ -37,7 +37,7 @@ Cloud dictation is fast to build but slow to trust: your voice leaves the machin
 | Platform | Status | Notes |
 |---|---|---|
 | Linux | ✅ Supported | X11/Wayland (GNOME-tested); ydotool/xdotool injection; dock overlay |
-| Windows | 🚧 Builds via CI | NSIS `.exe` + `.msi`; SendInput injection |
+| Windows | 🚧 Builds via CI | NSIS `.exe` + `.msi`; SendInput injection; optional CUDA acceleration; registry autostart; single-instance |
 | macOS | 🚧 Builds via CI | universal `.dmg` (Apple Silicon + Intel); CGEvent injection; ⌘-based paste/undo; native notifications; community-tested |
 
 ## Install

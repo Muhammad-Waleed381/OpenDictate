@@ -90,7 +90,8 @@ mod tests {
 /// Writes `text` to the clipboard and sends Ctrl+V / Cmd+V to the focused app.
 fn paste_via_clipboard(app: &AppHandle, text: &str) -> Result<(), String> {
     let clipboard = app.clipboard();
-    #[cfg(target_os = "linux")]
+    // Save-and-restore everywhere: paste-insert must not permanently
+    // destroy whatever the user had on their clipboard.
     let previous = clipboard.read_text().unwrap_or_default();
     clipboard
         .write_text(text.to_string())
@@ -98,10 +99,10 @@ fn paste_via_clipboard(app: &AppHandle, text: &str) -> Result<(), String> {
 
     press_paste()?;
 
-    #[cfg(target_os = "linux")]
     if !previous.is_empty() {
         let app = app.clone();
         std::thread::spawn(move || {
+            // Long enough for the focused app to consume the paste.
             std::thread::sleep(Duration::from_millis(400));
             let _ = app.clipboard().write_text(previous);
         });

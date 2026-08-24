@@ -33,7 +33,36 @@ pub fn set_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> 
     fs::write(file, desktop).map_err(|e| format!("failed to enable autostart: {e}"))
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Windows writes an HKCU Run entry — no admin rights, survives updates,
+/// and is the mechanism users expect when they flip "Start with system".
+#[cfg(target_os = "windows")]
+pub fn set_enabled(_app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE};
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let run = hkcu
+        .open_subkey_with_flags(r"Software\Microsoft\Windows\CurrentVersion\Run", KEY_SET_VALUE | KEY_QUERY_VALUE)
+        .map_err(|e| format!("failed to open the Run registry key: {e}"))?;
+
+    if !enabled {
+        // Disabling is a no-op when never enabled, so it must succeed.
+        run.delete_value("OpenDictate")
+            .or_else(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(e),
+            })
+            .map_err(|e| format!("failed to remove the autostart entry: {e}"))?;
+        return Ok(());
+    }
+
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("failed to locate the application: {e}"))?;
+    run.set_value("OpenDictate", &format!("\"{}\"", exe.display()))
+        .map_err(|e| format!("failed to write the autostart entry: {e}"))
+}
+
+#[cfg(target_os = "macos")]
 pub fn set_enabled(_app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
     // Disabling is a no-op when autostart was never set up, so it must
     // succeed; only an explicit enable is unsupported. Callers log failures

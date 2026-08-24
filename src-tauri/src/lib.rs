@@ -66,6 +66,13 @@ pub fn run() {
             commands::reset_word_stats,
             commands::export_history,
         ])
+        // Must be the first plugin: it claims the instance lock before
+        // anything else runs. Unix keeps its socket-based guard too (it
+        // doubles as the GNOME toggle transport); this closes the gap on
+        // Windows, which previously allowed any number of instances.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            crate::tray::show_main(app);
+        }))
         .setup(|app| {
             notify::init(&app.config().identifier);
 
@@ -113,7 +120,19 @@ pub fn run() {
                     let _ = window.set_icon(icon.clone());
                 }
             }
-            let _ = hotkey::register(handle, &handle.state::<AppState>(), &settings.hotkey);
+            // A failed registration must not be silent: the most common
+            // cause is a hotkey conflict, and the user needs to know the
+            // app is running hotkey-less so they can pick another combo.
+            if let Err(e) = hotkey::register(handle, &handle.state::<AppState>(), &settings.hotkey) {
+                log::error!("hotkey registration failed: {e}");
+                crate::notify::notify(
+                    "Hotkey could not be registered",
+                    &format!(
+                        "{} is unavailable ({}). Open Settings to choose another combination.",
+                        settings.hotkey, e
+                    ),
+                );
+            }
             #[cfg(target_os = "linux")]
             hotkey::install_socket_toggle(handle.clone(), socket_path);
             dock::init(handle);

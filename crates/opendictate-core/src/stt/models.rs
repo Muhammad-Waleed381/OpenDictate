@@ -192,15 +192,45 @@ fn model_def(id: &str) -> Option<&'static ModelDef> {
     MODELS.iter().find(|m| m.id == id)
 }
 
+/// Platform-appropriate model storage. Never panics: a machine with no
+/// discernible home falls back to the temp dir rather than aborting a
+/// command/background thread mid-flight.
 pub fn models_dir() -> PathBuf {
-    let base = std::env::var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::var("HOME")
-                .map(|home| PathBuf::from(home).join(".local/share"))
-                .expect("HOME is not set")
-        });
-    base.join("opendictate").join("models")
+    // XDG override first (Linux convention, also used by tests).
+    if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+        if !xdg.is_empty() {
+            return PathBuf::from(xdg).join("opendictate").join("models");
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // HOME is not set on stock Windows; LOCALAPPDATA is the canonical
+        // location for per-user app data.
+        if let Ok(la) = std::env::var("LOCALAPPDATA") {
+            if !la.is_empty() {
+                return PathBuf::from(la).join("opendictate").join("models");
+            }
+        }
+        if let Ok(up) = std::env::var("USERPROFILE") {
+            return PathBuf::from(up)
+                .join("AppData")
+                .join("Local")
+                .join("opendictate")
+                .join("models");
+        }
+    }
+
+    // Linux and macOS keep the historical ~/.local/share location — existing
+    // installs already have models there and must not be orphaned.
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            return PathBuf::from(home).join(".local/share").join("opendictate").join("models");
+        }
+    }
+
+    log::warn!("no home directory resolvable; models fall back to temp dir");
+    std::env::temp_dir().join("opendictate").join("models")
 }
 
 pub fn stt_model_dir() -> PathBuf {
