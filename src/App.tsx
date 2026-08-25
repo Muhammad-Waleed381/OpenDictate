@@ -105,10 +105,19 @@ function Header() {
 
 export function MainApp() {
   const settings = useStore((s) => s.settings);
-  const [tab, setTab] = useState<TabId>("home");
+  // Tabs are deep-linkable via location.hash (#settings, #activity, …).
+  const [tab, setTab] = useState<TabId>(() => {
+    const h = window.location.hash.slice(1) as TabId;
+    return TABS.some((t) => t.id === h) ? h : "home";
+  });
   const [collapsed, setCollapsed] = useState<boolean>(
     () => localStorage.getItem("od:sidebar") !== "collapsed",
   );
+
+  const switchTab = (t: TabId) => {
+    setTab(t);
+    window.history.replaceState(null, "", `#${t}`);
+  };
 
   const toggleSidebar = () => {
     setCollapsed((c) => {
@@ -152,7 +161,7 @@ export function MainApp() {
             {TABS.map((t) => (
               <button
                 key={t.id}
-                onClick={() => setTab(t.id)}
+                onClick={() => switchTab(t.id)}
                 title={collapsed ? t.label : undefined}
                 className={cn(
                   "relative flex cursor-pointer items-center text-xs font-bold tracking-wider uppercase transition-colors duration-150",

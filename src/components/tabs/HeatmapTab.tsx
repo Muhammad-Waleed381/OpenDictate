@@ -7,6 +7,9 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const DAY_MS = 86_400_000;
+const CELL_PX = 13;
+const GAP_PX = 3;
+const PITCH_PX = CELL_PX + GAP_PX; // column/row stride of the grid
 
 function localDayKey(d: Date): string {
   const y = d.getFullYear();
@@ -127,13 +130,19 @@ export function HeatmapTab() {
     const cells: HeatmapCell[] = [];
     const monthLabels: { col: number; label: string }[] = [];
     let lastMonth = -1;
+    // A label is ~26px wide; skip one when it would collide with the
+    // previously drawn label (short months, DST shifts).
+    const MIN_LABEL_GAP_PX = 34;
 
     for (let col = 0; col < 53; col++) {
       const colStart = new Date(startMonday.getTime() + col * 7 * DAY_MS);
       const month = colStart.getMonth();
       if (month !== lastMonth) {
         lastMonth = month;
-        monthLabels.push({ col, label: MONTH_LABELS[month] });
+        const prev = monthLabels[monthLabels.length - 1];
+        if (!prev || (col - prev.col) * PITCH_PX >= MIN_LABEL_GAP_PX) {
+          monthLabels.push({ col, label: MONTH_LABELS[month] });
+        }
       }
       for (let row = 0; row < 7; row++) {
         const date = new Date(colStart.getTime() + row * DAY_MS);
@@ -307,7 +316,7 @@ export function HeatmapTab() {
                   <span
                     key={`${m.col}-${m.label}`}
                     className="absolute text-[10px] font-bold text-muted-foreground"
-                    style={{ left: m.col * 13 }}
+                    style={{ left: m.col * PITCH_PX }}
                   >
                     {m.label}
                   </span>
@@ -315,12 +324,15 @@ export function HeatmapTab() {
               </div>
             </div>
             <div className="flex">
-              <div className="flex w-8 shrink-0 flex-col">
+              <div
+                className="relative w-8 shrink-0"
+                style={{ height: 7 * PITCH_PX - GAP_PX }}
+              >
                 {weekLabels.map((w) => (
                   <span
                     key={w.row}
-                    className="flex h-[13px] items-center text-[9px] font-bold text-muted-foreground"
-                    style={{ marginTop: w.row === 1 ? 0 : 1 }}
+                    className="absolute flex h-[13px] items-center text-[9px] leading-[13px] font-bold text-muted-foreground"
+                    style={{ top: w.row * PITCH_PX }}
                   >
                     {w.label}
                   </span>

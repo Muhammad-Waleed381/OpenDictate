@@ -52,6 +52,13 @@ function comboFromEvent(e: KeyboardEvent): string | null {
   return [...mods, name].join("+");
 }
 
+const GPU_MODES = [
+  { value: "off", label: "Off (CPU)" },
+  { value: "auto", label: "Auto" },
+  { value: "cuda", label: "CUDA (NVIDIA)" },
+  { value: "coreml", label: "CoreML (Apple)" },
+] as const;
+
 function HotkeyCapture() {
   const settings = useStore((s) => s.settings);
   const [capturing, setCapturing] = useState(false);
@@ -351,13 +358,17 @@ export function SettingsTab() {
         </div>
         <Select value={settings?.gpu ?? "off"} onValueChange={handleGpuChange}>
           <SelectTrigger className="w-40">
-            <SelectValue />
+            <SelectValue>
+              {GPU_MODES.find((m) => m.value === (settings?.gpu ?? "off"))?.label ??
+                "Off (CPU)"}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="off">Off (CPU)</SelectItem>
-            <SelectItem value="auto">Auto</SelectItem>
-            <SelectItem value="cuda">CUDA (NVIDIA)</SelectItem>
-            <SelectItem value="coreml">CoreML (Apple)</SelectItem>
+            {GPU_MODES.map((m) => (
+              <SelectItem key={m.value} value={m.value}>
+                {m.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>
