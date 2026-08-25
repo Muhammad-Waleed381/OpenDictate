@@ -75,10 +75,16 @@ jobs:
           # libraries visible, and never strip a GPU-linked binary.
           echo "LD_LIBRARY_PATH=$LIBDIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
           echo "NO_STRIP=true" >> "$GITHUB_ENV"
+          # The deb/rpm must SHIP the shared libraries and the binary must
+          # find them: libs install to /usr/lib/opendictate via the files
+          # map (key = destination, value = source), and build.rs bakes a
+          # matching RUNPATH from this env var.
+          echo "OPENDICTATE_LINUX_RPATH=/usr/lib/opendictate" >> "$GITHUB_ENV"
           # tauri-cli cannot pass --no-default-features to cargo, so select
           # the shared link mode by flipping the manifest default instead.
           sed -i 's/^default = \["cpu-static"\]/default = ["gpu-shared"]/' crates/opendictate-core/Cargo.toml
           grep -n "^default" crates/opendictate-core/Cargo.toml
+          SHERPA_ONNX_LIB_DIR="$LIBDIR" python3 scripts/inject-linux-libs.py
 
       - name: Download GPU-capable libraries (Windows)
         if: ${{ matrix.platform == 'windows-latest' }}
