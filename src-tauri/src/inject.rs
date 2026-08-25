@@ -113,9 +113,9 @@ fn paste_via_clipboard(app: &AppHandle, text: &str) -> Result<(), String> {
 /// Sends the paste shortcut to the focused window.
 #[cfg(target_os = "linux")]
 fn press_paste() -> Result<(), String> {
-    run("xdotool", &["key", "--clearmodifiers", "ctrl+v"]).or_else(|e1| {
-        run("ydotool", &["key", "29+47"]).map_err(|e2| format!("{e1}; {e2}"))
-    })
+    run("xdotool", &["key", "--clearmodifiers", "ctrl+v"])
+        .or_else(|e1| run("wtype", &["-M", "ctrl", "-m", "v"]).map_err(|e2| format!("{e1}; {e2}")))
+        .or_else(|e2| run("ydotool", &["key", "29+47"]).map_err(|e3| format!("{e2}; {e3}")))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -125,21 +125,24 @@ fn press_paste() -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 fn type_text(app: &AppHandle, text: &str) -> Result<(), String> {
-    match run("ydotool", &["type", text]) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            log::info!("inject: ydotool type failed ({e}); falling back to clipboard paste");
-            paste_via_clipboard(app, text)
-        }
+    if run("wtype", &[text]).is_ok() {
+        return Ok(());
     }
+    if run("ydotool", &["type", text]).is_ok() {
+        return Ok(());
+    }
+    if run("xdotool", &["type", text]).is_ok() {
+        return Ok(());
+    }
+    log::info!("inject: wtype/ydotool/xdotool-type unavailable; falling back to clipboard paste");
+    paste_via_clipboard(app, text)
 }
 
 #[cfg(target_os = "linux")]
 pub fn undo_last_insert() -> Result<(), String> {
-    run("xdotool", &["key", "--clearmodifiers", "ctrl+z"]).or_else(|first| {
-        run("ydotool", &["key", "29+44"])
-            .map_err(|second| format!("{first}; {second}"))
-    })
+    run("xdotool", &["key", "--clearmodifiers", "ctrl+z"])
+        .or_else(|e1| run("wtype", &["-M", "ctrl", "-m", "z"]).map_err(|e2| format!("{e1}; {e2}")))
+        .or_else(|e2| run("ydotool", &["key", "29+44"]).map_err(|e3| format!("{e2}; {e3}")))
 }
 
 #[cfg(target_os = "linux")]
