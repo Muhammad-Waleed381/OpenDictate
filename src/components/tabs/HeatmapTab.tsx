@@ -154,9 +154,13 @@ export function HeatmapTab() {
     }
 
     const weekLabels = [
-      { row: 1, label: "Mon" },
-      { row: 3, label: "Wed" },
-      { row: 5, label: "Fri" },
+      { row: 0, label: "Mon" },
+      { row: 1, label: "Tue" },
+      { row: 2, label: "Wed" },
+      { row: 3, label: "Thu" },
+      { row: 4, label: "Fri" },
+      { row: 5, label: "Sat" },
+      { row: 6, label: "Sun" },
     ];
 
     const legend = [
