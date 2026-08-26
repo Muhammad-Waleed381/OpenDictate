@@ -11,6 +11,11 @@ export function DictionaryTab() {
   const dictionary = useStore((s) => s.dictionary);
   const [word, setWord] = useState("");
   const [bulkWords, setBulkWords] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredDictionary = dictionary.filter((entry) =>
+    entry.word.toLowerCase().includes(searchQuery.trim().toLowerCase())
+  );
 
   const handleAdd = async () => {
     const trimmed = word.trim();
@@ -116,6 +121,21 @@ export function DictionaryTab() {
           </label>
         </div>
       </div>
+
+      {dictionary.length > 0 && (
+        <div className="flex items-center justify-between gap-2 border-t border-border pt-2">
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search dictionary terms…"
+            className="max-w-xs"
+          />
+          <span className="text-xs font-bold uppercase text-muted-foreground tabular-nums">
+            Showing {filteredDictionary.length} of {dictionary.length} words
+          </span>
+        </div>
+      )}
+
       {dictionary.length === 0 ? (
         <div className="border-2 border-dashed border-border p-6 text-center">
           <p className="text-sm font-bold uppercase tracking-wider">
@@ -125,9 +145,18 @@ export function DictionaryTab() {
             Add words to improve recognition for names, jargon, and acronyms.
           </p>
         </div>
+      ) : filteredDictionary.length === 0 ? (
+        <div className="border-2 border-dashed border-border p-6 text-center">
+          <p className="text-sm font-bold uppercase tracking-wider">
+            No words match “{searchQuery}”
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Try a different search term or clear the filter.
+          </p>
+        </div>
       ) : (
         <div className="flex flex-wrap gap-2">
-          {dictionary.map((entry) => (
+          {filteredDictionary.map((entry) => (
             <Badge key={entry.id} variant="outline" className="gap-1.5 py-1 pr-1.5 pl-2.5">
               {entry.word}
               <button

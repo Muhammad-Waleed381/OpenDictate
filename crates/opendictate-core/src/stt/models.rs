@@ -389,6 +389,18 @@ pub fn download_to_with_progress(
     dest: &Path,
     on_progress: &mut dyn FnMut(u64, u64),
 ) -> Result<()> {
+    download_to_with_progress_cancel(url, dest, on_progress, &|| false)
+}
+
+pub fn download_to_with_progress_cancel(
+    url: &str,
+    dest: &Path,
+    on_progress: &mut dyn FnMut(u64, u64),
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    if is_cancelled() {
+        return Err(CoreError::Download("download cancelled by user".to_string()));
+    }
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(CoreError::Io)?;
     }
@@ -410,6 +422,11 @@ pub fn download_to_with_progress(
     let mut received = 0u64;
     let mut chunk = [0u8; 64 * 1024];
     loop {
+        if is_cancelled() {
+            drop(file);
+            let _ = std::fs::remove_file(dest);
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
         let n = std::io::Read::read(&mut body, &mut chunk)?;
         if n == 0 {
             break;
@@ -420,6 +437,11 @@ pub fn download_to_with_progress(
         if received.is_multiple_of(4 * 1024 * 1024) {
             log::info!("downloaded {received} bytes -> {}", dest.display());
         }
+    }
+    if is_cancelled() {
+        drop(file);
+        let _ = std::fs::remove_file(dest);
+        return Err(CoreError::Download("download cancelled by user".to_string()));
     }
     log::info!("downloaded {received} bytes -> {}", dest.display());
     Ok(())
@@ -451,19 +473,33 @@ fn clean_after(archive_path: &Path, extract_dir: &Path) {
     let _ = std::fs::remove_dir_all(extract_dir);
 }
 
-fn install_stt_model(on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<bool> {
+fn install_stt_model(
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<bool> {
     let base = models_dir();
     std::fs::create_dir_all(&base).map_err(CoreError::Io)?;
     let archive_path = base.join("parakeet-tdt-ctc-110m.tar.bz2");
     let extract_dir = base.join(".extract");
 
     for url in [PARAKEET_INT8_ARCHIVE, PARAKEET_ARCHIVE] {
+        if is_cancelled() {
+            clean_after(&archive_path, &extract_dir);
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
         log::info!("downloading {url} -> {}", archive_path.display());
-        if download_to_with_progress(url, &archive_path, &mut |received, total| {
-            on_progress(STT_MODEL_ID, received, total)
-        })
+        if download_to_with_progress_cancel(
+            url,
+            &archive_path,
+            &mut |received, total| on_progress(STT_MODEL_ID, received, total),
+            is_cancelled,
+        )
         .is_err()
         {
+            if is_cancelled() {
+                clean_after(&archive_path, &extract_dir);
+                return Err(CoreError::Download("download cancelled by user".to_string()));
+            }
             log::warn!("download failed for {url}, trying next archive");
             continue;
         }
@@ -507,7 +543,11 @@ fn install_stt_model(on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<bool
     Ok(false)
 }
 
-fn install_whisper_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<()> {
+fn install_whisper_model(
+    id: &str,
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
     let def = model_def(id).ok_or_else(|| CoreError::Download(format!("unknown model '{id}'")))?;
     let base = models_dir();
     std::fs::create_dir_all(&base).map_err(CoreError::Io)?;
@@ -515,9 +555,16 @@ fn install_whisper_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) 
     let extract_dir = base.join(format!(".extract-{id}"));
 
     log::info!("downloading {} -> {}", def.url, archive_path.display());
-    download_to_with_progress(def.url, &archive_path, &mut |received, total| {
-        on_progress(id, received, total)
-    })?;
+    download_to_with_progress_cancel(
+        def.url,
+        &archive_path,
+        &mut |received, total| on_progress(id, received, total),
+        is_cancelled,
+    )?;
+    if is_cancelled() {
+        clean_after(&archive_path, &extract_dir);
+        return Err(CoreError::Download("download cancelled by user".to_string()));
+    }
     if extract_dir.exists() {
         std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
     }
@@ -558,7 +605,11 @@ fn install_whisper_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) 
     Ok(())
 }
 
-fn install_transducer_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<()> {
+fn install_transducer_model(
+    id: &str,
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
     let def = model_def(id).ok_or_else(|| CoreError::Download(format!("unknown model '{id}'")))?;
     let base = models_dir();
     std::fs::create_dir_all(&base).map_err(CoreError::Io)?;
@@ -566,9 +617,16 @@ fn install_transducer_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64
     let extract_dir = base.join(format!(".extract-{id}"));
 
     log::info!("downloading {} -> {}", def.url, archive_path.display());
-    download_to_with_progress(def.url, &archive_path, &mut |received, total| {
-        on_progress(id, received, total)
-    })?;
+    download_to_with_progress_cancel(
+        def.url,
+        &archive_path,
+        &mut |received, total| on_progress(id, received, total),
+        is_cancelled,
+    )?;
+    if is_cancelled() {
+        clean_after(&archive_path, &extract_dir);
+        return Err(CoreError::Download("download cancelled by user".to_string()));
+    }
     if extract_dir.exists() {
         std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
     }
@@ -616,12 +674,23 @@ fn install_transducer_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64
 }
 
 pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<()> {
+    ensure_model_with_cancel(id, on_progress, &|| false)
+}
+
+pub fn ensure_model_with_cancel(
+    id: &str,
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
     if is_model_installed(id) {
         return Ok(());
     }
+    if is_cancelled() {
+        return Err(CoreError::Download("download cancelled by user".to_string()));
+    }
     match id {
         STT_MODEL_ID => {
-            if !install_stt_model(on_progress)? {
+            if !install_stt_model(on_progress, is_cancelled)? {
                 return Err(CoreError::Download(
                     "failed to download a usable STT model from any archive".to_string(),
                 ));
@@ -629,18 +698,23 @@ pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Re
             Ok(())
         }
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => {
-            install_transducer_model(id, on_progress)
+            install_transducer_model(id, on_progress, is_cancelled)
         }
         PARAKEET_STREAMING_MODEL_ID | CAPTION_MODEL_ID => {
-            install_transducer_model(id, on_progress)
+            install_transducer_model(id, on_progress, is_cancelled)
         }
         VAD_MODEL_ID => {
             log::info!("downloading silero VAD -> {}", vad_model_path().display());
-            download_to_with_progress(
+            download_to_with_progress_cancel(
                 SILERO_VAD_URL,
                 &vad_model_path(),
                 &mut |received, total| on_progress(VAD_MODEL_ID, received, total),
+                is_cancelled,
             )?;
+            if is_cancelled() {
+                let _ = std::fs::remove_file(vad_model_path());
+                return Err(CoreError::Download("download cancelled by user".to_string()));
+            }
             if !is_vad_ready() {
                 return Err(CoreError::Download(format!(
                     "downloaded VAD file is too small: {}",
@@ -654,7 +728,7 @@ pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Re
         | WHISPER_SMALL_MODEL_ID
         | WHISPER_TURBO_MODEL_ID
         | WHISPER_MEDIUM_MODEL_ID => {
-            install_whisper_model(id, on_progress)
+            install_whisper_model(id, on_progress, is_cancelled)
         }
         other => Err(CoreError::Download(format!("unknown model '{other}'"))),
     }

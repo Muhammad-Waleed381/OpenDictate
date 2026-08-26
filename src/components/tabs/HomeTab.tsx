@@ -81,6 +81,19 @@ function ReadyStrip() {
     }
   };
 
+  const handleCancel = async () => {
+    if (!activeModel) return;
+    try {
+      await api.cancelModelDownload(activeModel.id);
+      useStore.getState().removeModelProgress(activeModel.id);
+      setDownloading(false);
+      toast.info("Download cancelled");
+      await useStore.getState().refreshCatalog();
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <SectionTitle>Ready to dictate?</SectionTitle>
@@ -139,9 +152,15 @@ function ReadyStrip() {
               {activeModel?.name ?? settings?.stt_model ?? "No model selected"}
             </span>
             {!modelReady && activeModel?.available && (
-              <Button size="sm" onClick={handleDownload} disabled={downloading}>
-                {downloading ? "Downloading…" : "Download"}
-              </Button>
+              downloading || progress ? (
+                <Button size="sm" variant="destructive" onClick={handleCancel}>
+                  ✕ Cancel
+                </Button>
+              ) : (
+                <Button size="sm" onClick={handleDownload} disabled={downloading}>
+                  Download
+                </Button>
+              )
             )}
           </div>
           {!modelReady && activeModel && (
@@ -152,10 +171,27 @@ function ReadyStrip() {
             </p>
           )}
           {progress && (
-            <Progress
-              value={progressPercent(progress.received, progress.total)}
-              className="w-full"
-            />
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
+                <span>
+                  Downloading…
+                  {progress.speedBytesPerSec && progress.speedBytesPerSec > 0
+                    ? ` (${formatBytes(progress.speedBytesPerSec)}/s)`
+                    : ""}
+                </span>
+                <span>
+                  {formatBytes(progress.received)}
+                  {progress.total > 0 ? ` / ${formatBytes(progress.total)}` : ""}
+                  {progress.etaSeconds != null && progress.etaSeconds > 0
+                    ? ` · ETA ${progress.etaSeconds < 60 ? `${progress.etaSeconds}s` : `${Math.floor(progress.etaSeconds / 60)}m`}`
+                    : ""}
+                </span>
+              </div>
+              <Progress
+                value={progressPercent(progress.received, progress.total)}
+                className="w-full"
+              />
+            </div>
           )}
           </CardContent>
         </Card>
@@ -166,6 +202,7 @@ function ReadyStrip() {
 
 function RecordButton() {
   const { recording, toggle } = useRecording();
+  const level = useStore((s) => s.level);
 
   return (
     <div className="flex flex-col gap-2">
@@ -178,9 +215,24 @@ function RecordButton() {
       >
         {recording ? "■ Stop" : "● Record"}
       </Button>
+      {recording && (
+        <div className="flex h-3 items-end gap-[2px] border border-border bg-card p-0.5">
+          {Array.from({ length: 32 }, (_, i) => {
+            const sample = i / 31;
+            const lit = level > sample;
+            return (
+              <span
+                key={i}
+                className={`flex-1 transition-colors duration-75 ${lit ? "bg-primary" : "bg-muted"}`}
+                style={{ height: "100%" }}
+              />
+            );
+          })}
+        </div>
+      )}
       <p className="text-xs text-muted-foreground">
         {recording
-          ? "Recording — press the global hotkey to stop."
+          ? "Recording — speak into your mic, press the global hotkey to stop."
           : "Dictate — press Record or your global hotkey."}
       </p>
     </div>

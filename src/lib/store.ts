@@ -5,6 +5,9 @@ export interface ModelProgress {
   file: string;
   received: number;
   total: number;
+  speedBytesPerSec?: number;
+  etaSeconds?: number;
+  lastUpdated?: number;
 }
 
 interface OpenDictateStore {
@@ -39,6 +42,7 @@ interface OpenDictateStore {
   setMics: (mics: api.MicDevice[]) => void;
   setModelProgress: (modelProgress: ModelProgress[]) => void;
   addModelProgress: (progress: ModelProgress) => void;
+  removeModelProgress: (file: string) => void;
   setPartial: (text: string) => void;
   refreshStats: () => Promise<void>;
 
@@ -79,13 +83,44 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
   setMic: (mic) => set({ mic }),
   setMics: (mics) => set({ mics }),
   setModelProgress: (modelProgress) => set({ modelProgress }),
+  removeModelProgress: (file) =>
+    set((state) => ({
+      modelProgress: state.modelProgress.filter((p) => p.file !== file),
+    })),
   addModelProgress: (progress) =>
     set((state) => {
+      const existing = state.modelProgress.find((p) => p.file === progress.file);
+      const now = Date.now();
+      let speedBytesPerSec = existing?.speedBytesPerSec;
+      let etaSeconds = existing?.etaSeconds;
+      if (existing && existing.lastUpdated && now > existing.lastUpdated) {
+        const dt = (now - existing.lastUpdated) / 1000;
+        const db = progress.received - existing.received;
+        if (dt >= 0.25 && db >= 0) {
+          const currentSpeed = db / dt;
+          speedBytesPerSec = existing.speedBytesPerSec
+            ? existing.speedBytesPerSec * 0.7 + currentSpeed * 0.3
+            : currentSpeed;
+          if (speedBytesPerSec > 0 && progress.total > progress.received) {
+            etaSeconds = Math.round((progress.total - progress.received) / speedBytesPerSec);
+          }
+        }
+      }
       const rest = state.modelProgress.filter((p) => p.file !== progress.file);
       if (progress.total > 0 && progress.received >= progress.total) {
         return { modelProgress: rest };
       }
-      return { modelProgress: [...rest, progress] };
+      return {
+        modelProgress: [
+          ...rest,
+          {
+            ...progress,
+            speedBytesPerSec,
+            etaSeconds,
+            lastUpdated: existing?.lastUpdated && now - existing.lastUpdated < 250 ? existing.lastUpdated : now,
+          },
+        ],
+      };
     }),
 
   setPartial: (text) => set({ partial: text }),

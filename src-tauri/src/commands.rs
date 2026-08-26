@@ -73,40 +73,122 @@ pub fn models_catalog() -> Vec<models::ModelInfo> {
 }
 
 #[tauri::command]
-pub fn ensure_model(id: String, app: AppHandle) -> Result<(), String> {
+pub fn ensure_model(id: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Ok(mut dl) = state.active_downloads.lock() {
+        dl.insert(id.clone(), cancel_flag.clone());
+    }
+    let cancel_check = {
+        let flag = cancel_flag.clone();
+        move || flag.load(std::sync::atomic::Ordering::SeqCst)
+    };
+
+    let app_clone = app.clone();
+    let id_clone = id.clone();
     std::thread::spawn(move || {
-        let result = models::ensure_model(&id, &mut |file, received, total| {
-            let _ = app.emit(
-                "model-progress",
-                serde_json::json!({ "file": file, "received": received, "total": total }),
-            );
-        });
+        let result = models::ensure_model_with_cancel(
+            &id_clone,
+            &mut |file, received, total| {
+                let _ = app_clone.emit(
+                    "model-progress",
+                    serde_json::json!({ "file": file, "received": received, "total": total }),
+                );
+            },
+            &cancel_check,
+        );
         // VAD is an internal default, never user-selectable: install it
         // alongside any requested model so speech detection just works.
         let result = match result {
-            Ok(()) if id != models::VAD_MODEL_ID => {
-                models::ensure_model(models::VAD_MODEL_ID, &mut |file, received, total| {
-                    let _ = app.emit(
-                        "model-progress",
-                        serde_json::json!({ "file": file, "received": received, "total": total }),
-                    );
-                })
+            Ok(()) if id_clone != models::VAD_MODEL_ID && !cancel_check() => {
+                models::ensure_model_with_cancel(
+                    models::VAD_MODEL_ID,
+                    &mut |file, received, total| {
+                        let _ = app_clone.emit(
+                            "model-progress",
+                            serde_json::json!({ "file": file, "received": received, "total": total }),
+                        );
+                    },
+                    &cancel_check,
+                )
             }
             other => other,
         };
+
+        if let Some(state) = app_clone.try_state::<AppState>() {
+            if let Ok(mut dl) = state.active_downloads.lock() {
+                dl.remove(&id_clone);
+            }
+        }
+
         match result {
             Ok(()) => {
-                let _ = app.emit("models-ready", serde_json::json!({}));
+                let _ = app_clone.emit("models-ready", serde_json::json!({}));
             }
             Err(e) => {
-                let _ = app.emit(
-                    "overlay-state",
-                    serde_json::json!({ "state": "error", "message": format!("model download failed: {e}") }),
-                );
+                if cancel_check() {
+                    log::info!("model download cancelled: {id_clone}");
+                    let _ = app_clone.emit("model-cancelled", serde_json::json!({ "file": id_clone }));
+                } else {
+                    let _ = app_clone.emit(
+                        "overlay-state",
+                        serde_json::json!({ "state": "error", "message": format!("model download failed: {e}") }),
+                    );
+                }
             }
         }
     });
     Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_model_download(id: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    if let Ok(mut dl) = state.active_downloads.lock() {
+        if let Some(flag) = dl.remove(&id) {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let _ = app.emit("model-cancelled", serde_json::json!({ "file": id }));
+    Ok(())
+}
+
+#[tauri::command]
+pub fn play_test_sound(
+    event: String,
+    volume: Option<f32>,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let vol = volume.unwrap_or_else(|| {
+        state
+            .settings
+            .lock()
+            .map(|s| s.audio_feedback_volume)
+            .unwrap_or(0.5)
+    });
+    let evt = match event.to_lowercase().as_str() {
+        "listening" | "start" => crate::audio::SoundEvent::Listening,
+        "inserted" | "insert" => crate::audio::SoundEvent::Inserted,
+        "error" => crate::audio::SoundEvent::Error,
+        other => return Err(format!("unknown sound event '{other}'")),
+    };
+    crate::audio::play_event(vol, evt);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reset_settings(
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<crate::state::Settings, String> {
+    let default_settings = crate::state::Settings::default();
+    {
+        let mut current = state.settings.lock().map_err(|e| e.to_string())?;
+        *current = default_settings.clone();
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::save_settings(&conn, &default_settings).map_err(|e| e.to_string())?;
+    }
+    let _ = crate::hotkey::register(&app, &state, &default_settings.hotkey);
+    let _ = app.emit("settings-changed", serde_json::json!({}));
+    Ok(default_settings)
 }
 
 #[tauri::command]
@@ -267,6 +349,9 @@ pub fn set_settings(
     }
     if let Some(continuous) = settings.continuous {
         current.continuous = continuous;
+    }
+    if let Some(hold_to_talk) = settings.hold_to_talk {
+        current.hold_to_talk = hold_to_talk;
     }
     if let Some(autostart) = settings.autostart {
         current.autostart = autostart;

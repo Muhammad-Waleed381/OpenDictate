@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { toast } from "@/components/ui/toast";
@@ -89,6 +89,10 @@ export function HeatmapTab() {
   const settings = useStore((s) => s.settings);
   const color = settings?.heatmap_color ?? DEFAULT_COLOR;
   const cellColors = useMemo(() => shadesFor(color), [color]);
+  const [hoveredCell, setHoveredCell] = useState<{
+    cell: HeatmapCell;
+    rect: DOMRect;
+  } | null>(null);
 
   const handleColor = async (hex: string) => {
     try {
@@ -350,13 +354,12 @@ export function HeatmapTab() {
                       return (
                         <span
                           key={cell.key}
-                          title={`${cell.date.toLocaleDateString(undefined, {
-                            weekday: "short",
-                            year: "numeric",
-                            month: "short",
-                            day: "numeric",
-                          })} — ${cell.words} word${cell.words === 1 ? "" : "s"}`}
-                          className="size-[13px] border-2 border-border/5 bg-muted"
+                          onMouseEnter={(e) => {
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setHoveredCell({ cell, rect });
+                          }}
+                          onMouseLeave={() => setHoveredCell(null)}
+                          className="size-[13px] cursor-pointer border-2 border-border/5 bg-muted transition-transform hover:scale-125"
                           style={bg ? { backgroundColor: bg } : undefined}
                         />
                       );
@@ -381,6 +384,29 @@ export function HeatmapTab() {
             </div>
           </div>
         </div>
+
+        {hoveredCell && (
+          <div
+            className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full transform rounded border border-border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-brutal animate-in fade-in-0 zoom-in-95 duration-100"
+            style={{
+              left: `${hoveredCell.rect.left + hoveredCell.rect.width / 2}px`,
+              top: `${hoveredCell.rect.top - 8}px`,
+            }}
+          >
+            <div className="font-bold">
+              {hoveredCell.cell.words.toLocaleString()}{" "}
+              {hoveredCell.cell.words === 1 ? "word" : "words"}
+            </div>
+            <div className="text-[10px] text-muted-foreground">
+              {hoveredCell.cell.date.toLocaleDateString(undefined, {
+                weekday: "short",
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              })}
+            </div>
+          </div>
+        )}
       </Card>
     </div>
   );

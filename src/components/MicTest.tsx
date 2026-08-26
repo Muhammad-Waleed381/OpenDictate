@@ -2,14 +2,45 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { toast } from "@/components/ui/toast";
+
+const micLabel = (mic: string | null, mics: api.MicDevice[]): string => {
+  if (mic === null) return "Select microphone";
+  const found = mics.find((m) => m.id === mic);
+  return found?.label ?? mic;
+};
 
 export function MicTest() {
+  const mics = useStore((s) => s.mics);
+  const mic = useStore((s) => s.mic);
   const [testing, setTesting] = useState(false);
   const [noAudioHint, setNoAudioHint] = useState(false);
   const [peak, setPeak] = useState(0);
   const [verdict, setVerdict] = useState<"working" | "quiet" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const peakRef = useRef(0);
+
+  const handleMicChange = async (name: string | null) => {
+    if (!name) return;
+    try {
+      await api.setMic(name);
+      useStore.getState().setMic(name);
+      toast.success(`Microphone: ${micLabel(name, mics)}`);
+      if (testing) {
+        await api.cancelRecording().catch(() => {});
+        await api.startRecording("test");
+      }
+    } catch (e) {
+      toast.error(`Microphone switch failed: ${String(e)}`);
+    }
+  };
 
   const handleStart = async () => {
     peakRef.current = 0;
@@ -66,6 +97,28 @@ export function MicTest() {
 
   return (
     <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-bold text-muted-foreground uppercase">Microphone Device</label>
+        <Select value={mic ?? ""} onValueChange={handleMicChange}>
+          <SelectTrigger className="w-full">
+            <SelectValue>{micLabel(mic, mics)}</SelectValue>
+          </SelectTrigger>
+          <SelectContent className="w-full">
+            {mics.length === 0 ? (
+              <SelectItem value="__none__" disabled>
+                No microphones found
+              </SelectItem>
+            ) : (
+              mics.map((device) => (
+                <SelectItem key={device.id} value={device.id}>
+                  {device.label}
+                </SelectItem>
+              ))
+            )}
+          </SelectContent>
+        </Select>
+      </div>
+
       <div className="flex items-center justify-between">
         <span className="text-sm font-bold uppercase tracking-wider">
           {testing ? "Speak into the mic…" : "Test your microphone"}

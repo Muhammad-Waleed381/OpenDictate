@@ -48,7 +48,17 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
     } else {
         app.global_shortcut()
             .on_shortcut(key, move |app, _shortcut, event| {
-                if event.state() == ShortcutState::Pressed {
+                let hold = app
+                    .try_state::<AppState>()
+                    .and_then(|s| s.settings.lock().ok().map(|st| st.hold_to_talk))
+                    .unwrap_or(false);
+                if hold {
+                    if event.state() == ShortcutState::Pressed {
+                        start_dictation(app);
+                    } else if event.state() == ShortcutState::Released {
+                        stop_dictation(app);
+                    }
+                } else if event.state() == ShortcutState::Pressed {
                     toggle_dictation(app);
                 }
             })
@@ -71,6 +81,32 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
     log::info!("hotkey registered: {key}");
     sync_gnome_keybinding(key);
     Ok(())
+}
+
+pub fn start_dictation(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let Some(state) = app.try_state::<AppState>() else { return };
+        if !state.recorder.is_recording() {
+            log::info!("hold-to-talk: starting dictation");
+            if let Err(e) = dictation::start(&app, &state, false) {
+                log::error!("hold-to-talk start failed: {e}");
+            }
+        }
+    });
+}
+
+pub fn stop_dictation(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let Some(state) = app.try_state::<AppState>() else { return };
+        if state.recorder.is_recording() {
+            log::info!("hold-to-talk: stopping dictation");
+            if let Err(e) = dictation::stop(&app, &state) {
+                log::error!("hold-to-talk stop failed: {e}");
+            }
+        }
+    });
 }
 
 /// Serializes hotkey toggles. The global-shortcut handler runs on the MAIN

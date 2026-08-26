@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
-import { Copy, Pencil, Trash2 } from "lucide-react";
+import { Copy, CornerDownLeft, Pencil, Trash2 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -128,19 +128,46 @@ export function SnippetsTab() {
     event.target.value = "";
   };
 
+  const triggerHasWhitespace = /\s/.test(trigger.trim());
+  const triggerExists = snippets.some(
+    (s) => s.trigger.toLowerCase() === trigger.trim().toLowerCase()
+  );
+  const isValidTrigger = trigger.trim().length > 0 && !triggerHasWhitespace && !triggerExists;
+
+  const handleTestInsert = async (snippetText: string) => {
+    try {
+      await api.pasteClipboard(snippetText);
+      toast.success("Inserted snippet into focused app");
+    } catch (e) {
+      toast.error(`Insertion failed: ${String(e)}`);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <Card>
         <CardContent className="flex flex-col gap-2 p-3">
         <div className="flex flex-wrap items-center gap-2">
-          <Input
-            value={trigger}
-            onChange={(e) => setTrigger(e.target.value)}
-            placeholder="One-word trigger — e.g. “signature”"
-            className="flex-1 min-w-40"
-            aria-label="Snippet trigger name"
-          />
-          <Button onClick={handleAdd} disabled={!trigger.trim() || !text.trim()}>
+          <div className="flex flex-1 flex-col gap-1 min-w-40">
+            <Input
+              value={trigger}
+              onChange={(e) => setTrigger(e.target.value)}
+              placeholder="One-word trigger — e.g. “signature”"
+              aria-label="Snippet trigger name"
+              className={triggerHasWhitespace || triggerExists ? "border-destructive focus-visible:ring-destructive" : ""}
+            />
+            {triggerHasWhitespace && (
+              <span className="text-[11px] font-bold text-destructive">
+                ✕ Triggers must be a single word without spaces.
+              </span>
+            )}
+            {triggerExists && (
+              <span className="text-[11px] font-bold text-destructive">
+                ✕ A snippet with trigger “{trigger.trim()}” already exists.
+              </span>
+            )}
+          </div>
+          <Button onClick={handleAdd} disabled={!isValidTrigger || !text.trim()}>
             + Add
           </Button>
           <Button
@@ -238,6 +265,14 @@ export function SnippetsTab() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-1">
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          title="Insert into active app"
+                          onClick={() => handleTestInsert(entry.text)}
+                        >
+                          <CornerDownLeft />
+                        </Button>
                         <Button size="icon-sm" variant="ghost" title="Edit" onClick={() => beginEdit(entry)}>
                           <Pencil />
                         </Button>

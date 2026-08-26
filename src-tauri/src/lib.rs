@@ -42,6 +42,9 @@ pub fn run() {
             commands::stop_recording,
             commands::cancel_recording,
             commands::is_recording,
+            commands::cancel_model_download,
+            commands::play_test_sound,
+            commands::reset_settings,
             commands::get_settings,
             commands::set_settings,
             commands::complete_onboarding,
@@ -110,6 +113,7 @@ pub fn run() {
                 streaming_rtf_x100: Arc::new(std::sync::atomic::AtomicU32::new(0)),
                 gpu_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 vad: Arc::new(Mutex::new(None)),
+                active_downloads: Arc::new(Mutex::new(std::collections::HashMap::new())),
             };
             app.manage(state);
 

@@ -27,6 +27,15 @@ function formatDate(value: string): string {
   return date.toLocaleString();
 }
 
+function formatDuration(ms: number): string {
+  if (!ms || ms <= 0) return "< 1s";
+  const sec = ms / 1000;
+  if (sec < 60) return `${sec.toFixed(1)}s`;
+  const mins = Math.floor(sec / 60);
+  const remSec = Math.round(sec % 60);
+  return `${mins}m ${remSec}s`;
+}
+
 export function HistoryTab() {
   const history = useStore((s) => s.history);
   const hydrated = useStore((s) => s.hydrated);
@@ -35,12 +44,52 @@ export function HistoryTab() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return history;
     return history.filter((entry) => entry.text.toLowerCase().includes(q));
   }, [history, query]);
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((e) => e.id)));
+    }
+  };
+
+  const toggleSelectOne = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    const count = selectedIds.size;
+    if (count === 0) return;
+    const ok = await confirmDialog({
+      title: `Delete ${count} dictations?`,
+      description: `The selected ${count} entries will be permanently removed.`,
+      confirmLabel: `Delete (${count})`,
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      for (const id of selectedIds) {
+        await api.deleteHistory(id);
+      }
+      setSelectedIds(new Set());
+      toast.success(`Deleted ${count} entries`);
+      await useStore.getState().refreshAll();
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
 
   const handleExport = async (kind: api.ExportKind) => {
     try {
@@ -90,6 +139,11 @@ export function HistoryTab() {
     if (!ok) return;
     try {
       await api.deleteHistory(id);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       toast.success("Deleted");
       await useStore.getState().refreshAll();
     } catch (e) {
@@ -123,6 +177,7 @@ export function HistoryTab() {
     if (!ok) return;
     try {
       await api.clearHistory();
+      setSelectedIds(new Set());
       toast.success("History cleared");
       await useStore.getState().refreshAll();
     } catch (e) {
@@ -148,6 +203,7 @@ export function HistoryTab() {
           Clear all
         </Button>
       </div>
+
       {exported && (
         <div className="flex flex-wrap items-center gap-2 border-2 border-primary bg-primary px-2 py-1.5 text-xs font-bold text-primary-foreground uppercase">
           <span className="truncate">✓ Exported — {exported}</span>
@@ -161,6 +217,23 @@ export function HistoryTab() {
           </Button>
         </div>
       )}
+
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between border-2 border-border bg-card p-2 shadow-brutal">
+          <span className="text-xs font-bold uppercase">
+            {selectedIds.size} of {filtered.length} selected
+          </span>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+              Deselect all
+            </Button>
+            <Button size="sm" variant="destructive" onClick={handleBulkDelete}>
+              Delete selected ({selectedIds.size})
+            </Button>
+          </div>
+        </div>
+      )}
+
       {!hydrated ? (
         <Card>
           <CardContent className="flex flex-col gap-2 p-4">
@@ -187,7 +260,17 @@ export function HistoryTab() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[45%]">Text</TableHead>
+                <TableHead className="w-10">
+                  <input
+                    type="checkbox"
+                    className="size-4 cursor-pointer accent-primary"
+                    checked={filtered.length > 0 && selectedIds.size === filtered.length}
+                    onChange={toggleSelectAll}
+                    aria-label="Select all dictations"
+                  />
+                </TableHead>
+                <TableHead className="w-[40%]">Text</TableHead>
+                <TableHead>Duration</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -195,7 +278,16 @@ export function HistoryTab() {
             </TableHeader>
             <TableBody>
               {filtered.map((entry) => (
-                <TableRow key={entry.id}>
+                <TableRow key={entry.id} className={selectedIds.has(entry.id) ? "bg-muted/40" : ""}>
+                  <TableCell>
+                    <input
+                      type="checkbox"
+                      className="size-4 cursor-pointer accent-primary"
+                      checked={selectedIds.has(entry.id)}
+                      onChange={() => toggleSelectOne(entry.id)}
+                      aria-label={`Select dictation ${entry.id}`}
+                    />
+                  </TableCell>
                   <TableCell className="max-w-0">
                     {editingId === entry.id ? (
                       <div className="flex min-w-[220px] flex-col gap-2">
@@ -212,7 +304,7 @@ export function HistoryTab() {
                       </div>
                     ) : (
                       <button
-                        className={`block max-w-[360px] text-left font-medium ${expandedId === entry.id ? "whitespace-pre-wrap" : "truncate"}`}
+                        className={`block max-w-[340px] text-left font-medium ${expandedId === entry.id ? "whitespace-pre-wrap" : "truncate"}`}
                         onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
                         title="Click to expand"
                       >
@@ -220,7 +312,10 @@ export function HistoryTab() {
                       </button>
                     )}
                   </TableCell>
-                  <TableCell className="text-muted-foreground tabular-nums">
+                  <TableCell className="text-xs font-bold text-muted-foreground tabular-nums whitespace-nowrap">
+                    {formatDuration(entry.duration_ms)}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
                     {formatDate(entry.created_at)}
                   </TableCell>
                   <TableCell>

@@ -34,6 +34,7 @@ export interface Settings {
   heatmap_color: string;
   vad_sensitivity: number;
   continuous: boolean;
+  hold_to_talk: boolean;
   autostart: boolean;
   spoken_punctuation: boolean;
   audio_feedback: boolean;
@@ -52,6 +53,7 @@ export type SettingsPatch = Partial<
     | "heatmap_color"
     | "vad_sensitivity"
     | "continuous"
+    | "hold_to_talk"
     | "autostart"
     | "spoken_punctuation"
     | "audio_feedback"
@@ -162,6 +164,18 @@ export function getModelsCatalog(): Promise<ModelInfo[]> {
 
 export function ensureModel(id: string): Promise<void> {
   return invoke<void>("ensure_model", { id });
+}
+
+export function cancelModelDownload(id: string): Promise<void> {
+  return invoke<void>("cancel_model_download", { id });
+}
+
+export function playTestSound(event: string, volume?: number): Promise<void> {
+  return invoke<void>("play_test_sound", { event, volume });
+}
+
+export function resetSettings(): Promise<Settings> {
+  return invoke<Settings>("reset_settings");
 }
 
 export function removeModel(id: string): Promise<void> {
@@ -302,6 +316,12 @@ export function onModelsReady(
   cb: (payload: ModelsReadyPayload) => void
 ): Promise<UnlistenFn> {
   return listen<ModelsReadyPayload>("models-ready", (event) => cb(event.payload));
+}
+
+export function onModelCancelled(
+  cb: (payload: { file: string }) => void
+): Promise<UnlistenFn> {
+  return listen<{ file: string }>("model-cancelled", (event) => cb(event.payload));
 }
 
 export function onTranscript(

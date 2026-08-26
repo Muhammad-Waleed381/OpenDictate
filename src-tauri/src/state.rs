@@ -19,6 +19,7 @@ pub struct SettingsPatch {
     pub heatmap_color: Option<String>,
     pub vad_sensitivity: Option<f32>,
     pub continuous: Option<bool>,
+    pub hold_to_talk: Option<bool>,
     pub autostart: Option<bool>,
     pub spoken_punctuation: Option<bool>,
     pub audio_feedback: Option<bool>,
@@ -45,6 +46,8 @@ pub struct Settings {
     pub vad_sensitivity: f32,
     #[serde(default)]
     pub continuous: bool,
+    #[serde(default)]
+    pub hold_to_talk: bool,
     #[serde(default)]
     pub autostart: bool,
     #[serde(default)]
@@ -103,6 +106,7 @@ impl Default for Settings {
             heatmap_color: default_heatmap_color(),
             vad_sensitivity: default_vad_sensitivity(),
             continuous: false,
+            hold_to_talk: false,
             autostart: false,
             spoken_punctuation: false,
             audio_feedback: false,
@@ -193,6 +197,7 @@ pub struct AppState {
     pub stt_engine: Arc<Mutex<Option<CachedSttEngine>>>,
     pub streaming_engine: Arc<Mutex<Option<CachedStreamingEngine>>>,
     pub vad: Arc<Mutex<Option<CachedVad>>>,
+    pub active_downloads: Arc<Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>,
 }
 
 pub struct CachedSttEngine {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,12 @@ export function ModelCard() {
   const streamingTooSlow =
     (modelsStatus?.streaming_rtf_x100 ?? 0) > 150 && (modelsStatus?.streaming_rtf_x100 ?? 0) !== 0;
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [downloadAllStatus, setDownloadAllStatus] = useState<{
+    current: number;
+    total: number;
+    name: string;
+  } | null>(null);
+  const cancelAllRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"streaming" | "non-streaming">(() => {
     const active = catalog.find((m) => m.id === settings?.stt_model);
@@ -56,11 +62,11 @@ export function ModelCard() {
 
   useEffect(() => {
     if (!downloading) return;
-    if (modelProgress.length === 0) {
+    if (modelProgress.length === 0 && !downloadAllStatus) {
       setDownloading(null);
       useStore.getState().refreshCatalog().catch(() => {});
     }
-  }, [modelProgress, downloading]);
+  }, [modelProgress, downloading, downloadAllStatus]);
 
   const handleDownload = async (id: string) => {
     setDownloading(id);
@@ -73,22 +79,54 @@ export function ModelCard() {
     }
   };
 
+  const handleCancelDownload = async (id: string) => {
+    try {
+      await api.cancelModelDownload(id);
+      useStore.getState().removeModelProgress(id);
+      if (downloading === id) setDownloading(null);
+      cancelAllRef.current = true;
+      setDownloadAllStatus(null);
+      toast.info("Download cancelled");
+      await useStore.getState().refreshCatalog();
+    } catch (e) {
+      toast.error(`Could not cancel download: ${String(e)}`);
+    }
+  };
+
   const handleDownloadAll = async () => {
     const missing = visibleModels.filter((m) => m.available && !m.installed);
     if (missing.length === 0) return;
+    cancelAllRef.current = false;
     setError(null);
-    for (const model of missing) {
+    for (let i = 0; i < missing.length; i++) {
+      if (cancelAllRef.current) break;
+      const model = missing[i];
+      setDownloadAllStatus({ current: i + 1, total: missing.length, name: model.name });
       setDownloading(model.id);
       try {
         await api.ensureModel(model.id);
       } catch (e) {
+        if (!cancelAllRef.current) {
+          setError(String(e));
+          toast.error(`Failed downloading ${model.name}: ${String(e)}`);
+        }
         setDownloading(null);
-        setError(String(e));
+        setDownloadAllStatus(null);
         return;
       }
     }
     setDownloading(null);
+    setDownloadAllStatus(null);
     await useStore.getState().refreshAll();
+  };
+
+  const handleCancelAll = async () => {
+    cancelAllRef.current = true;
+    if (downloading) {
+      await handleCancelDownload(downloading);
+    }
+    setDownloadAllStatus(null);
+    setDownloading(null);
   };
 
   const handleUse = async (modelId: string, engineKey: string) => {
@@ -102,9 +140,12 @@ export function ModelCard() {
   };
 
   const handleDelete = async (id: string) => {
+    const isModelInUse = settings?.stt_model === id;
     const ok = await confirmDialog({
-      title: "Delete model?",
-      description: `${id} will be removed from disk.`,
+      title: isModelInUse ? "Delete active model in use?" : "Delete model?",
+      description: isModelInUse
+        ? `“${id}” is currently selected for dictation. If deleted, you will need to choose another model before dictating.`
+        : `“${id}” will be removed from disk.`,
       confirmLabel: "Delete",
       destructive: true,
     });
@@ -220,15 +261,25 @@ export function ModelCard() {
                         </Button>
                       </>
                     ) : model.available ? (
-                      <Button
-                        size="sm"
-                        variant={isActive ? "outline" : "default"}
-                        className={isActive ? "border-primary-foreground text-primary-foreground shadow-none" : ""}
-                        onClick={() => handleDownload(model.id)}
-                        disabled={busy}
-                      >
-                        {busy ? "Downloading…" : "Download"}
-                      </Button>
+                      busy ? (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => handleCancelDownload(model.id)}
+                        >
+                          ✕ Cancel
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant={isActive ? "outline" : "default"}
+                          className={isActive ? "border-primary-foreground text-primary-foreground shadow-none" : ""}
+                          onClick={() => handleDownload(model.id)}
+                          disabled={downloading !== null && downloading !== model.id}
+                        >
+                          Download
+                        </Button>
+                      )
                     ) : (
                       <span className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground">
                         Coming soon
@@ -261,12 +312,20 @@ export function ModelCard() {
                   {progress && (
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
-                        <span>Downloading…</span>
+                        <span>
+                          Downloading…
+                          {progress.speedBytesPerSec && progress.speedBytesPerSec > 0
+                            ? ` (${formatBytes(progress.speedBytesPerSec)}/s)`
+                            : ""}
+                        </span>
                         <span>
                           {formatBytes(progress.received)}
                           {progress.total > 0
                             ? ` / ${formatBytes(progress.total)}`
                             : " so far"}
+                          {progress.etaSeconds != null && progress.etaSeconds > 0
+                            ? ` · ETA ${progress.etaSeconds < 60 ? `${progress.etaSeconds}s` : `${Math.floor(progress.etaSeconds / 60)}m ${progress.etaSeconds % 60}s`}`
+                            : ""}
                         </span>
                       </div>
                       <Progress
@@ -298,17 +357,22 @@ export function ModelCard() {
               <span className="border border-border bg-primary px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-primary-foreground">
                 ✓ Ready
               </span>
+            ) : captionBusy ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                className="ml-auto"
+                title="Cancel download"
+                onClick={() => handleCancelDownload(captionModel.id)}
+              >
+                ✕ Cancel
+              </Button>
             ) : (
               <span className="ml-auto">
-                <Button size="sm" onClick={() => handleDownload(captionModel.id)} disabled={captionBusy}>
-                  {captionBusy ? "Downloading…" : "Download"}
+                <Button size="sm" onClick={() => handleDownload(captionModel.id)} disabled={downloading !== null}>
+                  Download
                 </Button>
               </span>
-            )}
-            {captionBusy && (
-              <Button size="icon-sm" variant="ghost" title="Cancel" onClick={() => handleDelete(captionModel.id)}>
-                ×
-              </Button>
             )}
           </div>
           <p className="text-xs text-muted-foreground">
@@ -323,9 +387,22 @@ export function ModelCard() {
           {installedBytes > 0 ? `${formatBytes(installedBytes)} of model storage used` : "No models installed yet."}
         </p>
         {missingCount > 0 && (
-          <Button size="sm" variant="outline" onClick={handleDownloadAll} disabled={downloading !== null}>
-            {downloading !== null ? "Downloading…" : `Download all missing (${missingCount})`}
-          </Button>
+          <div className="flex items-center gap-2">
+            {downloadAllStatus ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-muted-foreground uppercase">
+                  Downloading {downloadAllStatus.current} of {downloadAllStatus.total} ({downloadAllStatus.name})…
+                </span>
+                <Button size="sm" variant="destructive" onClick={handleCancelAll}>
+                  Cancel all
+                </Button>
+              </div>
+            ) : (
+              <Button size="sm" variant="outline" onClick={handleDownloadAll} disabled={downloading !== null}>
+                Download all missing ({missingCount})
+              </Button>
+            )}
+          </div>
         )}
       </div>
 

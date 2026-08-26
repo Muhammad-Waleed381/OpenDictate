@@ -44,6 +44,10 @@ function useOpenDictateEvents() {
       api.onOverlayState((payload) => store.setOverlayState(payload)),
       api.onAudioLevel((payload) => store.setLevel(payload.rms)),
       api.onModelProgress((payload) => store.addModelProgress(payload)),
+      api.onModelCancelled((payload) => {
+        store.removeModelProgress(payload.file);
+        store.refreshCatalog().catch(() => {});
+      }),
       api.onModelsReady(() => store.refreshModels()),
       api.onHistoryUpdated(() =>
         api.getHistory().then((history) => useStore.setState({ history })),

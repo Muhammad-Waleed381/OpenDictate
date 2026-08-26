@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ModelCard } from "@/components/ModelCard";
 import { useTheme } from "@/lib/theme";
 import { toast } from "@/components/ui/toast";
+import { confirmDialog } from "@/components/ui/confirm-dialog";
 
 const KEY_NAMES: Record<string, string> = {
   " ": "space",
@@ -204,7 +205,7 @@ export function SettingsTab() {
   };
 
   const persistToggle = async (
-    key: "continuous" | "autostart" | "spoken_punctuation" | "audio_feedback",
+    key: "continuous" | "hold_to_talk" | "autostart" | "spoken_punctuation" | "audio_feedback",
     enabled: boolean,
   ) => {
     const current = useStore.getState().settings;
@@ -223,11 +224,39 @@ export function SettingsTab() {
   };
 
   const handleContinuousChange = (enabled: boolean) => persistToggle("continuous", enabled);
+  const handleHoldToTalkChange = (enabled: boolean) => persistToggle("hold_to_talk", enabled);
   const handleAutostartChange = (enabled: boolean) => persistToggle("autostart", enabled);
   const handleSpokenPunctuationChange = (enabled: boolean) =>
     persistToggle("spoken_punctuation", enabled);
   const handleAudioFeedbackChange = (enabled: boolean) =>
     persistToggle("audio_feedback", enabled);
+
+  const handlePlaySound = async (event: string) => {
+    try {
+      await api.playTestSound(event, settings?.audio_feedback_volume);
+    } catch (e) {
+      toast.error(`Sound playback failed: ${String(e)}`);
+    }
+  };
+
+  const handleResetSettings = async () => {
+    const ok = await confirmDialog({
+      title: "Reset all settings to default?",
+      description:
+        "All shortcut combinations, dictation preferences, and audio settings will be reset to factory defaults.",
+      confirmLabel: "Reset to default",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      const defaults = await api.resetSettings();
+      useStore.getState().setSettings(defaults);
+      toast.success("Settings reset to factory defaults");
+      await useStore.getState().refreshAll();
+    } catch (e) {
+      toast.error(`Reset failed: ${String(e)}`);
+    }
+  };
 
   const handleGpuChange = async (mode: string | null) => {
     if (!mode) return;
@@ -350,6 +379,20 @@ export function SettingsTab() {
 
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-col gap-1">
+          <Label htmlFor="hold-to-talk">Hold-to-talk mode</Label>
+          <p className="text-xs text-muted-foreground">
+            Hold your global hotkey while speaking and release to type.
+          </p>
+        </div>
+        <Switch
+          id="hold-to-talk"
+          checked={settings?.hold_to_talk ?? false}
+          onCheckedChange={handleHoldToTalkChange}
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-1">
           <Label htmlFor="gpu">GPU acceleration</Label>
           <p className="text-xs text-muted-foreground">
             Experimental. Engines silently fall back to CPU when a provider is
@@ -401,40 +444,72 @@ export function SettingsTab() {
         />
       </div>
 
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="audio-feedback">Audio feedback</Label>
-          <p className="text-xs text-muted-foreground">
-            Play sounds when dictation starts, inserts text, or runs into an error.
-          </p>
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="audio-feedback">Audio feedback</Label>
+            <p className="text-xs text-muted-foreground">
+              Play sounds when dictation starts, inserts text, or runs into an error.
+            </p>
+          </div>
+          <Switch
+            id="audio-feedback"
+            checked={settings?.audio_feedback ?? false}
+            onCheckedChange={handleAudioFeedbackChange}
+          />
         </div>
-        <Switch
-          id="audio-feedback"
-          checked={settings?.audio_feedback ?? false}
-          onCheckedChange={handleAudioFeedbackChange}
-        />
+
+        {settings?.audio_feedback && (
+          <div className="flex flex-col gap-2 rounded border border-border/40 bg-card p-3">
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor="audio-feedback-volume" className="shrink-0 text-xs">
+                Sound Volume
+              </Label>
+              <Slider
+                id="audio-feedback-volume"
+                className="flex-1"
+                min={0}
+                max={100}
+                value={Math.round((settings?.audio_feedback_volume ?? 0.5) * 100)}
+                onChange={(v) => handleVolumeChange(v / 100)}
+              />
+              <span className="w-12 text-right text-xs font-bold tabular-nums">
+                {Math.round((settings?.audio_feedback_volume ?? 0.5) * 100)}%
+              </span>
+            </div>
+            <div className="flex items-center gap-2 pt-1">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase">
+                Test audio cues:
+              </span>
+              <Button size="sm" variant="outline" onClick={() => handlePlaySound("start")}>
+                ▶ Start
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => handlePlaySound("insert")}>
+                ▶ Insert
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => handlePlaySound("error")}>
+                ▶ Error
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {settings?.audio_feedback && (
-        <div className="flex items-center justify-between gap-4">
-          <Label htmlFor="audio-feedback-volume" className="shrink-0">
-            Volume
-          </Label>
-          <Slider
-            id="audio-feedback-volume"
-            className="flex-1"
-            min={0}
-            max={100}
-            value={Math.round((settings?.audio_feedback_volume ?? 0.5) * 100)}
-            onChange={(v) => handleVolumeChange(v / 100)}
-          />
-          <span className="w-12 text-right text-xs font-bold tabular-nums">
-            {Math.round((settings?.audio_feedback_volume ?? 0.5) * 100)}%
+      <ModelCard />
+
+      <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
+        <div className="flex flex-col">
+          <span className="text-xs font-bold uppercase text-muted-foreground">
+            Factory reset
+          </span>
+          <span className="text-[11px] text-muted-foreground">
+            Restore default shortcuts, engine, and preferences.
           </span>
         </div>
-      )}
-
-      <ModelCard />
+        <Button variant="outline" className="text-destructive hover:bg-destructive hover:text-destructive-foreground" onClick={handleResetSettings}>
+          Reset settings to default
+        </Button>
+      </div>
     </div>
   );
 }
