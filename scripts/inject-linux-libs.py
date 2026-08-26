@@ -35,9 +35,11 @@ with open(conf_path) as f:
 linux = conf.setdefault("bundle", {}).setdefault("linux", {})
 linux["deb"] = {"files": mapping}
 linux["rpm"] = {"files": mapping}
+linux["appimage"] = {"files": mapping}
 
 with open(conf_path, "w") as f:
     json.dump(conf, f, indent=2)
     f.write("\n")
 
-print(f"injected {len(mapping)} shared libraries into deb/rpm files map")
+print(f"injected {len(mapping)} shared libraries into deb/rpm/appimage files map")
+
