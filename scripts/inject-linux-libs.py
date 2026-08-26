@@ -21,7 +21,7 @@ libdir = os.environ.get("SHERPA_ONNX_LIB_DIR")
 if not libdir or not os.path.isdir(libdir):
     sys.exit("SHERPA_ONNX_LIB_DIR is not set or not a directory")
 
-sos = sorted(glob.glob(os.path.join(libdir, "*.so")))
+sos = sorted(set(glob.glob(os.path.join(libdir, "*.so")) + glob.glob(os.path.join(libdir, "*.so.*"))))
 if not sos:
     sys.exit(f"no .so files found in {libdir}")
 

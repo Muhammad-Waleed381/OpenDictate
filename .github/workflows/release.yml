@@ -54,7 +54,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
             patchelf libasound2-dev libpulse-dev libudev-dev libgtk-3-dev \
-            pkg-config cmake build-essential
+            libfuse2 zsync pkg-config cmake build-essential
 
       - name: Install frontend dependencies
         run: npm ci
@@ -75,6 +75,8 @@ jobs:
           # libraries visible, and never strip a GPU-linked binary.
           echo "LD_LIBRARY_PATH=$LIBDIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
           echo "NO_STRIP=true" >> "$GITHUB_ENV"
+          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
+          echo "ARCH=x86_64" >> "$GITHUB_ENV"
           # The deb/rpm/appimage must SHIP the shared libraries and the binary
           # must find them: libs install to /usr/lib/opendictate via the files
           # map (key = destination, value = source), and build.rs bakes a
@@ -122,6 +124,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_STRIP: "true"
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          ARCH: "x86_64"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "OpenDictate ${{ github.ref_name }}"
