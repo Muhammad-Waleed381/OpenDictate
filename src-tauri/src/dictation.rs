@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1426,23 +1427,27 @@ pub fn start_handsfree(app: &AppHandle, state: &AppState) -> Result<(), String> 
             let mut utterance_active = false;
             let mut silent_since = Instant::now();
             let poll_interval = Duration::from_millis(60);
+            let mut frame_history: VecDeque<bool> = VecDeque::with_capacity(DEBOUNCE_WINDOW);
 
             let mut noise_floor: f32 = 0.012;
             let mut utterance_started = Instant::now();
             let mut consecutive_speech_frames: u32 = 0;
-            const SILENCE_TIMEOUT: Duration = Duration::from_millis(800);
+            const SILENCE_TIMEOUT: Duration = Duration::from_millis(500);
             const MAX_UTTERANCE_DURATION: Duration = Duration::from_secs(15);
             const MIN_UTTERANCE_SAMPLES: usize = 6400; // 0.4s @ 16kHz
             const SPEECH_CONFIRMATION_FRAMES: u32 = 2; // require >=120ms continuous speech to transition to Recording
+            const DEBOUNCE_WINDOW: usize = 8; // last N frames (8×60ms = 480ms) for majority vote
+            const SILENCE_VOTE_THRESHOLD: usize = 7; // need >=7/8 silent frames to confirm silence
 
             let vad_path = models::vad_model_path();
+            let silero_threshold = sensitivity_to_silero_threshold(sensitivity(&state));
             let silero_detector = if models::is_vad_ready() {
-                SileroVad::with_threshold(&vad_path, 0.5).ok()
+                SileroVad::with_threshold(&vad_path, silero_threshold).ok()
             } else {
                 None
             };
 
-            log::info!("handsfree background loop running (neural VAD: {})", silero_detector.is_some());
+            log::info!("handsfree background loop running (neural VAD: {}, threshold: {silero_threshold:.2})", silero_detector.is_some());
 
             while state.handsfree_active.load(Ordering::SeqCst) {
                 if !state.recorder.is_recording() {
@@ -1496,9 +1501,11 @@ pub fn start_handsfree(app: &AppHandle, state: &AppState) -> Result<(), String> 
                 } else {
                     // Awake: use neural Silero VAD + adaptive energy for speech detection
                     let base_threshold = sensitivity_to_energy_threshold(state_sensitivity(&app));
-                    if !utterance_active {
-                        noise_floor = (noise_floor * 0.85 + rms * 0.15).clamp(0.005, 0.15);
-                    }
+                    // Noise floor adapts continuously (even during speech) with
+                    // a slower rate while utterance is active, so ambient fan
+                    // noise drift doesn't stale the threshold.
+                    let nf_rate = if utterance_active { 0.05 } else { 0.15 };
+                    noise_floor = (noise_floor * (1.0 - nf_rate) + rms * nf_rate).clamp(0.005, 0.15);
 
                     let vad_speech = if let Some(ref silero) = silero_detector {
                         if !samples.is_empty() {
@@ -1517,14 +1524,22 @@ pub fn start_handsfree(app: &AppHandle, state: &AppState) -> Result<(), String> 
                     };
 
                     let is_speech = if silero_detector.is_some() {
-                        vad_speech || (rms >= speech_threshold && (crest_factor >= 2.0 || rms >= noise_floor * 2.0))
+                        vad_speech
                     } else {
                         rms >= speech_threshold && (crest_factor >= 2.0 || rms >= noise_floor * 2.0)
                     };
 
+                    // Sliding-window debouncer: push raw frame, keep last DEBOUNCE_WINDOW entries
+                    frame_history.push_back(is_speech);
+                    if frame_history.len() > DEBOUNCE_WINDOW {
+                        frame_history.pop_front();
+                    }
+                    let silent_count = frame_history.iter().filter(|&&s| !s).count();
+                    let debounced_silence = frame_history.len() >= DEBOUNCE_WINDOW
+                        && silent_count >= SILENCE_VOTE_THRESHOLD;
+
                     if is_speech {
                         last_awake_activity = Instant::now();
-                        silent_since = Instant::now();
                         consecutive_speech_frames += 1;
 
                         if !utterance_active {
@@ -1540,6 +1555,13 @@ pub fn start_handsfree(app: &AppHandle, state: &AppState) -> Result<(), String> 
                         }
                     } else {
                         consecutive_speech_frames = 0;
+                        // Only reset silent_since when debounced window says
+                        // "mostly speech" (i.e. not confirmed silence). This
+                        // prevents a single 60ms noise blip from resetting the
+                        // entire 500ms countdown.
+                        if !debounced_silence {
+                            silent_since = Instant::now();
+                        }
                         if utterance_active {
                             utterance_samples.extend_from_slice(&samples);
                             let silence_reached = silent_since.elapsed() >= SILENCE_TIMEOUT;
@@ -1566,6 +1588,7 @@ pub fn start_handsfree(app: &AppHandle, state: &AppState) -> Result<(), String> 
                                 utterance_active = false;
                                 utterance_samples.clear();
                                 silent_since = Instant::now();
+                                frame_history.clear();
                             }
                         } else {
                             // Check inactivity timeout

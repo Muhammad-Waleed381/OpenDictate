@@ -39,7 +39,7 @@ impl SileroVad {
             silero_vad: SileroVadModelConfig {
                 model: Some(model_path.to_string_lossy().to_string()),
                 threshold,
-                min_silence_duration: 0.5,
+                min_silence_duration: 0.25,
                 min_speech_duration: 0.1,
                 max_speech_duration: 120.0,
                 ..Default::default()
@@ -114,7 +114,6 @@ impl SileroVad {
         let mut has_speech = false;
         let mut first_speech_idx: Option<usize> = None;
         let mut last_speech_idx: usize = 0;
-        let mut processed_samples: usize = 0;
 
         for chunk in audio.chunks(chunk_size) {
             let actual_len = chunk.len();
@@ -128,23 +127,29 @@ impl SileroVad {
 
             while !detector.is_empty() {
                 has_speech = true;
-                if first_speech_idx.is_none() {
-                    first_speech_idx = Some(processed_samples.saturating_sub(actual_len));
+                if let Some(seg) = detector.front() {
+                    let start = (seg.start().max(0) as usize).min(audio.len());
+                    let end = (start + seg.samples().len()).min(audio.len());
+                    if first_speech_idx.is_none() {
+                        first_speech_idx = Some(start);
+                    }
+                    last_speech_idx = last_speech_idx.max(end);
                 }
-                last_speech_idx = (processed_samples + actual_len).min(audio.len());
                 detector.pop();
             }
-
-            processed_samples += actual_len;
         }
 
         detector.flush();
         while !detector.is_empty() {
             has_speech = true;
-            if first_speech_idx.is_none() {
-                first_speech_idx = Some(0);
+            if let Some(seg) = detector.front() {
+                let start = (seg.start().max(0) as usize).min(audio.len());
+                let end = (start + seg.samples().len()).min(audio.len());
+                if first_speech_idx.is_none() {
+                    first_speech_idx = Some(start);
+                }
+                last_speech_idx = last_speech_idx.max(end);
             }
-            last_speech_idx = audio.len();
             detector.pop();
         }
 
