@@ -103,7 +103,6 @@ impl SttEngine {
                     tokens: Some(tokens.to_string_lossy().to_string()),
                     num_threads: n_threads,
                     provider: Some(provider.as_str().to_string()),
-                    model_type: Some("nemo_transducer".to_string()),
                     debug: false,
                     ..Default::default()
                 },
@@ -132,6 +131,7 @@ impl SttEngine {
                     tokens: Some(tokens.to_string_lossy().to_string()),
                     num_threads: n_threads,
                     provider: Some(provider.as_str().to_string()),
+                    model_type: Some("nemo_transducer".to_string()),
                     debug: false,
                     ..Default::default()
                 },
@@ -230,8 +230,10 @@ impl SttEngine {
         }
 
         let stream = match hotwords.filter(|h| !h.trim().is_empty()) {
-            Some(words) => self.recognizer.create_stream_with_hotwords(words),
-            None => self.recognizer.create_stream(),
+            Some(words) if self.kind == ModelKind::NemoTransducer => {
+                self.recognizer.create_stream_with_hotwords(words)
+            }
+            _ => self.recognizer.create_stream(),
         };
         stream.accept_waveform(16000, audio);
         self.recognizer.decode(&stream);

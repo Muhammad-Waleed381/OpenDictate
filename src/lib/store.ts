@@ -91,6 +91,12 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
     set((state) => {
       const existing = state.modelProgress.find((p) => p.file === progress.file);
       const now = Date.now();
+      // A restarted download starts from 0 again: drop the stale speed/ETA
+      // from the previous attempt instead of carrying it over.
+      if (existing && progress.received < existing.received) {
+        const rest = state.modelProgress.filter((p) => p.file !== progress.file);
+        return { modelProgress: [...rest, { ...progress, lastUpdated: now }] };
+      }
       let speedBytesPerSec = existing?.speedBytesPerSec;
       let etaSeconds = existing?.etaSeconds;
       if (existing && existing.lastUpdated && now > existing.lastUpdated) {

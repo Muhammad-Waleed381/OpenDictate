@@ -51,13 +51,45 @@ impl SileroVad {
             ..Default::default()
         };
 
-        let detector = VoiceActivityDetector::create(&config, threshold)
+        let detector = VoiceActivityDetector::create(&config, 60.0)
             .ok_or_else(|| CoreError::Audio("failed to initialize silero VAD".to_string()))?;
 
         log::info!("silero VAD loaded from {}", model_path.display());
         Ok(Self {
             detector: Mutex::new(detector),
         })
+    }
+
+    /// Feeds streaming samples into the persistent VAD detector and returns
+    /// whether speech is currently detected. Maintains RNN state between frames.
+    pub fn accept_streaming(&self, samples: &[f32]) -> bool {
+        if samples.is_empty() {
+            return false;
+        }
+        let detector = match self.detector.lock() {
+            Ok(detector) => detector,
+            Err(_) => return false,
+        };
+        let chunk_size = 512;
+        for chunk in samples.chunks(chunk_size) {
+            if chunk.len() == chunk_size {
+                detector.accept_waveform(chunk);
+            } else {
+                let mut padded = vec![0.0f32; chunk_size];
+                padded[..chunk.len()].copy_from_slice(chunk);
+                detector.accept_waveform(&padded);
+            }
+        }
+        let is_speech = detector.detected() || !detector.is_empty();
+        detector.clear();
+        is_speech
+    }
+
+    /// Resets the persistent streaming state of the VAD detector.
+    pub fn reset(&self) {
+        if let Ok(detector) = self.detector.lock() {
+            detector.reset();
+        }
     }
 
     pub fn process(&self, audio: &[f32]) -> VadResult {
@@ -79,26 +111,48 @@ impl SileroVad {
         detector.reset();
 
         let chunk_size = 512;
+        let mut has_speech = false;
+        let mut first_speech_idx: Option<usize> = None;
+        let mut last_speech_idx: usize = 0;
+        let mut processed_samples: usize = 0;
+
         for chunk in audio.chunks(chunk_size) {
-            if chunk.len() == chunk_size {
+            let actual_len = chunk.len();
+            if actual_len == chunk_size {
                 detector.accept_waveform(chunk);
             } else {
                 let mut padded = vec![0.0f32; chunk_size];
-                padded[..chunk.len()].copy_from_slice(chunk);
+                padded[..actual_len].copy_from_slice(chunk);
                 detector.accept_waveform(&padded);
             }
-        }
-        detector.flush();
 
-        let mut speech_samples: Vec<f32> = Vec::new();
-        while !detector.is_empty() {
-            if let Some(segment) = detector.front() {
-                speech_samples.extend_from_slice(segment.samples());
+            while !detector.is_empty() {
+                has_speech = true;
+                if first_speech_idx.is_none() {
+                    first_speech_idx = Some(processed_samples.saturating_sub(actual_len));
+                }
+                last_speech_idx = (processed_samples + actual_len).min(audio.len());
+                detector.pop();
             }
+
+            processed_samples += actual_len;
+        }
+
+        detector.flush();
+        while !detector.is_empty() {
+            has_speech = true;
+            if first_speech_idx.is_none() {
+                first_speech_idx = Some(0);
+            }
+            last_speech_idx = audio.len();
             detector.pop();
         }
 
-        if speech_samples.is_empty() {
+        if !has_speech {
+            let energy_res = apply_energy_vad(audio);
+            if energy_res.has_speech {
+                return energy_res;
+            }
             return VadResult {
                 trimmed_audio: Vec::new(),
                 speech_duration_ms: 0,
@@ -106,9 +160,20 @@ impl SileroVad {
             };
         }
 
+        // Trim leading and trailing silence with 300ms padding, keeping continuous speech audio intact
+        let pad_samples = (16_000 * 300) / 1000; // 300ms
+        let start_sample = first_speech_idx.unwrap_or(0).saturating_sub(pad_samples);
+        let end_sample = (last_speech_idx + pad_samples).min(audio.len());
+
+        let trimmed_audio = if start_sample < end_sample {
+            audio[start_sample..end_sample].to_vec()
+        } else {
+            audio.to_vec()
+        };
+
         VadResult {
-            speech_duration_ms: (speech_samples.len() as u64 * 1000) / 16_000,
-            trimmed_audio: speech_samples,
+            speech_duration_ms: (trimmed_audio.len() as u64 * 1000) / 16_000,
+            trimmed_audio,
             has_speech: true,
         }
     }
@@ -124,7 +189,7 @@ pub struct VadConfig {
 
 pub fn default_config() -> VadConfig {
     VadConfig {
-        energy_threshold: 0.01,
+        energy_threshold: 0.008,
         frame_size: 480,
         min_speech_frames: 3,
         hangover_frames: 10,
@@ -203,7 +268,7 @@ pub fn apply_energy_vad_with_config(audio: &[f32], config: &VadConfig) -> VadRes
 /// quieter speech.
 pub fn sensitivity_to_energy_threshold(sensitivity: f32) -> f32 {
     let s = sensitivity.clamp(0.0, 1.0);
-    0.03 - 0.02 * s
+    0.015 - 0.013 * s
 }
 
 /// Map a 0..1 sensitivity knob to the Silero speech-probability threshold.

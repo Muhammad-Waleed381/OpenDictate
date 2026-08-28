@@ -36,18 +36,29 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
             created_at TEXT NOT NULL
         );",
     )?;
+    // One-time backfill of daily stats from history. Skipped when the user
+    // explicitly reset their word stats: an empty `daily_stats` used to look
+    // exactly like "first launch after upgrade", so the aggregates were
+    // resurrected from history on the next launch, silently undoing the reset.
+    let stats_cleared = conn
+        .query_row(
+            "SELECT 1 FROM settings WHERE key = 'stats_cleared'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .is_ok();
     let backfilled: i64 = conn.query_row("SELECT COUNT(*) FROM daily_stats", [], |r| r.get(0))?;
-    if backfilled == 0 {
+    if backfilled == 0 && !stats_cleared {
         conn.execute_batch(
             "INSERT INTO daily_stats (day, words, sessions)
-             SELECT date(created_at, 'unixepoch'),
+             SELECT date(created_at, 'unixepoch', 'localtime'),
                     COALESCE(SUM(
                         CASE WHEN length(text) = 0 THEN 0
                              ELSE length(text) - length(replace(text, ' ', '')) + 1
                         END
                     ), 0),
                     COUNT(*)
-             FROM history GROUP BY date(created_at, 'unixepoch');",
+             FROM history GROUP BY date(created_at, 'unixepoch', 'localtime');",
         )?;
     }
     Ok(conn)
@@ -84,7 +95,7 @@ pub fn insert_history(conn: &Connection, entry: &HistoryEntry) -> rusqlite::Resu
     )?;
     tx.execute(
         "INSERT INTO daily_stats (day, words, sessions)
-         VALUES (date(?1, 'unixepoch'),
+         VALUES (date(?1, 'unixepoch', 'localtime'),
                  CASE WHEN length(?2) = 0 THEN 0
                       ELSE length(?2) - length(replace(?2, ' ', '')) + 1
                  END,
@@ -113,22 +124,72 @@ pub fn get_history(conn: &Connection) -> rusqlite::Result<Vec<HistoryEntry>> {
     rows.collect()
 }
 
+/// Word count for `daily_stats` aggregation, matching the SQL heuristic
+/// `length(text) - length(replace(text, ' ', '')) + 1` (with 0 for empty
+/// text) so Rust-side adjustments stay consistent with SQL-side inserts.
+fn count_words(text: &str) -> i64 {
+    if text.is_empty() {
+        0
+    } else {
+        text.split(' ').count() as i64
+    }
+}
+
 pub fn delete_history(conn: &Connection, id: i64) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM history WHERE id = ?1", [id])?;
-    Ok(())
+    let tx = conn.unchecked_transaction()?;
+    let row: Option<(String, String)> = tx
+        .query_row(
+            "SELECT text, created_at FROM history WHERE id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    if let Some((text, created_at)) = row {
+        tx.execute("DELETE FROM history WHERE id = ?1", [id])?;
+        // Keep the daily aggregate in sync with the history list.
+        tx.execute(
+            "UPDATE daily_stats SET
+                 words = MAX(words - ?2, 0),
+                 sessions = MAX(sessions - 1, 0)
+             WHERE day = date(?1, 'unixepoch', 'localtime')",
+            rusqlite::params![created_at, count_words(&text)],
+        )?;
+    }
+    tx.commit()
 }
 
 pub fn update_history(conn: &Connection, id: i64, text: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE history SET text = ?1 WHERE id = ?2",
-        rusqlite::params![text.trim(), id],
-    )?;
-    Ok(())
+    let tx = conn.unchecked_transaction()?;
+    let row: Option<(String, String)> = tx
+        .query_row(
+            "SELECT text, created_at FROM history WHERE id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok();
+    if let Some((old_text, created_at)) = row {
+        let trimmed = text.trim();
+        tx.execute(
+            "UPDATE history SET text = ?1 WHERE id = ?2",
+            rusqlite::params![trimmed, id],
+        )?;
+        let delta = count_words(trimmed) - count_words(&old_text);
+        if delta != 0 {
+            tx.execute(
+                "UPDATE daily_stats SET words = MAX(words + ?2, 0)
+                 WHERE day = date(?1, 'unixepoch', 'localtime')",
+                rusqlite::params![created_at, delta],
+            )?;
+        }
+    }
+    tx.commit()
 }
 
 pub fn clear_history(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM history", [])?;
-    Ok(())
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM history", [])?;
+    tx.execute("DELETE FROM daily_stats", [])?;
+    tx.commit()
 }
 
 pub fn get_dictionary(conn: &Connection) -> rusqlite::Result<Vec<DictEntry>> {
@@ -225,8 +286,17 @@ pub fn word_stats(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
 }
 
 pub fn reset_word_stats(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM daily_stats", [])?;
-    Ok(())
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM daily_stats", [])?;
+    // Persist the reset. Without this marker the startup backfill heuristic
+    // ("empty daily_stats == first launch after upgrade") resurrected the
+    // aggregates from history on the next launch, silently undoing the reset.
+    tx.execute(
+        "INSERT INTO settings (key, value) VALUES ('stats_cleared', '1')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [],
+    )?;
+    tx.commit()
 }
 
 pub fn now_timestamp() -> String {
@@ -239,6 +309,90 @@ pub fn now_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stats_tables(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE history (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 text TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 duration_ms INTEGER NOT NULL,
+                 source TEXT NOT NULL
+             );
+             CREATE TABLE daily_stats (
+                 day TEXT PRIMARY KEY,
+                 words INTEGER NOT NULL DEFAULT 0,
+                 sessions INTEGER NOT NULL DEFAULT 0
+             );",
+        )
+        .unwrap();
+    }
+
+    fn day_words(conn: &Connection, day: &str) -> (i64, i64) {
+        conn.query_row(
+            "SELECT words, sessions FROM daily_stats WHERE day = ?1",
+            [day],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((0, 0))
+    }
+
+    #[test]
+    fn count_words_matches_sql_heuristic() {
+        assert_eq!(count_words(""), 0);
+        assert_eq!(count_words("hello"), 1);
+        assert_eq!(count_words("hello world"), 2);
+        // Double spaces count like the SQL length-diff heuristic does.
+        assert_eq!(count_words("a  b"), 3);
+    }
+
+    #[test]
+    fn reset_word_stats_persists_cleared_marker() {
+        let conn = Connection::open_in_memory().unwrap();
+        stats_tables(&conn);
+        reset_word_stats(&conn).unwrap();
+        let marker: i64 = conn
+            .query_row(
+                "SELECT 1 FROM settings WHERE key = 'stats_cleared'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(marker, 1);
+        // The backfill heuristic in open() skips when this marker is present;
+        // without it the reset was undone on the next launch.
+        let backfill_would_run = conn
+            .query_row("SELECT 1 FROM settings WHERE key = 'stats_cleared'", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .is_err();
+        assert!(!backfill_would_run);
+    }
+
+    #[test]
+    fn history_edits_keep_daily_stats_in_sync() {
+        let conn = Connection::open_in_memory().unwrap();
+        stats_tables(&conn);
+        // 1970-01-01T00:01:23Z
+        let entry = HistoryEntry {
+            id: 0,
+            text: "one two three".into(),
+            created_at: "83".into(),
+            duration_ms: 1000,
+            source: "dictate".into(),
+        };
+        insert_history(&conn, &entry).unwrap();
+        assert_eq!(day_words(&conn, "1970-01-01"), (3, 1));
+
+        // Editing the text adjusts the word count.
+        update_history(&conn, 1, "one two three four five").unwrap();
+        assert_eq!(day_words(&conn, "1970-01-01"), (5, 1));
+
+        // Deleting the entry zeroes the day out (floored, no negatives).
+        delete_history(&conn, 1).unwrap();
+        assert_eq!(day_words(&conn, "1970-01-01"), (0, 0));
+    }
 
     #[test]
     fn settings_roundtrip_and_camelcase_migration() {

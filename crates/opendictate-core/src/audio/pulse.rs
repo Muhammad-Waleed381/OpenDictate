@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use libpulse_sys as capi;
 
-use crate::audio::capture::{MAX_RECORDING_SECS, MAX_RECORDING_SAMPLES, SAMPLE_RATE};
+use crate::audio::capture::{SAMPLE_RATE, SharedBuffer};
 use crate::error::CoreError;
 use crate::Result;
 
@@ -195,8 +195,8 @@ extern "C" fn read_cb(_: *mut capi::pa_stream, _nbytes: usize, userdata: *mut c_
 /// and used on the capture thread.
 fn setup_capture(
     source: &str,
-    stop_signal: &Arc<AtomicBool>,
-    buffer: &Arc<Mutex<Vec<f32>>>,
+    _stop_signal: &Arc<AtomicBool>,
+    buffer: &Arc<Mutex<SharedBuffer>>,
     started_at: &Arc<Mutex<Option<Instant>>>,
 ) -> std::result::Result<Capture, String> {
     unsafe {
@@ -342,7 +342,11 @@ fn setup_capture(
         }
         capi::pa_threaded_mainloop_unlock(mainloop);
 
-        stop_signal.store(false, Ordering::SeqCst);
+        // NOTE: `stop_signal` is deliberately NOT reset to `false` here. The
+        // caller (`AudioRecorder::start_pulse`) already cleared it before
+        // spawning this thread; resetting it here would re-open the race where
+        // a timed-out `spawn_capture` sets stop=true to abort, and this thread
+        // immediately un-sets it, wedging `join()` forever.
         *started_at.lock().map_err(|e| e.to_string())? = Some(Instant::now());
         buffer.lock().map_err(|e| e.to_string())?.clear();
 
@@ -356,32 +360,22 @@ fn setup_capture(
 
 fn append_samples(
     bytes: &[u8],
-    buffer: &Arc<Mutex<Vec<f32>>>,
-    stop_signal: &Arc<AtomicBool>,
-    started_at: &Arc<Mutex<Option<Instant>>>,
+    buffer: &Arc<Mutex<SharedBuffer>>,
+    _stop_signal: &Arc<AtomicBool>,
+    _started_at: &Arc<Mutex<Option<Instant>>>,
 ) {
     let mut guard = match buffer.try_lock() {
         Ok(g) => g,
         Err(_) => return,
     };
-    if let Ok(start_guard) = started_at.lock() {
-        if let Some(start) = *start_guard {
-            if start.elapsed().as_secs() >= MAX_RECORDING_SECS {
-                stop_signal.store(true, Ordering::SeqCst);
-                return;
-            }
-        }
-    }
-    let remaining = MAX_RECORDING_SAMPLES.saturating_sub(guard.len());
-    for (appended, chunk) in bytes.chunks_exact(4).enumerate() {
-        if appended >= remaining {
-            break;
-        }
-        guard.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
-    }
-    if remaining == 0 {
-        stop_signal.store(true, Ordering::SeqCst);
-    }
+    let new_samples: Vec<f32> = bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect();
+
+    // `SharedBuffer::push` drains from the front when the recording cap is
+    // hit, advancing `base` so consumer watermarks stay valid.
+    guard.push(&new_samples);
 }
 
 /// Drains available samples into the shared buffer until `stop_signal` is set
@@ -390,7 +384,7 @@ fn append_samples(
 fn capture_loop(
     capture: &mut Capture,
     stop_signal: &Arc<AtomicBool>,
-    buffer: &Arc<Mutex<Vec<f32>>>,
+    buffer: &Arc<Mutex<SharedBuffer>>,
     started_at: &Arc<Mutex<Option<Instant>>>,
 ) {
     unsafe {
@@ -446,14 +440,17 @@ fn capture_loop(
 
 /// Spawns a capture thread recording from `source`. Returns once the stream is
 /// ready and buffering. The thread exits when `stop_signal` is set.
-pub fn spawn_capture(
+pub(crate) fn spawn_capture(
     source: &str,
     stop_signal: Arc<AtomicBool>,
-    buffer: Arc<Mutex<Vec<f32>>>,
+    buffer: Arc<Mutex<SharedBuffer>>,
     started_at: Arc<Mutex<Option<Instant>>>,
 ) -> Result<std::thread::JoinHandle<()>> {
     let source = source.to_string();
     let (tx, rx) = mpsc::sync_channel(1);
+    // Keep a handle to signal the thread on the timeout path below (the
+    // original Arc is moved into the thread closure).
+    let timeout_stop = Arc::clone(&stop_signal);
     let handle = std::thread::Builder::new()
         .name("opendictate-pulse".to_string())
         .spawn(move || {
@@ -474,6 +471,11 @@ pub fn spawn_capture(
             ))
         }
         Err(_) => {
+            // The thread may have completed setup just after the timeout and
+            // be entering `capture_loop`. Signal it to stop before joining,
+            // otherwise `join()` blocks indefinitely (`capture_loop` only
+            // exits when `stop_signal` is set).
+            timeout_stop.store(true, Ordering::SeqCst);
             let _ = handle.join();
             Err(CoreError::Audio(
                 "pulse capture setup timed out".to_string(),
@@ -526,7 +528,7 @@ mod tests {
         };
         let source = sources.first().unwrap().name.clone();
         let stop = Arc::new(AtomicBool::new(false));
-        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let buffer = Arc::new(Mutex::new(SharedBuffer::default()));
         let started_at = Arc::new(Mutex::new(None));
         let handle = spawn_capture(
             &source,
@@ -538,7 +540,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(800));
         stop.store(true, Ordering::SeqCst);
         let _ = handle.join();
-        let samples = buffer.lock().unwrap();
+        let samples = buffer.lock().unwrap().samples.clone();
         assert!(!samples.is_empty(), "expected captured samples from {source}");
         let rms: f32 =
             (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();

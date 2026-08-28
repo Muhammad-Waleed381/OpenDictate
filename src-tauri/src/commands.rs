@@ -59,6 +59,7 @@ pub fn models_status(state: State<AppState>) -> ModelsStatus {
         stt_ready: models::is_stt_model_ready(),
         vad_ready: models::is_vad_ready(),
         caption_ready: models::is_caption_model_ready(),
+        kws_ready: models::is_kws_ready(),
         streaming_rtf_x100: state
             .streaming_rtf_x100
             .load(std::sync::atomic::Ordering::SeqCst),
@@ -75,7 +76,16 @@ pub fn models_catalog() -> Vec<models::ModelInfo> {
 #[tauri::command]
 pub fn ensure_model(id: String, app: AppHandle, state: State<AppState>) -> Result<(), String> {
     let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    if let Ok(mut dl) = state.active_downloads.lock() {
+    {
+        let mut dl = state.active_downloads.lock().map_err(|e| e.to_string())?;
+        if dl.contains_key(&id) {
+            // A previous download for this model is still running with its own
+            // cancel flag. Inserting a second flag would orphan the first
+            // (cancel_model_download could then no longer reach it). Reject
+            // instead — the frontend progress UI is already driven by the
+            // in-flight download's events.
+            return Err(format!("a download for '{id}' is already in progress"));
+        }
         dl.insert(id.clone(), cancel_flag.clone());
     }
     let cancel_check = {
@@ -197,12 +207,7 @@ pub fn remove_model(id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn warmup_model(
-    _id: String,
-    engine_key: String,
-    app: AppHandle,
-    _state: State<AppState>,
-) -> Result<(), String> {
+pub fn warmup_model(engine_key: String, app: AppHandle) -> Result<(), String> {
     let is_streaming = engine_key.contains("streaming");
     std::thread::Builder::new()
         .name("opendictate-warmup".to_string())
@@ -306,6 +311,11 @@ pub fn set_settings(
         .hotkey
         .as_ref()
         .is_some_and(|h| h != &current.hotkey);
+    let old_hotkey = if hotkey_changed {
+        Some(current.hotkey.clone())
+    } else {
+        None
+    };
     if let Some(hotkey) = &settings.hotkey {
         current.hotkey = hotkey.clone();
     }
@@ -367,12 +377,72 @@ pub fn set_settings(
             current.audio_feedback_volume = audio_feedback_volume;
         }
     }
+    let handsfree_changed = settings.handsfree_mode.is_some_and(|h| h != current.handsfree_mode);
+    if let Some(handsfree_mode) = settings.handsfree_mode {
+        current.handsfree_mode = handsfree_mode;
+    }
+    if let Some(wake_words) = &settings.wake_words {
+        if !wake_words.trim().is_empty() {
+            current.wake_words = wake_words.trim().to_string();
+            // Invalidate KWS cache on wake words change
+            if let Ok(mut kws) = state.kws_engine.lock() {
+                *kws = None;
+            }
+        }
+    }
+    if let Some(timeout) = settings.handsfree_silence_timeout_sec {
+        current.handsfree_silence_timeout_sec = timeout.clamp(5, 300);
+    }
+    if let Some(voice_actions) = settings.voice_actions_enabled {
+        current.voice_actions_enabled = voice_actions;
+    }
+    if let Some(polish_provider) = &settings.polish_provider {
+        if matches!(polish_provider.as_str(), "off" | "groq" | "local_slm") {
+            current.polish_provider = polish_provider.clone();
+        }
+    }
+    if let Some(polish_mode) = &settings.polish_mode {
+        if matches!(polish_mode.as_str(), "clean" | "bullets") {
+            current.polish_mode = polish_mode.clone();
+        }
+    }
+    if let Some(groq_key) = settings.groq_api_key {
+        current.groq_api_key = if groq_key.trim().is_empty() {
+            None
+        } else {
+            Some(groq_key.trim().to_string())
+        };
+    }
+    if let Some(groq_model) = settings.groq_model {
+        if !groq_model.trim().is_empty() {
+            current.groq_model = Some(groq_model.trim().to_string());
+        }
+    }
     let gpu_mode_now = current.gpu.clone();
     let settings = current.clone();
     drop(current);
 
     if hotkey_changed {
-        crate::hotkey::register(&app, &state, &settings.hotkey)?;
+        if let Err(e) = crate::hotkey::register(&app, &state, &settings.hotkey) {
+            // Roll back the in-memory hotkey: registration failed, so the old
+            // shortcut is still live and the DB still holds the old value.
+            // Leaving the new key in memory made the UI show it while the
+            // next launch silently reverted to the old one.
+            if let Some(old) = &old_hotkey {
+                if let Ok(mut s) = state.settings.lock() {
+                    s.hotkey = old.clone();
+                }
+            }
+            return Err(e);
+        }
+    }
+
+    if handsfree_changed {
+        if settings.handsfree_mode {
+            let _ = crate::dictation::start_handsfree(&app, &state);
+        } else {
+            crate::dictation::stop_handsfree(&app, &state);
+        }
     }
 
     // Drop cached engines so a gpu-mode change takes effect on next use.
@@ -400,6 +470,45 @@ pub fn set_settings(
         log::warn!("autostart update failed: {e}");
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn toggle_handsfree(
+    enabled: bool,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<(), String> {
+    {
+        let mut settings = state.settings.lock().map_err(|e| e.to_string())?;
+        settings.handsfree_mode = enabled;
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::save_settings(&conn, &settings).map_err(|e| e.to_string())?;
+    }
+    if enabled {
+        crate::dictation::start_handsfree(&app, &state)?;
+    } else {
+        crate::dictation::stop_handsfree(&app, &state);
+    }
+    let _ = app.emit("settings-changed", serde_json::json!({}));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn test_groq_api_key(api_key: String, model: Option<String>) -> Result<String, String> {
+    // Network request: run on a blocking thread so the main thread (and the
+    // whole UI) is not frozen for the duration of the API round-trip.
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = opendictate_core::text::PolishConfig {
+            provider: opendictate_core::text::PolishProvider::Groq,
+            mode: opendictate_core::text::PolishMode::Clean,
+            groq_api_key: Some(api_key),
+            groq_model: model,
+        };
+        opendictate_core::text::polish_text("um hello world this is a test like you know", &config)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("api key test task failed: {e}"))?
 }
 
 #[tauri::command]
@@ -650,36 +759,45 @@ pub fn reset_word_stats(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn export_history(
+pub async fn export_history(
     kind: String,
     app: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    let entries = db::get_history(&conn).map_err(|e| e.to_string())?;
-
+    // Disk IO + serialization: keep off the main thread via spawn_blocking.
+    // The DB guard is confined to this scope (it is not Send) so the future
+    // stays Send across the await below.
+    let entries = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::get_history(&conn).map_err(|e| e.to_string())?
+    };
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?;
-    let exports_dir = data_dir.join("exports");
-    std::fs::create_dir_all(&exports_dir).map_err(|e| e.to_string())?;
 
-    let ext = match kind.as_str() {
-        "json" => "json",
-        "csv" => "csv",
-        other => return Err(format!("unsupported export format '{other}'")),
-    };
-    let path = exports_dir.join(format!("history-{}.{ext}", db::now_timestamp()));
+    tauri::async_runtime::spawn_blocking(move || {
+        let exports_dir = data_dir.join("exports");
+        std::fs::create_dir_all(&exports_dir).map_err(|e| e.to_string())?;
 
-    let contents = match ext {
-        "json" => serde_json::to_string_pretty(&entries)
-            .map_err(|e| e.to_string())?,
-        _ => csv_contents(&entries),
-    };
+        let ext = match kind.as_str() {
+            "json" => "json",
+            "csv" => "csv",
+            other => return Err(format!("unsupported export format '{other}'")),
+        };
+        let path = exports_dir.join(format!("history-{}.{ext}", db::now_timestamp()));
 
-    std::fs::write(&path, contents).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().into_owned())
+        let contents = match ext {
+            "json" => serde_json::to_string_pretty(&entries)
+                .map_err(|e| e.to_string())?,
+            _ => csv_contents(&entries),
+        };
+
+        std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| format!("export task failed: {e}"))?
 }
 
 fn csv_contents(entries: &[crate::state::HistoryEntry]) -> String {
@@ -731,25 +849,18 @@ mod tests {
     }
 }
 
+/// Local calendar date `days` from today (`days` negative → past). Uses the
+/// OS timezone so "today" matches the day bucketing in `daily_stats`
+/// (`date(created_at, 'unixepoch', 'localtime')`) and the frontend heatmap
+/// grid, which both build keys in local time. The previous epoch-days/UTC
+/// civil-date math disagreed with local dates for anyone not in UTC.
 fn chrono_day_offset(days: i64) -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let z = secs.div_euclid(86_400) + days;
-    let (y, m, d) = civil_from_days(z);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
+    use chrono::Datelike;
+    let local_date = chrono::Local::now().date_naive() + chrono::Duration::days(days);
+    format!(
+        "{:04}-{:02}-{:02}",
+        local_date.year(),
+        local_date.month(),
+        local_date.day()
+    )
 }

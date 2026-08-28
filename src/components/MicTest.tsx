@@ -34,6 +34,12 @@ export function MicTest() {
       useStore.getState().setMic(name);
       toast.success(`Microphone: ${micLabel(name, mics)}`);
       if (testing) {
+        // Restarting the test with a new device: reset the peak meter and
+        // verdict so the result reflects the NEW mic, not the previous one.
+        peakRef.current = 0;
+        setPeak(0);
+        setVerdict(null);
+        setNoAudioHint(false);
         await api.cancelRecording().catch(() => {});
         await api.startRecording("test");
       }
@@ -64,9 +70,13 @@ export function MicTest() {
     } catch (e) {
       setError(String(e));
     } finally {
+      const quiet = peakRef.current <= 0.05;
       setTesting(false);
-      setVerdict(peakRef.current > 0.05 ? "working" : "quiet");
+      setVerdict(quiet ? "quiet" : "working");
       setPeak(peakRef.current);
+      // No audio at all: surface the platform-specific hint (macOS mic
+      // permission is the most common cause and was previously unreachable).
+      setNoAudioHint(quiet);
     }
   };
 

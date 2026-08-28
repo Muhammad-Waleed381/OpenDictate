@@ -54,12 +54,19 @@ function useOpenDictateEvents() {
       ),
       api.onHistoryUpdated(() => store.refreshStats()),
       api.onPartial((payload) => store.setPartial(payload.text)),
+      api.onRecordingChanged((payload) =>
+        useStore.setState({ recording: payload.recording })
+      ),
     ];
     let cancelled = false;
     subs.forEach((sub) => {
-      sub.then((unlisten) => {
-        if (cancelled) unlisten();
-      });
+      sub
+        .then((unlisten) => {
+          if (cancelled) unlisten();
+        })
+        .catch(() => {
+          // Event API unavailable (e.g. window teardown): nothing to clean up.
+        });
     });
     return () => {
       cancelled = true;

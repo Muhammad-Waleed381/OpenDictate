@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { ModelCard } from "@/components/ModelCard";
 import { useTheme } from "@/lib/theme";
 import { toast } from "@/components/ui/toast";
@@ -205,7 +207,14 @@ export function SettingsTab() {
   };
 
   const persistToggle = async (
-    key: "continuous" | "hold_to_talk" | "autostart" | "spoken_punctuation" | "audio_feedback",
+    key:
+      | "continuous"
+      | "hold_to_talk"
+      | "autostart"
+      | "spoken_punctuation"
+      | "audio_feedback"
+      | "handsfree_mode"
+      | "voice_actions_enabled",
     enabled: boolean,
   ) => {
     const current = useStore.getState().settings;
@@ -230,6 +239,145 @@ export function SettingsTab() {
     persistToggle("spoken_punctuation", enabled);
   const handleAudioFeedbackChange = (enabled: boolean) =>
     persistToggle("audio_feedback", enabled);
+  const handleHandsfreeChange = (enabled: boolean) => persistToggle("handsfree_mode", enabled);
+  const handleVoiceActionsChange = (enabled: boolean) =>
+    persistToggle("voice_actions_enabled", enabled);
+
+  const modelProgress = useStore((s) => s.modelProgress);
+  const [downloadingKws, setDownloadingKws] = useState(false);
+  const [wakeWordsInput, setWakeWordsInput] = useState(settings?.wake_words ?? "hey dictate, computer");
+  const [groqKeyInput, setGroqKeyInput] = useState(settings?.groq_api_key ?? "");
+  const [testingGroq, setTestingGroq] = useState(false);
+  const [testGroqResult, setTestGroqResult] = useState<string | null>(null);
+  const [showVoiceActionsHelp, setShowVoiceActionsHelp] = useState(false);
+
+  const kwsProgress = modelProgress.find((p) => p.file.includes("kws"));
+
+  const handleDownloadKws = async () => {
+    setDownloadingKws(true);
+    try {
+      toast.info("Downloading Keyword Spotting model (15MB)...");
+      await api.ensureModel("kws-zipformer-gigaspeech-3.3m-2024-01-01");
+      await useStore.getState().refreshCatalog();
+      toast.success("Keyword spotting model downloaded and ready!");
+    } catch (e) {
+      toast.error(`KWS model download failed: ${String(e)}`);
+    } finally {
+      setDownloadingKws(false);
+    }
+  };
+
+  useEffect(() => {
+    if (settings?.wake_words !== undefined) {
+      setWakeWordsInput(settings.wake_words);
+    }
+  }, [settings?.wake_words]);
+
+  useEffect(() => {
+    if (settings?.groq_api_key !== undefined) {
+      setGroqKeyInput(settings.groq_api_key ?? "");
+    }
+  }, [settings?.groq_api_key]);
+
+  const handleSaveWakeWords = async () => {
+    try {
+      await api.setSettings({ wake_words: wakeWordsInput });
+      toast.success("Wake words saved");
+    } catch (e) {
+      toast.error(`Failed to save wake words: ${String(e)}`);
+    }
+  };
+
+  const handleTimeoutChange = async (sec: number) => {
+    const current = useStore.getState().settings;
+    if (!current) return;
+    useStore.getState().setSettings({ ...current, handsfree_silence_timeout_sec: sec });
+    try {
+      await api.setSettings({ handsfree_silence_timeout_sec: sec });
+    } catch (e) {
+      toast.error(`Could not save timeout: ${String(e)}`);
+    }
+  };
+
+  const handlePolishProviderChange = async (provider: string | null) => {
+    if (!provider) return;
+    const current = useStore.getState().settings;
+    if (!current) return;
+    useStore.getState().setSettings({
+      ...current,
+      polish_provider: provider as "off" | "groq" | "local_slm",
+    });
+    try {
+      await api.setSettings({
+        polish_provider: provider as "off" | "groq" | "local_slm",
+      });
+      toast.success(`Voice Polish set to ${provider}`);
+    } catch (e) {
+      toast.error(`Failed to update Polish provider: ${String(e)}`);
+    }
+  };
+
+  const handlePolishModeChange = async (mode: string | null) => {
+    if (!mode) return;
+    const current = useStore.getState().settings;
+    if (!current) return;
+    useStore.getState().setSettings({
+      ...current,
+      polish_mode: mode as "clean" | "bullets",
+    });
+    try {
+      await api.setSettings({
+        polish_mode: mode as "clean" | "bullets",
+      });
+    } catch (e) {
+      toast.error(`Failed to update Polish mode: ${String(e)}`);
+    }
+  };
+
+  const handleGroqModelChange = async (model: string | null) => {
+    if (!model) return;
+    const current = useStore.getState().settings;
+    if (!current) return;
+    useStore.getState().setSettings({
+      ...current,
+      groq_model: model,
+    });
+    try {
+      await api.setSettings({ groq_model: model });
+    } catch (e) {
+      toast.error(`Failed to update Groq model: ${String(e)}`);
+    }
+  };
+
+  const handleSaveGroqKey = async () => {
+    try {
+      await api.setSettings({ groq_api_key: groqKeyInput.trim() });
+      toast.success("Groq API key saved");
+    } catch (e) {
+      toast.error(`Failed to save Groq API key: ${String(e)}`);
+    }
+  };
+
+  const handleTestGroq = async () => {
+    if (!groqKeyInput.trim()) {
+      toast.error("Please enter a Groq API key first");
+      return;
+    }
+    setTestingGroq(true);
+    setTestGroqResult(null);
+    try {
+      const res = await api.testGroqApiKey(
+        groqKeyInput.trim(),
+        settings?.groq_model ?? "llama-3.1-8b-instant",
+      );
+      setTestGroqResult(res);
+      toast.success("Groq API key test succeeded! ⚡");
+    } catch (e) {
+      toast.error(`Groq API test failed: ${String(e)}`);
+    } finally {
+      setTestingGroq(false);
+    }
+  };
 
   const handlePlaySound = async (event: string) => {
     try {
@@ -288,6 +436,8 @@ export function SettingsTab() {
     }, 150);
   };
 
+  const models = useStore((s) => s.models);
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-2">
@@ -308,6 +458,334 @@ export function SettingsTab() {
           </SelectContent>
         </Select>
       </div>
+
+      {/* --- Intelligent Handsfree Mode Card --- */}
+      <div className="flex flex-col gap-3 rounded-none border-2 border-border bg-card p-4 shadow-[3px_3px_0_0_var(--od-shadow)]">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold uppercase tracking-wider text-foreground">
+                🎙️ Intelligent Handsfree Mode
+              </span>
+              <Badge variant={settings?.handsfree_mode ? "default" : "outline"}>
+                {settings?.handsfree_mode ? "Active" : "Disabled"}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Always-on, ultra low-power keyword spotting. Say your wake phrase to start dictating without touching the keyboard.
+            </p>
+          </div>
+          <Switch
+            id="handsfree-mode"
+            checked={settings?.handsfree_mode ?? false}
+            onCheckedChange={handleHandsfreeChange}
+          />
+        </div>
+
+        {settings?.handsfree_mode && (
+          <div className="flex flex-col gap-4 border-t-2 border-border/40 pt-3">
+            {!models?.kws_ready && (
+              <div className="flex flex-col gap-2 bg-amber-500/10 p-3 border border-amber-500/30 text-xs text-amber-600 dark:text-amber-400">
+                <div className="flex items-center justify-between gap-2">
+                  <span>⚠️ Keyword Spotting (KWS) model required for handsfree (15MB).</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={downloadingKws || !!kwsProgress}
+                    onClick={handleDownloadKws}
+                  >
+                    {downloadingKws || !!kwsProgress ? "Downloading..." : "Download Model (15MB)"}
+                  </Button>
+                </div>
+                {kwsProgress && kwsProgress.total > 0 && (
+                  <div className="flex flex-col gap-1 pt-1">
+                    <div className="flex items-center justify-between text-[11px] font-mono">
+                      <span>Downloading Zipformer KWS model...</span>
+                      <span>{Math.round((kwsProgress.received / kwsProgress.total) * 100)}%</span>
+                    </div>
+                    <div className="h-1.5 w-full bg-amber-500/20 overflow-hidden">
+                      <div
+                        className="h-full bg-amber-500 transition-all duration-200"
+                        style={{ width: `${Math.round((kwsProgress.received / kwsProgress.total) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="wake-words" className="text-xs font-bold uppercase">
+                  Wake Phrases (Comma separated)
+                </Label>
+                <span className="text-[11px] text-muted-foreground">
+                  Default: <code className="bg-muted px-1">hey dictate, computer</code>
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="wake-words"
+                  value={wakeWordsInput}
+                  onChange={(e) => setWakeWordsInput(e.target.value)}
+                  placeholder="e.g. hey dictate, computer, transcribe"
+                  className="text-xs"
+                />
+                <Button size="sm" onClick={handleSaveWakeWords}>
+                  Save
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex flex-col">
+                <Label htmlFor="timeout-slider" className="text-xs font-bold uppercase">
+                  Auto-Sleep Inactivity Timeout
+                </Label>
+                <span className="text-[11px] text-muted-foreground">
+                  Puts handsfree back to sleep after silence
+                </span>
+              </div>
+              <div className="flex items-center gap-3 w-48">
+                <Slider
+                  id="timeout-slider"
+                  min={5}
+                  max={120}
+                  step={5}
+                  value={settings?.handsfree_silence_timeout_sec ?? 30}
+                  onChange={handleTimeoutChange}
+                  className="flex-1"
+                />
+                <span className="w-10 text-right text-xs font-bold tabular-nums">
+                  {settings?.handsfree_silence_timeout_sec ?? 30}s
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* --- Voice Actions & In-Place Editing Card --- */}
+      <div className="flex flex-col gap-3 rounded-none border-2 border-border bg-card p-4 shadow-[3px_3px_0_0_var(--od-shadow)]">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold uppercase tracking-wider text-foreground">
+                ⚡ Voice Actions & In-Place Editing
+              </span>
+              <Badge variant={settings?.voice_actions_enabled ? "default" : "outline"}>
+                {settings?.voice_actions_enabled ? "Enabled" : "Off"}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Speak natural commands like <code className="bg-muted px-1">"scratch that"</code>, <code className="bg-muted px-1">"undo"</code>, <code className="bg-muted px-1">"new paragraph"</code>, or <code className="bg-muted px-1">"all caps &lt;phrase&gt;"</code>.
+            </p>
+          </div>
+          <Switch
+            id="voice-actions"
+            checked={settings?.voice_actions_enabled ?? true}
+            onCheckedChange={handleVoiceActionsChange}
+          />
+        </div>
+
+        <div className="flex items-center justify-between pt-1">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setShowVoiceActionsHelp(!showVoiceActionsHelp)}
+            className="text-xs"
+          >
+            {showVoiceActionsHelp ? "Hide Voice Commands" : "📖 View Voice Commands Cheat Sheet"}
+          </Button>
+        </div>
+
+        {showVoiceActionsHelp && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 border-t-2 border-border/40 pt-3 text-xs">
+            <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
+              <span className="font-bold uppercase text-foreground">🤖 AI Agent Prompt & Send</span>
+              <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
+                <li><code className="text-foreground font-semibold">"prompt &lt;text&gt;"</code>: Type & auto-send to Claude/Cursor/ChatGPT/CLI</li>
+                <li><code className="text-foreground font-semibold">"send"</code> / <code className="text-foreground font-semibold">"submit"</code>: Press Enter to submit prompt</li>
+                <li><code className="text-foreground font-semibold">"stop process"</code> / <code className="text-foreground font-semibold">"cancel command"</code>: Ctrl+C interrupt</li>
+              </ul>
+            </div>
+
+            <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
+              <span className="font-bold uppercase text-foreground">🔀 App Switching</span>
+              <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
+                <li><code className="text-foreground font-semibold">"switch to cursor"</code> / <code className="text-foreground font-semibold">"switch to code"</code></li>
+                <li><code className="text-foreground font-semibold">"switch to terminal"</code> / <code className="text-foreground font-semibold">"switch to chrome"</code></li>
+                <li><code className="text-foreground font-semibold">"switch to slack"</code> / <code className="text-foreground font-semibold">"switch to files"</code></li>
+              </ul>
+            </div>
+
+            <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
+              <span className="font-bold uppercase text-foreground">🌐 Voice Search & Tabs</span>
+              <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
+                <li><code className="text-foreground font-semibold">"search for &lt;query&gt;"</code> / <code className="text-foreground font-semibold">"google &lt;query&gt;"</code></li>
+                <li><code className="text-foreground font-semibold">"next tab"</code> / <code className="text-foreground font-semibold">"prev tab"</code> / <code className="text-foreground font-semibold">"close tab"</code></li>
+                <li><code className="text-foreground font-semibold">"scroll down"</code> / <code className="text-foreground font-semibold">"scroll up"</code> (Page scroll)</li>
+              </ul>
+            </div>
+
+            <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
+              <span className="font-bold uppercase text-foreground">⏪ Undo & Corrections</span>
+              <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
+                <li><code className="text-foreground font-semibold">"scratch that"</code> / <code className="text-foreground font-semibold">"undo"</code>: Reverts last text</li>
+                <li><code className="text-foreground font-semibold">"delete word"</code>: Erases word before cursor</li>
+                <li><code className="text-foreground font-semibold">"delete line"</code>: Clears current line</li>
+                <li><code className="text-foreground font-semibold">"clear all"</code>: Empties document/input</li>
+              </ul>
+            </div>
+
+            <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
+              <span className="font-bold uppercase text-foreground">🔠 Smart Case & Formatting</span>
+              <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
+                <li><code className="text-foreground font-semibold">"camel case &lt;phrase&gt;"</code> → camelCase</li>
+                <li><code className="text-foreground font-semibold">"snake case &lt;phrase&gt;"</code> → snake_case</li>
+                <li><code className="text-foreground font-semibold">"all caps &lt;phrase&gt;"</code> → ALL CAPS</li>
+                <li><code className="text-foreground font-semibold">"new line"</code> / <code className="text-foreground font-semibold">"new paragraph"</code> / <code className="text-foreground font-semibold">"bullet point"</code></li>
+              </ul>
+            </div>
+
+            <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
+              <span className="font-bold uppercase text-foreground">💤 Handsfree & Snippets</span>
+              <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
+                <li><code className="text-foreground font-semibold">"go to sleep"</code> / <code className="text-foreground font-semibold">"stop listening"</code></li>
+                <li><code className="text-foreground font-semibold">"insert snippet &lt;name&gt;"</code>: Expands saved snippet</li>
+                <li><code className="text-foreground font-semibold">"git status"</code> / <code className="text-foreground font-semibold">"clear terminal"</code></li>
+              </ul>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* --- AI Voice Polish (Groq API & Local SLM) Card --- */}
+      <div className="flex flex-col gap-3 rounded-none border-2 border-border bg-card p-4 shadow-[3px_3px_0_0_var(--od-shadow)]">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold uppercase tracking-wider text-foreground">
+                ✨ AI Voice Polish
+              </span>
+              <Badge variant={settings?.polish_provider !== "off" ? "default" : "outline"}>
+                {settings?.polish_provider === "groq"
+                  ? "Groq Cloud LPU ⚡"
+                  : settings?.polish_provider === "local_slm"
+                  ? "Offline SLM"
+                  : "Off"}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Automatically eliminates stutter, verbal fillers ("um", "like", "you know"), corrects grammar, and formats text in real-time.
+            </p>
+          </div>
+
+          <Select
+            value={settings?.polish_provider ?? "off"}
+            onValueChange={handlePolishProviderChange}
+          >
+            <SelectTrigger className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="off">Off (Raw Voice)</SelectItem>
+              <SelectItem value="groq">Groq LPU (Ultra-Fast ⚡)</SelectItem>
+              <SelectItem value="local_slm">Local SLM (100% Offline)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {settings?.polish_provider !== "off" && (
+          <div className="flex flex-col gap-3 border-t-2 border-border/40 pt-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="polish-mode" className="text-xs font-bold uppercase">
+                Polish Output Mode
+              </Label>
+              <Select
+                value={settings?.polish_mode ?? "clean"}
+                onValueChange={handlePolishModeChange}
+              >
+                <SelectTrigger id="polish-mode" className="w-44">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="clean">Clean & Grammar Polish</SelectItem>
+                  <SelectItem value="bullets">Executive Bullets</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {settings?.polish_provider === "groq" && (
+              <div className="flex flex-col gap-2.5 rounded border border-border/60 bg-muted/20 p-3">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="groq-key" className="text-xs font-bold uppercase">
+                    Groq Cloud API Key
+                  </Label>
+                  <a
+                    href="https://console.groq.com/keys"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[11px] text-primary underline"
+                  >
+                    Get free API key ↗
+                  </a>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="groq-key"
+                    type="password"
+                    value={groqKeyInput}
+                    onChange={(e) => setGroqKeyInput(e.target.value)}
+                    placeholder="gsk_..."
+                    className="text-xs font-mono"
+                  />
+                  <Button size="sm" onClick={handleSaveGroqKey}>
+                    Save Key
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleTestGroq}
+                    disabled={testingGroq}
+                  >
+                    {testingGroq ? "Testing..." : "⚡ Test"}
+                  </Button>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <Label htmlFor="groq-model" className="text-xs font-semibold">
+                    Groq LLM Model
+                  </Label>
+                  <Select
+                    value={settings?.groq_model ?? "llama-3.1-8b-instant"}
+                    onValueChange={handleGroqModelChange}
+                  >
+                    <SelectTrigger id="groq-model" className="w-56">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="llama-3.1-8b-instant">
+                        Llama 3.1 8B Instant (Fastest)
+                      </SelectItem>
+                      <SelectItem value="llama-3.3-70b-versatile">
+                        Llama 3.3 70B Versatile (Quality)
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {testGroqResult && (
+                  <div className="rounded bg-emerald-500/10 border border-emerald-500/30 p-2 text-xs text-emerald-600 dark:text-emerald-400">
+                    <strong>Test Output:</strong> {testGroqResult}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-2">
           <Label htmlFor="mic">Microphone</Label>

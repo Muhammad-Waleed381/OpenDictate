@@ -32,9 +32,46 @@ struct SharedCaptureHandle(Mutex<CaptureHandle>);
 unsafe impl Send for SharedCaptureHandle {}
 unsafe impl Sync for SharedCaptureHandle {}
 
+/// Shared capture buffer with a monotonic base offset.
+///
+/// `base` counts the samples that have been dropped from the front of
+/// `samples` — either drained to enforce `MAX_RECORDING_SAMPLES` or discarded
+/// by `clear_buffer()`. Consumers track an *absolute* watermark (total samples
+/// ever appended) which maps to a buffer index as `watermark - base`, so
+/// watermarks stay valid across front-drains and buffer clears.
+#[derive(Default)]
+pub(crate) struct SharedBuffer {
+    pub(crate) samples: Vec<f32>,
+    pub(crate) base: u64,
+}
+
+impl SharedBuffer {
+    /// Appends samples, draining from the front when the recording cap would
+    /// be exceeded. Advances `base` by the number of drained samples.
+    pub(crate) fn push(&mut self, new_samples: &[f32]) {
+        let to_add = new_samples.len();
+        if self.samples.len() + to_add > MAX_RECORDING_SAMPLES {
+            let excess = (self.samples.len() + to_add).saturating_sub(MAX_RECORDING_SAMPLES);
+            let drain_len = excess.min(self.samples.len());
+            self.samples.drain(0..drain_len);
+            self.base += drain_len as u64;
+        }
+        self.samples.extend_from_slice(new_samples);
+    }
+
+    /// Drops all samples (advancing `base` so existing watermarks stay valid)
+    /// and resets the base to zero — valid because the buffer is empty
+    /// afterwards, so any watermark resolves to index 0.
+    pub(crate) fn clear(&mut self) {
+        self.base += self.samples.len() as u64;
+        self.samples.clear();
+        self.base = 0;
+    }
+}
+
 pub struct AudioRecorder {
     state: Arc<AtomicU8>,
-    buffer: Arc<Mutex<Vec<f32>>>,
+    buffer: Arc<Mutex<SharedBuffer>>,
     stop_signal: Arc<AtomicBool>,
     stream: Arc<SharedCaptureHandle>,
     started_at: Arc<Mutex<Option<Instant>>>,
@@ -132,7 +169,7 @@ impl AudioRecorder {
     pub fn new() -> Self {
         Self {
             state: Arc::new(AtomicU8::new(STATE_IDLE)),
-            buffer: Arc::new(Mutex::new(Vec::new())),
+            buffer: Arc::new(Mutex::new(SharedBuffer::default())),
             stop_signal: Arc::new(AtomicBool::new(false)),
             stream: Arc::new(SharedCaptureHandle(Mutex::new(CaptureHandle::None))),
             started_at: Arc::new(Mutex::new(None)),
@@ -175,7 +212,10 @@ impl AudioRecorder {
             ));
         }
         self.stop_signal.store(false, Ordering::SeqCst);
-        self.buffer.lock().map(|mut b| b.clear()).unwrap();
+        self.buffer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
 
         let handle = crate::audio::pulse::spawn_capture(
             source,
@@ -183,7 +223,7 @@ impl AudioRecorder {
             Arc::clone(&self.buffer),
             Arc::clone(&self.started_at),
         )?;
-        self.stream.0.lock().map(|mut s| *s = CaptureHandle::Pulse(handle)).unwrap();
+        *self.stream.0.lock().unwrap_or_else(|e| e.into_inner()) = CaptureHandle::Pulse(handle);
         self.state.store(STATE_RECORDING, Ordering::SeqCst);
         log::info!("pulse recording started: {source}");
         Ok(())
@@ -226,22 +266,32 @@ impl AudioRecorder {
 
     pub fn current_rms(&self) -> f32 {
         let buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
-        if buffer.is_empty() {
+        let samples = &buffer.samples;
+        if samples.is_empty() {
             return 0.0;
         }
-        let start = buffer.len().saturating_sub(SAMPLE_RATE as usize / 10);
-        let window = &buffer[start..];
+        let start = samples.len().saturating_sub(SAMPLE_RATE as usize / 10);
+        let window = &samples[start..];
         let sum_sq: f32 = window.iter().map(|&s| s * s).sum();
         (sum_sq / window.len() as f32).sqrt()
     }
 
     /// Returns every sample appended since the given watermark and advances
-    /// the watermark to the end of the buffer. Used for streaming ASR.
-    pub fn take_since(&self, watermark: &mut usize) -> Vec<f32> {
+    /// the watermark to the absolute end of the buffer. Used for streaming ASR,
+    /// live captions, and KWS.
+    ///
+    /// The watermark is an *absolute* sample count (total samples ever
+    /// appended), not a buffer index: front-drains and `clear_buffer` shift
+    /// the buffer contents, so only the monotonic `SharedBuffer::base` offset
+    /// keeps watermarks meaningful. Samples dropped from the front before an
+    /// outdated watermark are gone for good; the consumer simply receives
+    /// everything still available.
+    pub fn take_since(&self, watermark: &mut u64) -> Vec<f32> {
         let buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
-        let start = (*watermark).min(buffer.len());
-        let out = buffer[start..].to_vec();
-        *watermark = buffer.len();
+        let end = buffer.base + buffer.samples.len() as u64;
+        let start = (*watermark).min(end).saturating_sub(buffer.base) as usize;
+        let out = buffer.samples[start..].to_vec();
+        *watermark = end;
         out
     }
 
@@ -253,7 +303,10 @@ impl AudioRecorder {
         }
 
         self.stop_signal.store(false, Ordering::SeqCst);
-        self.buffer.lock().map(|mut b| b.clear()).unwrap();
+        self.buffer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
 
         let default_config = device
             .default_input_config()
@@ -280,7 +333,6 @@ impl AudioRecorder {
         let buffer = Arc::clone(&self.buffer);
         let stop_signal = Arc::clone(&self.stop_signal);
         let err_stop_signal = Arc::clone(&self.stop_signal);
-        let started_at = Arc::clone(&self.started_at);
         let resample_pos = Arc::new(Mutex::new(0.0_f64));
         let resample_ratio = SAMPLE_RATE as f64 / native_rate as f64;
 
@@ -290,14 +342,6 @@ impl AudioRecorder {
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     if stop_signal.load(Ordering::Relaxed) {
                         return;
-                    }
-                    if let Ok(guard) = started_at.lock() {
-                        if let Some(start) = *guard {
-                            if start.elapsed().as_secs() >= MAX_RECORDING_SECS {
-                                stop_signal.store(true, Ordering::SeqCst);
-                                return;
-                            }
-                        }
                     }
 
                     let ch = native_channels as usize;
@@ -327,12 +371,7 @@ impl AudioRecorder {
                     };
 
                     if let Ok(mut buf) = buffer.try_lock() {
-                        let remaining = MAX_RECORDING_SAMPLES.saturating_sub(buf.len());
-                        let to_copy = resampled.len().min(remaining);
-                        buf.extend_from_slice(&resampled[..to_copy]);
-                        if remaining == 0 {
-                            stop_signal.store(true, Ordering::SeqCst);
-                        }
+                        buf.push(&resampled);
                     }
                 },
                 move |err| {
@@ -347,11 +386,8 @@ impl AudioRecorder {
             .play()
             .map_err(|e| CoreError::Audio(format!("failed to start stream: {e}")))?;
 
-        self.stream.0.lock().map(|mut s| *s = CaptureHandle::Alsa(stream)).unwrap();
-        self.started_at
-            .lock()
-            .map(|mut t| *t = Some(Instant::now()))
-            .unwrap();
+        *self.stream.0.lock().unwrap_or_else(|e| e.into_inner()) = CaptureHandle::Alsa(stream);
+        *self.started_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
         self.state.store(STATE_RECORDING, Ordering::SeqCst);
         log::info!("recording started");
         Ok(())
@@ -377,12 +413,11 @@ impl AudioRecorder {
         }
         self.stop_signal.store(true, Ordering::SeqCst);
         self.release_stream();
-        let audio = self
-            .buffer
-            .lock()
-            .map(|mut b| std::mem::take(&mut *b))
-            .unwrap_or_default();
-        self.started_at.lock().map(|mut t| *t = None).unwrap();
+        let audio = {
+            let mut buf = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::take(&mut buf.samples)
+        };
+        *self.started_at.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.state.store(STATE_IDLE, Ordering::SeqCst);
         log::info!("recording stopped: {} samples", audio.len());
         Ok(audio)
@@ -394,14 +429,32 @@ impl AudioRecorder {
         }
         self.stop_signal.store(true, Ordering::SeqCst);
         self.release_stream();
-        self.buffer.lock().map(|mut b| *b = Vec::new()).unwrap();
-        self.started_at.lock().map(|mut t| *t = None).unwrap();
+        self.buffer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        *self.started_at.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.state.store(STATE_IDLE, Ordering::SeqCst);
         Ok(())
     }
 
     pub fn is_recording(&self) -> bool {
         self.state.load(Ordering::SeqCst) == STATE_RECORDING
+    }
+
+    /// Clears the sample buffer without stopping the hardware stream.
+    /// Used when handsfree mode holds the mic open but a new dictation session
+    /// needs a clean starting point (discarding ambient audio captured so far).
+    ///
+    /// Existing watermarks stay valid: `SharedBuffer::clear` treats the dropped
+    /// samples as front-drained, so consumers resume from the next appended
+    /// sample instead of stalling until the buffer regrows past the old
+    /// watermark.
+    pub fn clear_buffer(&self) {
+        self.buffer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
@@ -421,6 +474,82 @@ mod tests {
     fn stop_without_start_errors() {
         let recorder = AudioRecorder::new();
         assert!(recorder.stop().is_err());
+    }
+
+    #[test]
+    fn take_since_tracks_appends() {
+        let recorder = AudioRecorder::new();
+        {
+            let mut buf = recorder.buffer.lock().unwrap();
+            buf.push(&[1.0, 2.0, 3.0]);
+        }
+        let mut watermark: u64 = 0;
+        assert_eq!(recorder.take_since(&mut watermark), vec![1.0, 2.0, 3.0]);
+        assert_eq!(watermark, 3);
+        // Nothing new → empty.
+        assert!(recorder.take_since(&mut watermark).is_empty());
+        {
+            let mut buf = recorder.buffer.lock().unwrap();
+            buf.push(&[4.0, 5.0]);
+        }
+        assert_eq!(recorder.take_since(&mut watermark), vec![4.0, 5.0]);
+    }
+
+    #[test]
+    fn take_since_survives_front_drain_at_cap() {
+        let recorder = AudioRecorder::new();
+        // Fill to the cap so the next push drains from the front.
+        let filled: Vec<f32> = (0..MAX_RECORDING_SAMPLES).map(|i| i as f32).collect();
+        {
+            let mut buf = recorder.buffer.lock().unwrap();
+            buf.push(&filled);
+        }
+        let mut watermark: u64 = MAX_RECORDING_SAMPLES as u64;
+        // Buffer is at the cap; push a batch → drains exactly that many from
+        // the front. The old (index-based) implementation returned empty
+        // forever after this point.
+        let batch: Vec<f32> = vec![9.0; 100];
+        {
+            let mut buf = recorder.buffer.lock().unwrap();
+            buf.push(&batch);
+        }
+        let drained = recorder.take_since(&mut watermark);
+        assert_eq!(drained.len(), 100);
+        assert_eq!(drained[0], 9.0);
+        // Watermark is absolute: cap drained + cap buffered + new batch.
+        assert_eq!(watermark, MAX_RECORDING_SAMPLES as u64 + 100);
+    }
+
+    #[test]
+    fn take_since_survives_clear_buffer() {
+        let recorder = AudioRecorder::new();
+        {
+            let mut buf = recorder.buffer.lock().unwrap();
+            buf.push(&[1.0, 2.0, 3.0, 4.0]);
+        }
+        let mut watermark: u64 = 2;
+        // clear_buffer with a stale watermark used to stall consumers until
+        // the buffer regrew past the old watermark, then skip fresh audio.
+        recorder.clear_buffer();
+        assert!(recorder.take_since(&mut watermark).is_empty());
+        {
+            let mut buf = recorder.buffer.lock().unwrap();
+            buf.push(&[7.0, 8.0]);
+        }
+        assert_eq!(recorder.take_since(&mut watermark), vec![7.0, 8.0]);
+        assert_eq!(watermark, 2);
+    }
+
+    #[test]
+    fn take_since_with_future_watermark_returns_empty() {
+        let recorder = AudioRecorder::new();
+        {
+            let mut buf = recorder.buffer.lock().unwrap();
+            buf.push(&[1.0]);
+        }
+        let mut watermark: u64 = 1_000_000;
+        assert!(recorder.take_since(&mut watermark).is_empty());
+        assert_eq!(watermark, 1);
     }
 
     #[test]

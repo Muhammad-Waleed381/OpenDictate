@@ -68,6 +68,8 @@ pub fn run() {
             commands::word_stats,
             commands::reset_word_stats,
             commands::export_history,
+            commands::toggle_handsfree,
+            commands::test_groq_api_key,
         ])
         // Must be the first plugin: it claims the instance lock before
         // anything else runs. Unix keeps its socket-based guard too (it
@@ -110,6 +112,10 @@ pub fn run() {
                 caption_engine: Arc::new(Mutex::new(None)),
                 caption_stream: Arc::new(Mutex::new(None)),
                 caption_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                kws_engine: Arc::new(Mutex::new(None)),
+                handsfree_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                handsfree_awake: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                user_dictation_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 streaming_rtf_x100: Arc::new(std::sync::atomic::AtomicU32::new(0)),
                 gpu_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 vad: Arc::new(Mutex::new(None)),
@@ -140,6 +146,10 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             hotkey::install_socket_toggle(handle.clone(), socket_path);
             dock::init(handle);
+
+            if settings.handsfree_mode {
+                let _ = dictation::start_handsfree(handle, &handle.state::<AppState>());
+            }
 
             // Background maintenance: fetch the small caption engine if it is
             // missing, then measure how fast the selectable streaming STT

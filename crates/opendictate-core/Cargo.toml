@@ -22,10 +22,9 @@ tar = "0.4"
 thiserror = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
-ureq = "3"
+serde_json = "1"
+ureq = { version = "3", features = ["json"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libpulse-sys = "1.23.0"
 
-[dev-dependencies]
-serde_json = "1"

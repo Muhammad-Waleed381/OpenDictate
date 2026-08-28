@@ -80,14 +80,51 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
     }
     log::info!("hotkey registered: {key}");
     sync_gnome_keybinding(key);
+    if is_gnome {
+        // The settings-daemon custom keybinding runs a toggle script: the
+        // shell consumes the key and only a toggle action reaches the app.
+        // There is no press/release event stream, so hold-to-talk cannot
+        // work on the GNOME path — surface that instead of failing silently.
+        let hold = state
+            .settings
+            .lock()
+            .map(|s| s.hold_to_talk)
+            .unwrap_or(false);
+        if hold {
+            log::warn!(
+                "GNOME session: hold-to-talk is not supported by the settings-daemon \
+                 keybinding (press/release events are unavailable); the hotkey toggles \
+                 dictation instead"
+            );
+        }
+    }
     Ok(())
+}
+
+/// Serializes all dictation start/stop entry points (hold-to-talk press and
+/// release, hotkey toggle). Without this, a quick press→release could run the
+/// start and stop checks concurrently: the stop thread would read
+/// `user_dictation_active` before the start thread sets it, drop the stop,
+/// and leave dictation wedged on. With the lock, the release path waits for
+/// the press path to finish and then re-checks the state.
+static DICTATION_SERIALIZER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn dictation_guard() -> std::sync::MutexGuard<'static, ()> {
+    DICTATION_SERIALIZER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 pub fn start_dictation(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         let Some(state) = app.try_state::<AppState>() else { return };
-        if !state.recorder.is_recording() {
+        let _serial = dictation_guard();
+        // When handsfree is active it holds the recorder open, so
+        // is_recording() is always true. Only skip start if the user already
+        // has an active dictation session (user_dictation_active = true).
+        let user_session_open = state.user_dictation_active.load(std::sync::atomic::Ordering::SeqCst);
+        if !state.recorder.is_recording() || !user_session_open {
             log::info!("hold-to-talk: starting dictation");
             if let Err(e) = dictation::start(&app, &state, false) {
                 log::error!("hold-to-talk start failed: {e}");
@@ -100,7 +137,14 @@ pub fn stop_dictation(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
         let Some(state) = app.try_state::<AppState>() else { return };
-        if state.recorder.is_recording() {
+        // Wait for any in-flight start/stop to complete, then re-check the
+        // session state — see DICTATION_SERIALIZER.
+        let _serial = dictation_guard();
+        // Only stop when a user session is genuinely open. Handsfree holds
+        // the recorder open on its own — stopping it without a user session
+        // would submit handsfree's ambient audio as a dictation result.
+        let user_session_open = state.user_dictation_active.load(std::sync::atomic::Ordering::SeqCst);
+        if state.recorder.is_recording() && user_session_open {
             log::info!("hold-to-talk: stopping dictation");
             if let Err(e) = dictation::stop(&app, &state) {
                 log::error!("hold-to-talk stop failed: {e}");
@@ -108,6 +152,7 @@ pub fn stop_dictation(app: &AppHandle) {
         }
     });
 }
+
 
 /// Serializes hotkey toggles. The global-shortcut handler runs on the MAIN
 /// thread on macOS (global-hotkey delivers via NSEvent monitor), and
@@ -143,7 +188,13 @@ fn toggle_dictation_sync(app: &AppHandle) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
-    if state.recorder.is_recording() {
+
+    // Share the hold-to-talk serializer so a hotkey toggle cannot interleave
+    // with a hold-to-talk press/release mid-flight.
+    let _serial = dictation_guard();
+    let user_session_open = state.user_dictation_active.load(std::sync::atomic::Ordering::SeqCst);
+
+    if user_session_open {
         log::info!("toggle: stopping dictation");
         if let Err(e) = dictation::stop(app, &state) {
             log::error!("toggle: stop failed: {e}");
@@ -166,6 +217,7 @@ fn toggle_dictation_sync(app: &AppHandle) {
     }
 }
 
+
 // ---------------------------------------------------------------------------
 // GNOME fallback: on Wayland the X11 grab never sees keys while a native
 // Wayland window has focus, so we mirror the hotkey into a settings-daemon
@@ -177,7 +229,16 @@ const KEYBINDING_PATH: &str =
     "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/opendictate/";
 
 pub fn sync_gnome_keybinding(key: &str) {
-    if std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland") {
+    // Install the settings-daemon keybinding on GNOME regardless of session
+    // type. On Wayland the X11 grab cannot see keys while a native Wayland
+    // window has focus; on X11 the grab would double-fire alongside this
+    // binding, which is why `register` skips the grab on GNOME entirely.
+    // Gating on the session type instead of the desktop used to leave
+    // GNOME+X11 with no hotkey path at all.
+    let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.to_lowercase().contains("gnome"))
+        .unwrap_or(false);
+    if !is_gnome {
         return;
     }
     let Some(toggle_script) = toggle_script_path() else {

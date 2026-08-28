@@ -5,6 +5,7 @@ export interface ModelsStatus {
   stt_ready: boolean;
   vad_ready: boolean;
   caption_ready: boolean;
+  kws_ready: boolean;
   gpu_mode: string;
   gpu_active: boolean;
   streaming_rtf_x100: number;
@@ -13,7 +14,7 @@ export interface ModelsStatus {
 export interface ModelInfo {
   id: string;
   name: string;
-  kind: "stt" | "vad" | "caption";
+  kind: "stt" | "vad" | "caption" | "kws";
   engine_key: string | null;
   size_bytes: number;
   disk_bytes: number;
@@ -39,6 +40,14 @@ export interface Settings {
   spoken_punctuation: boolean;
   audio_feedback: boolean;
   audio_feedback_volume: number;
+  handsfree_mode: boolean;
+  wake_words: string;
+  handsfree_silence_timeout_sec: number;
+  voice_actions_enabled: boolean;
+  polish_provider: "off" | "groq" | "local_slm";
+  polish_mode: "clean" | "bullets";
+  groq_api_key?: string | null;
+  groq_model?: string | null;
 }
 
 export type SettingsPatch = Partial<
@@ -58,6 +67,14 @@ export type SettingsPatch = Partial<
     | "spoken_punctuation"
     | "audio_feedback"
     | "audio_feedback_volume"
+    | "handsfree_mode"
+    | "wake_words"
+    | "handsfree_silence_timeout_sec"
+    | "voice_actions_enabled"
+    | "polish_provider"
+    | "polish_mode"
+    | "groq_api_key"
+    | "groq_model"
   >
 >;
 
@@ -103,6 +120,7 @@ export interface WordStats {
 
 export type OverlayStateValue =
   | "listening"
+  | "recording"
   | "transcribing"
   | "inserted"
   | "error"
@@ -274,8 +292,16 @@ export function undoLastInsert(): Promise<void> {
   return invoke<void>("undo_last_insert");
 }
 
-export function warmupModel(id: string, engineKey: string): Promise<void> {
-  return invoke<void>("warmup_model", { id, engineKey });
+export function toggleHandsfree(enabled: boolean): Promise<void> {
+  return invoke<void>("toggle_handsfree", { enabled });
+}
+
+export function testGroqApiKey(apiKey: string, model?: string): Promise<string> {
+  return invoke<string>("test_groq_api_key", { apiKey, model });
+}
+
+export function warmupModel(engineKey: string): Promise<void> {
+  return invoke<void>("warmup_model", { engineKey });
 }
 
 export function getWordStats(): Promise<WordStats> {
@@ -338,4 +364,15 @@ export function onPartial(
   cb: (payload: PartialPayload) => void
 ): Promise<UnlistenFn> {
   return listen<PartialPayload>("partial", (event) => cb(event.payload));
+}
+
+/// Emitted whenever a user dictation session opens or closes on the backend
+/// (hotkey toggle, hold-to-talk, UI button). The frontend store's `recording`
+/// flag must mirror this or the header shows "Idle" while the hotkey records.
+export function onRecordingChanged(
+  cb: (payload: { recording: boolean }) => void
+): Promise<UnlistenFn> {
+  return listen<{ recording: boolean }>("recording-changed", (event) =>
+    cb(event.payload)
+  );
 }

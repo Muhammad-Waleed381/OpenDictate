@@ -115,6 +115,7 @@ fn apply_dock_size(app: &AppHandle) {
 
 /// Fixed width of the caption strip; the pill truncates long text.
 const CAPTION_STRIP_WIDTH: u32 = 210;
+static LAST_CAPTION: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 fn emit_dock_event(app: &AppHandle, event: &str, payload: serde_json::Value) {
     let event = event.to_string();
@@ -135,7 +136,18 @@ fn emit_dock_event(app: &AppHandle, event: &str, payload: serde_json::Value) {
 /// return the dock to its idle state (the window stays visible so the user
 /// always has the on-screen mic control).
 pub fn set_caption(app: &AppHandle, text: Option<&str>) {
-    match text.map(str::trim).filter(|t| !t.is_empty()) {
+    let text = text.map(str::trim).filter(|t| !t.is_empty());
+    
+    // Deduplicate consecutive identical caption calls to avoid flooding WebKit with eval calls
+    if let Ok(mut last) = LAST_CAPTION.lock() {
+        let text_owned = text.map(|s| s.to_string());
+        if *last == text_owned {
+            return;
+        }
+        *last = text_owned;
+    }
+
+    match text {
         Some(text) => {
             CAPTION_WIDTH.store(CAPTION_STRIP_WIDTH, Ordering::Relaxed);
             log::info!("dock: caption set: {text:?}");
@@ -155,7 +167,11 @@ pub fn set_caption(app: &AppHandle, text: Option<&str>) {
             );
         }
     }
-    apply_dock_size(app);
+
+    let app_inner = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        apply_dock_size(&app_inner);
+    });
 }
 
 pub fn ensure_on_main(app: &AppHandle) {

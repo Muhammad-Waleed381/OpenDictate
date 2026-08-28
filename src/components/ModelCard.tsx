@@ -60,6 +60,14 @@ export function ModelCard() {
     return active?.streaming ? "streaming" : "non-streaming";
   });
 
+  // The initial state above runs before the catalog is loaded (it starts as
+  // []), so the tab defaulted to "non-streaming" even when the active model
+  // was streaming. Re-sync once the catalog/settings arrive.
+  useEffect(() => {
+    const active = catalog.find((m) => m.id === settings?.stt_model);
+    if (active) setView(active.streaming ? "streaming" : "non-streaming");
+  }, [catalog, settings?.stt_model]);
+
   useEffect(() => {
     if (!downloading) return;
     if (modelProgress.length === 0 && !downloadAllStatus) {
@@ -133,7 +141,7 @@ export function ModelCard() {
     try {
       await api.setSettings({ engine: engineKey, stt_model: modelId });
       await useStore.getState().refreshAll();
-      api.warmupModel(modelId, engineKey).catch(() => {});
+      api.warmupModel(engineKey).catch(() => {});
     } catch (e) {
       setError(String(e));
     }

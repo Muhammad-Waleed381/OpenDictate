@@ -33,6 +33,8 @@ const PARAKEET_STREAMING_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/
 /// transcript.
 pub const CAPTION_MODEL_ID: &str = "streaming-zipformer-en-20m-2023-02-17";
 const CAPTION_MODEL_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2";
+pub const KWS_MODEL_ID: &str = "kws-zipformer-gigaspeech-3.3m-2024-01-01";
+const KWS_MODEL_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2";
 const SILERO_VAD_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx";
 const WHISPER_TINY_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2";
@@ -46,7 +48,9 @@ const MODEL_MIN_BYTES: u64 = 1_000_000;
 /// KB), so the part minimum must be lower than the encoder's.
 const STREAMING_PART_MIN_BYTES: u64 = 100_000;
 const TOKENS_MIN_BYTES: u64 = 100;
-const VAD_MIN_BYTES: u64 = 100_000;
+/// The silero VAD onnx is ~1.7 MB; the old 100 KB threshold accepted
+/// truncated/garbage downloads as "installed".
+const VAD_MIN_BYTES: u64 = 1_000_000;
 const WHISPER_PART_MIN_BYTES: u64 = 5_000_000;
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +107,16 @@ const MODELS: &[ModelDef] = &[
         engine_key: None,
         size_bytes: 1_700_000,
         url: SILERO_VAD_URL,
+        available: true,
+        streaming: false,
+    },
+    ModelDef {
+        id: KWS_MODEL_ID,
+        name: "Zipformer 3.3M (Wake Word / KWS)",
+        kind: "kws",
+        engine_key: None,
+        size_bytes: 15_800_000,
+        url: KWS_MODEL_ARCHIVE,
         available: true,
         streaming: false,
     },
@@ -310,6 +324,34 @@ fn is_transducer_ready(id: &str) -> bool {
         && valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
 }
 
+pub fn kws_model_dir() -> PathBuf {
+    models_dir().join(KWS_MODEL_ID)
+}
+
+pub fn is_kws_ready() -> bool {
+    let dir = kws_model_dir();
+    if !dir.exists() {
+        return false;
+    }
+    let find = |needle: &str| -> bool {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            entries.flatten().any(|e| {
+                let n = e.file_name().to_string_lossy().to_lowercase();
+                n.ends_with(".onnx") && n.contains(needle)
+            })
+        } else {
+            false
+        }
+    };
+    valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
+        && (valid_file_size(&dir.join("encoder.onnx"), STREAMING_PART_MIN_BYTES).is_some()
+            || find("encoder"))
+        && (valid_file_size(&dir.join("decoder.onnx"), STREAMING_PART_MIN_BYTES).is_some()
+            || find("decoder"))
+        && (valid_file_size(&dir.join("joiner.onnx"), STREAMING_PART_MIN_BYTES).is_some()
+            || find("joiner"))
+}
+
 pub fn is_vad_ready() -> bool {
     valid_file_size(&vad_model_path(), VAD_MIN_BYTES).is_some()
 }
@@ -322,6 +364,7 @@ pub fn is_model_installed(id: &str) -> bool {
     match id {
         STT_MODEL_ID => is_parakeet_ready(),
         VAD_MODEL_ID => is_vad_ready(),
+        KWS_MODEL_ID => is_kws_ready(),
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => is_transducer_ready(id),
         PARAKEET_STREAMING_MODEL_ID | CAPTION_MODEL_ID => is_transducer_ready(id),
         WHISPER_TINY_MODEL_ID
@@ -513,12 +556,18 @@ fn install_stt_model(
 
         let mut files = Vec::new();
         collect_files(&extract_dir, &mut files);
-        let model_file = files.iter().find(|p| {
-            matches!(
-                p.file_name().and_then(|n| n.to_str()),
-                Some("model.int8.onnx") | Some("model.onnx")
-            )
-        });
+        // Prefer the int8 variant: the catalog advertises int8 sizes and the
+        // runtime loads `model.int8.onnx` first (see `find_model_file`).
+        // `collect_files` order is filesystem-dependent, so a plain `find`
+        // could nondeterministically install the ~2x larger fp32 model.
+        let model_file = files
+            .iter()
+            .find(|p| p.file_name().is_some_and(|n| n == "model.int8.onnx"))
+            .or_else(|| {
+                files
+                    .iter()
+                    .find(|p| p.file_name().is_some_and(|n| n == "model.onnx"))
+            });
         let tokens_file = files
             .iter()
             .find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"));
@@ -700,7 +749,7 @@ pub fn ensure_model_with_cancel(
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => {
             install_transducer_model(id, on_progress, is_cancelled)
         }
-        PARAKEET_STREAMING_MODEL_ID | CAPTION_MODEL_ID => {
+        PARAKEET_STREAMING_MODEL_ID | CAPTION_MODEL_ID | KWS_MODEL_ID => {
             install_transducer_model(id, on_progress, is_cancelled)
         }
         VAD_MODEL_ID => {

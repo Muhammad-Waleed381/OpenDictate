@@ -32,7 +32,7 @@ pub struct StreamingSession {
 
 impl StreamingRecognizer {
     pub fn new(model_dir: &Path) -> Result<Self> {
-        Self::new_for(model_dir, Some("nemo_transducer"))
+        Self::new_for(model_dir, None)
     }
 
     /// [`new_for`] with an execution-provider request. A GPU provider that

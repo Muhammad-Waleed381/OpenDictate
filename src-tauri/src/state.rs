@@ -24,6 +24,14 @@ pub struct SettingsPatch {
     pub spoken_punctuation: Option<bool>,
     pub audio_feedback: Option<bool>,
     pub audio_feedback_volume: Option<f32>,
+    pub handsfree_mode: Option<bool>,
+    pub wake_words: Option<String>,
+    pub handsfree_silence_timeout_sec: Option<u32>,
+    pub voice_actions_enabled: Option<bool>,
+    pub polish_provider: Option<String>,
+    pub polish_mode: Option<String>,
+    pub groq_api_key: Option<String>,
+    pub groq_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +64,22 @@ pub struct Settings {
     pub audio_feedback: bool,
     #[serde(default = "default_audio_feedback_volume")]
     pub audio_feedback_volume: f32,
+    #[serde(default)]
+    pub handsfree_mode: bool,
+    #[serde(default = "default_wake_words")]
+    pub wake_words: String,
+    #[serde(default = "default_handsfree_silence_timeout_sec")]
+    pub handsfree_silence_timeout_sec: u32,
+    #[serde(default = "default_voice_actions_enabled")]
+    pub voice_actions_enabled: bool,
+    #[serde(default = "default_polish_provider")]
+    pub polish_provider: String,
+    #[serde(default = "default_polish_mode")]
+    pub polish_mode: String,
+    #[serde(default)]
+    pub groq_api_key: Option<String>,
+    #[serde(default = "default_groq_model")]
+    pub groq_model: Option<String>,
 }
 
 fn default_stt_model() -> String {
@@ -76,6 +100,30 @@ fn default_vad_sensitivity() -> f32 {
 
 fn default_audio_feedback_volume() -> f32 {
     0.5
+}
+
+fn default_wake_words() -> String {
+    "hey dictate, computer".to_string()
+}
+
+fn default_handsfree_silence_timeout_sec() -> u32 {
+    30
+}
+
+fn default_voice_actions_enabled() -> bool {
+    true
+}
+
+fn default_polish_provider() -> String {
+    "off".to_string()
+}
+
+fn default_polish_mode() -> String {
+    "clean".to_string()
+}
+
+fn default_groq_model() -> Option<String> {
+    Some("llama-3.1-8b-instant".to_string())
 }
 
 /// macOS reserves the Ctrl+Alt/Option row for input-source switching and treats
@@ -111,6 +159,14 @@ impl Default for Settings {
             spoken_punctuation: false,
             audio_feedback: false,
             audio_feedback_volume: default_audio_feedback_volume(),
+            handsfree_mode: false,
+            wake_words: default_wake_words(),
+            handsfree_silence_timeout_sec: default_handsfree_silence_timeout_sec(),
+            voice_actions_enabled: default_voice_actions_enabled(),
+            polish_provider: default_polish_provider(),
+            polish_mode: default_polish_mode(),
+            groq_api_key: None,
+            groq_model: default_groq_model(),
         }
     }
 }
@@ -144,6 +200,7 @@ pub struct ModelsStatus {
     pub stt_ready: bool,
     pub vad_ready: bool,
     pub caption_ready: bool,
+    pub kws_ready: bool,
     pub streaming_rtf_x100: u32,
     /// Requested gpu mode ("off" | "auto" | "cuda" | "coreml").
     pub gpu_mode: String,
@@ -188,6 +245,15 @@ pub struct AppState {
     pub caption_engine: Arc<Mutex<Option<CachedStreamingEngine>>>,
     pub caption_stream: Arc<Mutex<Option<StreamingPipe>>>,
     pub caption_active: Arc<AtomicBool>,
+    /// Handsfree Keyword Spotter (KWS): monitors mic stream for wake words
+    /// while sleeping.
+    pub kws_engine: Arc<Mutex<Option<CachedKwsEngine>>>,
+    pub handsfree_active: Arc<AtomicBool>,
+    pub handsfree_awake: Arc<AtomicBool>,
+    /// True while the user has an explicit dictation session open (started via
+    /// hotkey/hold-to-talk). Distinct from handsfree holding the mic open.
+    /// Used by the hotkey toggle to know whether a second press should stop.
+    pub user_dictation_active: Arc<AtomicBool>,
     /// Measured decode speed of the selectable streaming STT model, x100
     /// (e.g. 1500 = RTF 15.0). 0 = not benchmarked yet.
     pub streaming_rtf_x100: Arc<AtomicU32>,
@@ -198,6 +264,10 @@ pub struct AppState {
     pub streaming_engine: Arc<Mutex<Option<CachedStreamingEngine>>>,
     pub vad: Arc<Mutex<Option<CachedVad>>>,
     pub active_downloads: Arc<Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>,
+}
+
+pub struct CachedKwsEngine {
+    pub spotter: Arc<opendictate_core::stt::kws::Spotter>,
 }
 
 pub struct CachedSttEngine {
@@ -243,8 +313,10 @@ impl AppState {
 pub struct StreamingPipe {
     pub recognizer: Arc<StreamingRecognizer>,
     pub session: StreamingSession,
-    /// Offset into the capture buffer of the first sample not yet fed to the
-    /// recognizer. Monotonic across utterances within one streaming session.
-    pub watermark: usize,
+    /// Absolute count of samples already fed to the recognizer (total samples
+    /// ever appended to the capture buffer). Monotonic across buffer drains
+    /// and `clear_buffer` calls; `AudioRecorder::take_since` translates it to
+    /// a buffer index via the recorder's base offset.
+    pub watermark: u64,
     pub total_fed: usize,
 }

@@ -1,3 +1,8 @@
+pub mod actions;
+pub mod polish;
+pub use actions::{parse_voice_action, to_camel_case, to_snake_case, to_title_case, VoiceAction};
+pub use polish::{polish_text, PolishConfig, PolishMode, PolishProvider};
+
 struct Token {
     start: usize,
     end: usize,
@@ -164,6 +169,126 @@ pub fn map_spoken_punctuation(text: &str) -> String {
         }
     }
     out.push_str(&text[cursor..]);
+    out
+}
+
+/// Filters out hallucinated Whisper closed-caption sound descriptors, such as:
+/// `(Gun firing)`, `(Gunshot)`, `[Applause]`, `[Music]`, `(Wind blowing)`, `(Bell dings)`, `[Laughter]`, `*applause*`.
+pub fn strip_sound_effects(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    // If the entire string is enclosed in brackets/parentheses, e.g. "(Gun firing)", "[Music]", "(wind blowing)"
+    if (trimmed.starts_with('(') && trimmed.ends_with(')'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('*') && trimmed.ends_with('*') && trimmed.len() > 2)
+    {
+        let inner = &trimmed[1..trimmed.len() - 1].trim();
+        let inner_lower = inner.to_lowercase();
+        let is_sound_effect = inner_lower.contains("gun")
+            || inner_lower.contains("shot")
+            || inner_lower.contains("firing")
+            || inner_lower.contains("music")
+            || inner_lower.contains("applause")
+            || inner_lower.contains("laughter")
+            || inner_lower.contains("giggle")
+            || inner_lower.contains("chuckle")
+            || inner_lower.contains("sigh")
+            || inner_lower.contains("cough")
+            || inner_lower.contains("throat")
+            || inner_lower.contains("screaming")
+            || inner_lower.contains("shout")
+            || inner_lower.contains("wind")
+            || inner_lower.contains("blowing")
+            || inner_lower.contains("bell")
+            || inner_lower.contains("ding")
+            || inner_lower.contains("beep")
+            || inner_lower.contains("click")
+            || inner_lower.contains("creak")
+            || inner_lower.contains("silence")
+            || inner_lower.contains("snicker")
+            || inner_lower.contains("groan")
+            || inner_lower.contains("gasp")
+            || inner_lower.contains("cheering")
+            || inner_lower.contains("chatter")
+            || inner_lower.contains("noise")
+            || inner_lower.contains("whisper")
+            || trimmed.starts_with('[');
+
+        if is_sound_effect {
+            return String::new();
+        }
+    }
+
+    // Strip inline bracketed and parenthesized annotations
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '[' || ch == '(' || ch == '*' {
+            let close_char = match ch {
+                '[' => ']',
+                '(' => ')',
+                '*' => '*',
+                _ => unreachable!(),
+            };
+            let mut tag = String::new();
+            let mut closed = false;
+            for inner in chars.by_ref() {
+                if inner == close_char {
+                    closed = true;
+                    break;
+                }
+                tag.push(inner);
+            }
+            if !closed {
+                out.push(ch);
+                out.push_str(&tag);
+            } else {
+                let tag_lower = tag.to_lowercase();
+                let is_sound_effect = tag_lower.contains("gun")
+                    || tag_lower.contains("shot")
+                    || tag_lower.contains("firing")
+                    || tag_lower.contains("music")
+                    || tag_lower.contains("applause")
+                    || tag_lower.contains("laughter")
+                    || tag_lower.contains("giggle")
+                    || tag_lower.contains("chuckle")
+                    || tag_lower.contains("sigh")
+                    || tag_lower.contains("cough")
+                    || tag_lower.contains("throat")
+                    || tag_lower.contains("screaming")
+                    || tag_lower.contains("shout")
+                    || tag_lower.contains("wind")
+                    || tag_lower.contains("blowing")
+                    || tag_lower.contains("bell")
+                    || tag_lower.contains("ding")
+                    || tag_lower.contains("beep")
+                    || tag_lower.contains("click")
+                    || tag_lower.contains("creak")
+                    || tag_lower.contains("silence")
+                    || tag_lower.contains("snicker")
+                    || tag_lower.contains("groan")
+                    || tag_lower.contains("gasp")
+                    || tag_lower.contains("cheering")
+                    || tag_lower.contains("chatter")
+                    || tag_lower.contains("noise")
+                    || tag_lower.contains("whisper")
+                    || ch == '[';
+
+                if !is_sound_effect {
+                    out.push(ch);
+                    out.push_str(&tag);
+                    out.push(close_char);
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+
     out
 }
 
@@ -400,5 +525,18 @@ mod tests {
         let (name, _) = fuzzy_match_trigger("sginature", &triggers(&["signature", "notes"]), 0.6)
             .expect("garbled single word should still match");
         assert_eq!(name, "signature");
+    }
+
+    #[test]
+    fn strips_hallucinated_sound_effect_tags() {
+        use super::strip_sound_effects;
+        assert_eq!(strip_sound_effects("(Gun firing)"), "");
+        assert_eq!(strip_sound_effects("[Gunshot]"), "");
+        assert_eq!(strip_sound_effects("[Applause]"), "");
+        assert_eq!(strip_sound_effects("(wind blowing)"), "");
+        assert_eq!(strip_sound_effects("*music*"), "");
+        assert_eq!(strip_sound_effects("hello (applause) world"), "hello  world");
+        assert_eq!(strip_sound_effects("this is (gun firing) great"), "this is  great");
+        assert_eq!(strip_sound_effects("normal text with (important details)"), "normal text with (important details)");
     }
 }

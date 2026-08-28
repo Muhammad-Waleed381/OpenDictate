@@ -6,7 +6,6 @@ import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
-const DAY_MS = 86_400_000;
 const CELL_PX = 13;
 const GAP_PX = 3;
 const PITCH_PX = CELL_PX + GAP_PX; // column/row stride of the grid
@@ -21,6 +20,15 @@ function localDayKey(d: Date): string {
 function startOfDay(d: Date): Date {
   const c = new Date(d);
   c.setHours(0, 0, 0, 0);
+  return c;
+}
+
+/// Calendar-safe day arithmetic: setDate handles DST transitions correctly,
+/// whereas millisecond math (`d.getTime() + n * 86_400_000`) shifts a day
+/// across a fall-back change.
+function addDays(d: Date, days: number): Date {
+  const c = new Date(d);
+  c.setDate(c.getDate() + days);
   return c;
 }
 
@@ -81,6 +89,7 @@ interface HeatmapCell {
   key: string;
   words: number;
   level: number;
+  col: number;
 }
 
 export function HeatmapTab() {
@@ -128,8 +137,8 @@ export function HeatmapTab() {
 
     const today = startOfDay(new Date());
     const todayDow = (today.getDay() + 6) % 7; // Monday = 0
-    const endMonday = new Date(today.getTime() - todayDow * DAY_MS);
-    const startMonday = new Date(endMonday.getTime() - 52 * 7 * DAY_MS);
+    const endMonday = addDays(today, -todayDow);
+    const startMonday = addDays(endMonday, -52 * 7);
 
     const cells: HeatmapCell[] = [];
     const monthLabels: { col: number; label: string }[] = [];
@@ -139,7 +148,7 @@ export function HeatmapTab() {
     const MIN_LABEL_GAP_PX = 34;
 
     for (let col = 0; col < 53; col++) {
-      const colStart = new Date(startMonday.getTime() + col * 7 * DAY_MS);
+      const colStart = addDays(startMonday, col * 7);
       const month = colStart.getMonth();
       if (month !== lastMonth) {
         lastMonth = month;
@@ -149,11 +158,11 @@ export function HeatmapTab() {
         }
       }
       for (let row = 0; row < 7; row++) {
-        const date = new Date(colStart.getTime() + row * DAY_MS);
+        const date = addDays(colStart, row);
         if (date.getTime() > today.getTime()) continue;
         const key = localDayKey(date);
         const words = byDay.get(key) ?? 0;
-        cells.push({ date, key, words, level: levelFor(words) });
+        cells.push({ date, key, words, level: levelFor(words), col });
       }
     }
 
@@ -198,10 +207,7 @@ export function HeatmapTab() {
   const cellsByCol: HeatmapCell[][] = useMemo(() => {
     const cols: HeatmapCell[][] = Array.from({ length: 53 }, () => []);
     for (const cell of cells) {
-      const idx = Math.floor(
-        (cell.date.getTime() - new Date(cells[0]?.date ?? 0).getTime()) / (7 * DAY_MS)
-      );
-      cols[Math.max(0, idx)]?.push(cell);
+      cols[Math.max(0, cell.col)]?.push(cell);
     }
     return cols;
   }, [cells]);
