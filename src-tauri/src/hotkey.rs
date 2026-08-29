@@ -228,13 +228,8 @@ fn toggle_dictation_sync(app: &AppHandle) {
 const KEYBINDING_PATH: &str =
     "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/opendictate/";
 
+#[cfg(target_os = "linux")]
 pub fn sync_gnome_keybinding(key: &str) {
-    // Install the settings-daemon keybinding on GNOME regardless of session
-    // type. On Wayland the X11 grab cannot see keys while a native Wayland
-    // window has focus; on X11 the grab would double-fire alongside this
-    // binding, which is why `register` skips the grab on GNOME entirely.
-    // Gating on the session type instead of the desktop used to leave
-    // GNOME+X11 with no hotkey path at all.
     let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
         .map(|d| d.to_lowercase().contains("gnome"))
         .unwrap_or(false);
@@ -289,6 +284,10 @@ pub fn sync_gnome_keybinding(key: &str) {
     log::info!("gnome keybinding synced: {binding} -> {toggle_script}");
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn sync_gnome_keybinding(_key: &str) {}
+
+#[cfg(target_os = "linux")]
 fn toggle_script_path() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let mut dir = exe.parent();
@@ -302,6 +301,7 @@ fn toggle_script_path() -> Option<String> {
     None
 }
 
+#[cfg(target_os = "linux")]
 fn gnome_accelerator(key: &str) -> Option<String> {
     if key.trim().is_empty() {
         return None;
@@ -331,15 +331,18 @@ fn gnome_accelerator(key: &str) -> Option<String> {
     key_part.map(|k| format!("{accel}{k}"))
 }
 
+#[cfg(target_os = "linux")]
 fn gsettings_get(schema: &str, key: &str) -> Option<String> {
     let out = Command::new("gsettings").args(["get", schema, key]).output().ok()?;
     String::from_utf8(out.stdout).ok().map(|s| s.trim().to_string())
 }
 
+#[cfg(target_os = "linux")]
 fn normalize_slot(path: &str) -> String {
     format!("{}/", path.trim_end_matches('/'))
 }
 
+#[cfg(target_os = "linux")]
 fn gsettings_set(schema: &str, key: &str, value: &str) {
     let out = Command::new("gsettings")
         .args(["set", schema, key, value])

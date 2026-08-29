@@ -292,6 +292,75 @@ pub fn strip_sound_effects(text: &str) -> String {
     out
 }
 
+/// Cleans up model hallucination loops where a word or multi-word phrase is repeated
+/// consecutively (e.g. "I can do it myself I can do it myself I can do it myself ... I can do"
+/// or "Test Test Test Test Test" or "Yes, I do that myself! Yes, I do that myself!").
+pub fn deduplicate_repeated_phrases(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    if words.len() < 2 {
+        return trimmed.to_string();
+    }
+
+    let normalize = |w: &str| -> String {
+        w.trim_matches(|c: char| c.is_ascii_punctuation())
+            .to_lowercase()
+    };
+
+    let norm_words: Vec<String> = words.iter().map(|w| normalize(w)).collect();
+    let n = words.len();
+
+    let mut i = 0;
+    let mut result_words: Vec<&str> = Vec::new();
+
+    while i < n {
+        let mut best_match: Option<(usize, usize, usize)> = None;
+
+        for k in 1..=15.min((n - i) / 2) {
+            let pattern = &norm_words[i..i + k];
+            if pattern.iter().all(|w| w.is_empty()) {
+                continue;
+            }
+
+            let mut repeats = 1;
+            let mut cursor = i + k;
+
+            while cursor + k <= n && norm_words[cursor..cursor + k] == *pattern {
+                repeats += 1;
+                cursor += k;
+            }
+
+            let mut partial_len = 0;
+            for p in (1..k).rev() {
+                if cursor + p <= n && norm_words[cursor..cursor + p] == pattern[..p] {
+                    partial_len = p;
+                    break;
+                }
+            }
+
+            let min_repeats = if k == 1 { 3 } else { 2 };
+            if repeats >= min_repeats {
+                best_match = Some((k, repeats, partial_len));
+                break;
+            }
+        }
+
+        if let Some((k, repeats, partial_len)) = best_match {
+            result_words.extend_from_slice(&words[i..i + k]);
+            i += repeats * k + partial_len;
+        } else {
+            result_words.push(words[i]);
+            i += 1;
+        }
+    }
+
+    result_words.join(" ")
+}
+
 /// Dice coefficient over lowercase character bigrams for a single token pair.
 fn char_dice(a: &str, b: &str) -> f32 {
     if a == b {
@@ -538,5 +607,30 @@ mod tests {
         assert_eq!(strip_sound_effects("hello (applause) world"), "hello  world");
         assert_eq!(strip_sound_effects("this is (gun firing) great"), "this is  great");
         assert_eq!(strip_sound_effects("normal text with (important details)"), "normal text with (important details)");
+    }
+
+    #[test]
+    fn test_deduplicate_repeated_phrases() {
+        use super::deduplicate_repeated_phrases;
+        assert_eq!(
+            deduplicate_repeated_phrases("I can do it myself I can do it myself I can do it myself I can do it myself I can do"),
+            "I can do it myself"
+        );
+        assert_eq!(
+            deduplicate_repeated_phrases("Yes, I do that myself! Yes, I do that myself!"),
+            "Yes, I do that myself!"
+        );
+        assert_eq!(
+            deduplicate_repeated_phrases("Test Test Test Test Test"),
+            "Test"
+        );
+        assert_eq!(
+            deduplicate_repeated_phrases("No, no, I think so"),
+            "No, no, I think so"
+        );
+        assert_eq!(
+            deduplicate_repeated_phrases("This is a normal sentence."),
+            "This is a normal sentence."
+        );
     }
 }

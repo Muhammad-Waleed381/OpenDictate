@@ -64,12 +64,42 @@ pub fn set_enabled(_app: &tauri::AppHandle, enabled: bool) -> Result<(), String>
 
 #[cfg(target_os = "macos")]
 pub fn set_enabled(_app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    // Disabling is a no-op when autostart was never set up, so it must
-    // succeed; only an explicit enable is unsupported. Callers log failures
-    // instead of failing the whole settings save.
-    if enabled {
-        Err("autostart is not supported on this platform yet".to_string())
-    } else {
-        Ok(())
+    use std::fs;
+
+    let home = std::env::var("HOME").map_err(|e| format!("failed to locate HOME directory: {e}"))?;
+    let launch_agents = std::path::PathBuf::from(home).join("Library").join("LaunchAgents");
+    let plist_path = launch_agents.join("com.opendictate.app.plist");
+
+    if !enabled {
+        if plist_path.exists() {
+            fs::remove_file(&plist_path).map_err(|e| format!("failed to disable autostart: {e}"))?;
+        }
+        return Ok(());
     }
+
+    fs::create_dir_all(&launch_agents).map_err(|e| format!("failed to create LaunchAgents directory: {e}"))?;
+    let executable = std::env::current_exe()
+        .map_err(|e| format!("failed to locate application executable: {e}"))?;
+    let exe_str = executable.to_string_lossy();
+
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.opendictate.app</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe_str}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
+"#
+    );
+    fs::write(plist_path, plist).map_err(|e| format!("failed to write LaunchAgent plist: {e}"))
 }

@@ -16,6 +16,7 @@ pub const VAD_MODEL_ID: &str = "silero-vad-v4";
 pub const PARAKEET_TDT_06B_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
 pub const PARAKEET_UNIFIED_EN_MODEL_ID: &str = "parakeet-unified-en-0.6b";
 pub const PARAKEET_STREAMING_MODEL_ID: &str = "parakeet-unified-en-0.6b-int8-streaming-560ms";
+pub const FASTCONFORMER_STREAMING_80MS_MODEL_ID: &str = "nemo-streaming-fastconformer-ctc-en-80ms";
 pub const WHISPER_TINY_MODEL_ID: &str = "whisper-tiny-en";
 pub const WHISPER_BASE_MODEL_ID: &str = "whisper-base-en";
 pub const WHISPER_SMALL_MODEL_ID: &str = "whisper-small-en";
@@ -27,6 +28,7 @@ const PARAKEET_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/d
 const PARAKEET_TDT_06B_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2";
 const PARAKEET_UNIFIED_EN_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming.tar.bz2";
 const PARAKEET_STREAMING_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-streaming-560ms.tar.bz2";
+const FASTCONFORMER_STREAMING_80MS_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-streaming-fast-conformer-ctc-en-80ms.tar.bz2";
 /// Internal live-caption engine: a 20M-param zipformer transducer that decodes
 /// faster than real time even on low-power CPUs. Not user-selectable; it only
 /// ever powers partial captions while an accuracy model produces the final
@@ -127,6 +129,16 @@ const MODELS: &[ModelDef] = &[
         engine_key: Some("parakeet-streaming"),
         size_bytes: 501_360_769,
         url: PARAKEET_STREAMING_ARCHIVE,
+        available: true,
+        streaming: true,
+    },
+    ModelDef {
+        id: FASTCONFORMER_STREAMING_80MS_MODEL_ID,
+        name: "FastConformer 80ms (Streaming)",
+        kind: "stt",
+        engine_key: Some("fastconformer-streaming"),
+        size_bytes: 125_000_000,
+        url: FASTCONFORMER_STREAMING_80MS_ARCHIVE,
         available: true,
         streaming: true,
     },
@@ -235,7 +247,29 @@ pub fn models_dir() -> PathBuf {
         }
     }
 
-    // Linux and macOS keep the historical ~/.local/share location — existing
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            if !home.is_empty() {
+                let mac_path = PathBuf::from(&home)
+                    .join("Library")
+                    .join("Application Support")
+                    .join("opendictate")
+                    .join("models");
+                let legacy_path = PathBuf::from(&home)
+                    .join(".local")
+                    .join("share")
+                    .join("opendictate")
+                    .join("models");
+                if legacy_path.exists() {
+                    return legacy_path;
+                }
+                return mac_path;
+            }
+        }
+    }
+
+    // Linux and legacy setups keep ~/.local/share location — existing
     // installs already have models there and must not be orphaned.
     if let Ok(home) = std::env::var("HOME") {
         if !home.is_empty() {
@@ -287,7 +321,10 @@ pub fn is_caption_model_ready() -> bool {
 }
 
 pub fn is_streaming_model(id: &str) -> bool {
-    matches!(id, PARAKEET_STREAMING_MODEL_ID)
+    matches!(
+        id,
+        PARAKEET_STREAMING_MODEL_ID | FASTCONFORMER_STREAMING_80MS_MODEL_ID
+    )
 }
 
 pub fn is_transducer_model(id: &str) -> bool {
@@ -300,6 +337,13 @@ pub fn is_transducer_model(id: &str) -> bool {
 fn valid_file_size(path: &Path, min_bytes: u64) -> Option<u64> {
     let size = std::fs::metadata(path).ok()?.len();
     (size >= min_bytes).then_some(size)
+}
+
+fn is_nemo_ctc_ready(id: &str) -> bool {
+    let dir = model_dir_for(id);
+    let model = valid_file_size(&dir.join("model.int8.onnx"), MODEL_MIN_BYTES)
+        .or_else(|| valid_file_size(&dir.join("model.onnx"), MODEL_MIN_BYTES));
+    model.is_some() && valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
 }
 
 fn is_parakeet_ready() -> bool {
@@ -365,6 +409,7 @@ pub fn is_model_installed(id: &str) -> bool {
         STT_MODEL_ID => is_parakeet_ready(),
         VAD_MODEL_ID => is_vad_ready(),
         KWS_MODEL_ID => is_kws_ready(),
+        FASTCONFORMER_STREAMING_80MS_MODEL_ID => is_nemo_ctc_ready(id),
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => is_transducer_ready(id),
         PARAKEET_STREAMING_MODEL_ID | CAPTION_MODEL_ID => is_transducer_ready(id),
         WHISPER_TINY_MODEL_ID
@@ -722,6 +767,68 @@ fn install_transducer_model(
     Ok(())
 }
 
+fn install_nemo_ctc_model(
+    id: &str,
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    let def = model_def(id).ok_or_else(|| CoreError::Download(format!("unknown model '{id}'")))?;
+    let base = models_dir();
+    std::fs::create_dir_all(&base).map_err(CoreError::Io)?;
+    let archive_path = base.join(format!("{id}.tar.bz2"));
+    let extract_dir = base.join(format!(".extract-{id}"));
+
+    log::info!("downloading {} -> {}", def.url, archive_path.display());
+    download_to_with_progress_cancel(
+        def.url,
+        &archive_path,
+        &mut |received, total| on_progress(id, received, total),
+        is_cancelled,
+    )?;
+    if is_cancelled() {
+        clean_after(&archive_path, &extract_dir);
+        return Err(CoreError::Download("download cancelled by user".to_string()));
+    }
+    if extract_dir.exists() {
+        std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
+    }
+    extract_archive(&archive_path, &extract_dir)?;
+
+    let mut files = Vec::new();
+    collect_files(&extract_dir, &mut files);
+    let mut hits: Vec<_> = files
+        .iter()
+        .filter(|p| {
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.ends_with(".onnx") && (n.starts_with("model") || n.contains("conformer"))
+            })
+        })
+        .cloned()
+        .collect();
+    hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
+    let model_file = hits.first().cloned();
+    let tokens_file = files
+        .iter()
+        .find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"))
+        .cloned();
+
+    let (Some(model), Some(tokens)) = (model_file, tokens_file) else {
+        clean_after(&archive_path, &extract_dir);
+        return Err(CoreError::Download(format!(
+            "archive {id} has no model/tokens files"
+        )));
+    };
+
+    let model_dir = model_dir_for(id);
+    std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
+    let model_name = model.file_name().unwrap_or_default().to_owned();
+    std::fs::copy(&model, model_dir.join(model_name)).map_err(CoreError::Io)?;
+    std::fs::copy(&tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+    log::info!("installed {id} -> {}", model_dir.display());
+    clean_after(&archive_path, &extract_dir);
+    Ok(())
+}
+
 pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<()> {
     ensure_model_with_cancel(id, on_progress, &|| false)
 }
@@ -745,6 +852,9 @@ pub fn ensure_model_with_cancel(
                 ));
             }
             Ok(())
+        }
+        FASTCONFORMER_STREAMING_80MS_MODEL_ID => {
+            install_nemo_ctc_model(id, on_progress, is_cancelled)
         }
         PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID => {
             install_transducer_model(id, on_progress, is_cancelled)
@@ -834,6 +944,7 @@ mod tests {
             PARAKEET_TDT_06B_MODEL_ID,
             PARAKEET_UNIFIED_EN_MODEL_ID,
             PARAKEET_STREAMING_MODEL_ID,
+            FASTCONFORMER_STREAMING_80MS_MODEL_ID,
             WHISPER_TINY_MODEL_ID,
             WHISPER_BASE_MODEL_ID,
             WHISPER_SMALL_MODEL_ID,
@@ -862,6 +973,7 @@ mod tests {
     #[test]
     fn streaming_models_are_flagged() {
         assert!(is_streaming_model(PARAKEET_STREAMING_MODEL_ID));
+        assert!(is_streaming_model(FASTCONFORMER_STREAMING_80MS_MODEL_ID));
         assert!(!is_streaming_model(STT_MODEL_ID));
         assert!(!is_streaming_model(VAD_MODEL_ID));
         assert!(!is_streaming_model("bogus"));

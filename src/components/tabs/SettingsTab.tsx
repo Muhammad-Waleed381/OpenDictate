@@ -10,7 +10,6 @@ import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { ModelCard } from "@/components/ModelCard";
 import { useTheme } from "@/lib/theme";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
@@ -972,8 +971,6 @@ export function SettingsTab() {
           </div>
         )}
       </div>
-
-      <ModelCard />
 
       <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
         <div className="flex flex-col">

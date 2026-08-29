@@ -11,6 +11,8 @@ pub fn inject_text(app: &AppHandle, text: &str, mode: &str) -> Result<(), String
     // mode == "type" or mode == "auto"
     #[cfg(target_os = "linux")]
     {
+        // Settle delay to ensure Wayland compositor and target window receive clipboard update
+        std::thread::sleep(std::time::Duration::from_millis(50));
         let res = press_paste();
         log::info!("inject: press_paste result={res:?}");
         res
@@ -89,6 +91,7 @@ pub fn copy_to_system_clipboard(app: &AppHandle, text: &str) -> Result<(), Strin
 
 pub fn clean_text(text: &str) -> String {
     let text = opendictate_core::text::strip_sound_effects(text);
+    let text = opendictate_core::text::deduplicate_repeated_phrases(&text);
     let trimmed_input = text.trim();
     if trimmed_input.is_empty() {
         return String::new();
@@ -150,9 +153,10 @@ mod tests {
 
 #[cfg(target_os = "linux")]
 mod uinput {
-    use std::fs::OpenOptions;
+    use std::fs::{File, OpenOptions};
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::io::AsRawFd;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     const UI_SET_EVBIT: libc::c_ulong = 0x40045564;
@@ -180,6 +184,11 @@ mod uinput {
     pub const KEY_PAGEUP: u16 = 104;
     pub const KEY_PAGEDOWN: u16 = 109;
 
+    const ALL_KEYS: &[u16] = &[
+        KEY_TAB, KEY_ENTER, KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_A, KEY_C,
+        KEY_T, KEY_U, KEY_V, KEY_W, KEY_Z, KEY_BACKSPACE, KEY_PAGEUP, KEY_PAGEDOWN,
+    ];
+
     #[repr(C)]
     struct InputId {
         bustype: u16,
@@ -204,50 +213,76 @@ mod uinput {
         value: i32,
     }
 
-    pub fn send_key_combo(keys: &[u16]) -> Result<(), String> {
-        let file = OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open("/dev/uinput")
-            .map_err(|e| format!("cannot open /dev/uinput: {e}"))?;
+    pub struct Device {
+        file: File,
+    }
 
-        let fd = file.as_raw_fd();
-
-        unsafe {
-            if libc::ioctl(fd, UI_SET_EVBIT, EV_KEY as libc::c_ulong) < 0 {
-                return Err("ioctl UI_SET_EVBIT failed".to_string());
+    impl Drop for Device {
+        fn drop(&mut self) {
+            let fd = self.file.as_raw_fd();
+            unsafe {
+                let _ = libc::ioctl(fd, UI_DEV_DESTROY);
             }
+        }
+    }
 
-            for &key in keys {
-                if libc::ioctl(fd, UI_SET_KEYBIT, key as libc::c_ulong) < 0 {
-                    return Err(format!("ioctl UI_SET_KEYBIT for {key} failed"));
+    static GLOBAL_DEVICE: Mutex<Option<Device>> = Mutex::new(None);
+
+    fn get_or_create_device() -> Result<std::sync::MutexGuard<'static, Option<Device>>, String> {
+        let mut guard = GLOBAL_DEVICE.lock().map_err(|e| e.to_string())?;
+        if guard.is_none() {
+            let file = OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open("/dev/uinput")
+                .map_err(|e| format!("cannot open /dev/uinput: {e}"))?;
+
+            let fd = file.as_raw_fd();
+            unsafe {
+                if libc::ioctl(fd, UI_SET_EVBIT, EV_KEY as libc::c_ulong) < 0 {
+                    return Err("ioctl UI_SET_EVBIT failed".to_string());
+                }
+
+                for &key in ALL_KEYS {
+                    if libc::ioctl(fd, UI_SET_KEYBIT, key as libc::c_ulong) < 0 {
+                        return Err(format!("ioctl UI_SET_KEYBIT for {key} failed"));
+                    }
+                }
+
+                let mut setup = UInputSetup {
+                    id: InputId {
+                        bustype: 0x03, // BUS_USB
+                        vendor: 0x1234,
+                        product: 0x5678,
+                        version: 1,
+                    },
+                    name: [0; 80],
+                    ff_effects_max: 0,
+                };
+                let name_bytes = b"OpenDictate Virtual Keyboard";
+                setup.name[..name_bytes.len()].copy_from_slice(name_bytes);
+
+                if libc::ioctl(fd, UI_DEV_SETUP, &setup) < 0 {
+                    return Err("ioctl UI_DEV_SETUP failed".to_string());
+                }
+
+                if libc::ioctl(fd, UI_DEV_CREATE) < 0 {
+                    return Err("ioctl UI_DEV_CREATE failed".to_string());
                 }
             }
 
-            let mut setup = UInputSetup {
-                id: InputId {
-                    bustype: 0x03, // BUS_USB
-                    vendor: 0x1234,
-                    product: 0x5678,
-                    version: 1,
-                },
-                name: [0; 80],
-                ff_effects_max: 0,
-            };
-            let name_bytes = b"OpenDictate Virtual Keyboard";
-            setup.name[..name_bytes.len()].copy_from_slice(name_bytes);
-
-            if libc::ioctl(fd, UI_DEV_SETUP, &setup) < 0 {
-                return Err("ioctl UI_DEV_SETUP failed".to_string());
-            }
-
-            if libc::ioctl(fd, UI_DEV_CREATE) < 0 {
-                return Err("ioctl UI_DEV_CREATE failed".to_string());
-            }
+            // Initial settle time for compositor to register the virtual keyboard
+            std::thread::sleep(Duration::from_millis(150));
+            *guard = Some(Device { file });
+            log::info!("uinput: created persistent virtual keyboard device");
         }
+        Ok(guard)
+    }
 
-        // Give compositor/libinput a moment to bind the device
-        std::thread::sleep(Duration::from_millis(60));
+    pub fn send_key_combo(keys: &[u16]) -> Result<(), String> {
+        let guard = get_or_create_device()?;
+        let dev = guard.as_ref().ok_or("no uinput device")?;
+        let fd = dev.file.as_raw_fd();
 
         let emit = |type_: u16, code: u16, value: i32| {
             let ev = InputEvent {
@@ -264,23 +299,22 @@ mod uinput {
             }
         };
 
+        // Small pre-delay to allow focus to settle
+        std::thread::sleep(Duration::from_millis(20));
+
         // Press keys in sequence
         for &key in keys {
             emit(EV_KEY, key, 1);
         }
         emit(EV_SYN, SYN_REPORT, 0);
-        std::thread::sleep(Duration::from_millis(30));
+        std::thread::sleep(Duration::from_millis(20));
 
         // Release keys in reverse sequence
         for &key in keys.iter().rev() {
             emit(EV_KEY, key, 0);
         }
         emit(EV_SYN, SYN_REPORT, 0);
-        std::thread::sleep(Duration::from_millis(30));
-
-        unsafe {
-            let _ = libc::ioctl(fd, UI_DEV_DESTROY);
-        }
+        std::thread::sleep(Duration::from_millis(20));
 
         Ok(())
     }
@@ -463,24 +497,29 @@ fn run(program: &str, args: &[&str]) -> Result<(), String> {
 // --- Windows / macOS: synthetic input via enigo (SendInput / CGEvent) ------
 
 #[cfg(not(target_os = "linux"))]
-enum Combo {
-    Paste,
-    Undo,
-}
-
-#[cfg(not(target_os = "linux"))]
 fn press_paste() -> Result<(), String> {
-    send_combo(Combo::Paste)
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("failed to init input backend: {e}"))?;
+    #[cfg(target_os = "macos")]
+    let modifier = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+
+    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
+    enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| e.to_string())?;
+    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
 fn type_text(_app: &AppHandle, text: &str) -> Result<(), String> {
     use enigo::{Enigo, Keyboard, Settings};
 
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
     // Give the focused window a beat to accept synthetic input.
-    std::thread::sleep(Duration::from_millis(120));
+    std::thread::sleep(std::time::Duration::from_millis(120));
     enigo
         .text(text)
         .map_err(|e| format!("failed to type text: {e}"))
@@ -488,7 +527,17 @@ fn type_text(_app: &AppHandle, text: &str) -> Result<(), String> {
 
 #[cfg(not(target_os = "linux"))]
 pub fn undo_last_insert() -> Result<(), String> {
-    send_combo(Combo::Undo)
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("failed to init input backend: {e}"))?;
+    #[cfg(target_os = "macos")]
+    let modifier = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+
+    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
+    enigo.key(Key::Unicode('z'), Direction::Click).map_err(|e| e.to_string())?;
+    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]

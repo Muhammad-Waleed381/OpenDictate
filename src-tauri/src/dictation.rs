@@ -394,7 +394,7 @@ pub fn spawn_streaming(app: &AppHandle, state: &AppState) -> Result<(), String> 
             } else {
                 let created = {
                     let prov = desired_provider(state);
-                    let rec = StreamingRecognizer::new_with_provider(&dir, Some("nemo_transducer"), prov)
+                    let rec = StreamingRecognizer::new_with_provider(&dir, None, prov)
                         .map_err(|e| e.to_string())?;
                     if rec.provider != "cpu" {
                         state.gpu_active.store(true, Ordering::SeqCst);

@@ -5,7 +5,7 @@ import * as api from "@/lib/api";
 import { formatHotkey, cn, DEFAULT_HOTKEY } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Settings, Activity, BookOpen, History, FileText, House } from "lucide-react";
+import { Settings, Activity, BookOpen, History, FileText, House, Cpu } from "lucide-react";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster } from "@/components/ui/toast";
 import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
@@ -17,6 +17,7 @@ import { DictionaryTab } from "@/components/tabs/DictionaryTab";
 import { HistoryTab } from "@/components/tabs/HistoryTab";
 import { HeatmapTab } from "@/components/tabs/HeatmapTab";
 import { SnippetsTab } from "@/components/tabs/SnippetsTab";
+import { ModelsTab } from "@/components/tabs/ModelsTab";
 
 const TABS = [
   { id: "home", label: "Home", icon: House },
@@ -24,6 +25,7 @@ const TABS = [
   { id: "dictionary", label: "Dictionary", icon: BookOpen },
   { id: "snippets", label: "Snippets", icon: FileText },
   { id: "history", label: "History", icon: History },
+  { id: "models", label: "Models", icon: Cpu },
   { id: "settings", label: "Settings", icon: Settings },
 ] as const;
 
@@ -206,6 +208,7 @@ export function MainApp() {
               {tab === "dictionary" && <DictionaryTab />}
               {tab === "snippets" && <SnippetsTab />}
               {tab === "history" && <HistoryTab />}
+              {tab === "models" && <ModelsTab />}
               {tab === "settings" && <SettingsTab />}
             </div>
           </main>

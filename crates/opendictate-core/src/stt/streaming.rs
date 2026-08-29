@@ -3,8 +3,8 @@ use std::path::Path;
 use crate::audio::capture::SAMPLE_RATE;
 
 use sherpa_onnx::{
-    OnlineModelConfig, OnlineRecognizer, OnlineRecognizerConfig, OnlineStream,
-    OnlineTransducerModelConfig,
+    OnlineModelConfig, OnlineNemoCtcModelConfig, OnlineRecognizer, OnlineRecognizerConfig,
+    OnlineStream, OnlineTransducerModelConfig,
 };
 
 use super::provider::Provider;
@@ -13,7 +13,7 @@ use crate::error::{CoreError, Result};
 const MAX_STT_THREADS: usize = 8;
 
 /// Streaming (online) recognizer backed by sherpa-onnx `OnlineRecognizer`
-/// (NeMo/parakeet unified transducer models).
+/// (NeMo/parakeet unified transducer and FastConformer CTC models).
 ///
 /// The sherpa-onnx crate declares `OnlineRecognizer`/`OnlineStream` as
 /// `Send + Sync`; access to a session is serialized through a mutex in the
@@ -71,10 +71,9 @@ impl StreamingRecognizer {
             )));
         }
 
-        // Online transducers decode many small chunks sequentially; beyond
+        // Online transducers and CTC decoders decode many small chunks sequentially; beyond
         // ~4 intra-op threads the runtime thrashes hyperthreads and decode
-        // throughput DROPS (measured: RTF 21 at 8 threads vs 15 at 4 on a
-        // 4-core part), so cap well below logical parallelism.
+        // throughput DROPS, so cap well below logical parallelism.
         let n_threads = std::thread::available_parallelism()
             .map(|p| ((p.get() / 2).clamp(1, MAX_STT_THREADS)) as i32)
             .unwrap_or(2);
@@ -106,9 +105,6 @@ impl StreamingRecognizer {
                 })
         };
 
-        let encoder = find("encoder")?;
-        let decoder = find("decoder")?;
-        let joiner = find("joiner")?;
         let tokens = model_dir.join("tokens.txt");
         if !tokens.exists() {
             return Err(CoreError::Transcription(format!(
@@ -117,8 +113,33 @@ impl StreamingRecognizer {
             )));
         }
 
-        let config = OnlineRecognizerConfig {
-            model_config: OnlineModelConfig {
+        let is_nemo_ctc = std::fs::read_dir(model_dir)
+            .ok()
+            .map(|entries| {
+                entries.flatten().any(|e| {
+                    let n = e.file_name().to_string_lossy().to_lowercase();
+                    n.starts_with("model") && n.ends_with(".onnx")
+                })
+            })
+            .unwrap_or(false);
+
+        let model_config = if is_nemo_ctc {
+            let model_file = find("model")?;
+            OnlineModelConfig {
+                nemo_ctc: OnlineNemoCtcModelConfig {
+                    model: Some(model_file),
+                },
+                tokens: Some(tokens.to_string_lossy().to_string()),
+                num_threads: n_threads,
+                provider: Some(provider.as_str().to_string()),
+                model_type: model_type.map(|s| s.to_string()),
+                ..Default::default()
+            }
+        } else {
+            let encoder = find("encoder")?;
+            let decoder = find("decoder")?;
+            let joiner = find("joiner")?;
+            OnlineModelConfig {
                 transducer: OnlineTransducerModelConfig {
                     encoder: Some(encoder),
                     decoder: Some(decoder),
@@ -129,7 +150,11 @@ impl StreamingRecognizer {
                 provider: Some(provider.as_str().to_string()),
                 model_type: model_type.map(|s| s.to_string()),
                 ..Default::default()
-            },
+            }
+        };
+
+        let config = OnlineRecognizerConfig {
+            model_config,
             decoding_method: Some("greedy_search".to_string()),
             enable_endpoint: true,
             rule1_min_trailing_silence: 2.4,
