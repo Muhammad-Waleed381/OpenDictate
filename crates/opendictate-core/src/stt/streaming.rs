@@ -171,6 +171,26 @@ impl StreamingRecognizer {
             ))
         })?;
 
+        // If a GPU provider was requested, test forward execution with a micro-probe
+        // to catch runtime driver/DLL/architecture incompatibilities and trigger clean CPU fallback.
+        if provider.is_gpu() {
+            let probe_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let stream = recognizer.create_stream();
+                let silence = vec![0.0f32; 1600]; // 0.1s dummy buffer
+                stream.accept_waveform(16000, &silence);
+                while recognizer.is_ready(&stream) {
+                    recognizer.decode(&stream);
+                }
+                let _ = recognizer.get_result(&stream);
+            }));
+            if probe_result.is_err() {
+                return Err(CoreError::Transcription(format!(
+                    "GPU provider '{}' failed runtime streaming probe; driver or hardware incompatible",
+                    provider.as_str()
+                )));
+            }
+        }
+
         log::info!(
             "streaming engine loaded from {} ({n_threads} threads, provider {})",
             model_dir.display(),

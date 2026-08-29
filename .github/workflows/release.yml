@@ -62,38 +62,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Download GPU-capable libraries (Windows)
-        if: ${{ matrix.platform == 'windows-latest' }}
-        shell: pwsh
-        run: |
-          # The CUDA archive carries runtime DLLs but no import libraries,
-          # so we LINK against the CPU shared archive (identical C API) and
-          # SHIP the CUDA DLLs as bundle resources — at runtime the loader
-          # prefers the copies installed next to the exe.
-          New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\gpu-link", "$env:USERPROFILE\gpu-runtime", "src-tauri\gpu-resources" | Out-Null
-
-          curl.exe -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-win-x64-shared-MT-Release-lib.tar.bz2" -o "$env:RUNNER_TEMP\cpu.zip"
-          tar -xf "$env:RUNNER_TEMP\cpu.zip" -C "$env:USERPROFILE\gpu-link"
-          $linkLib = Get-ChildItem -Recurse "$env:USERPROFILE\gpu-link" -Filter "onnxruntime.lib" | Select-Object -First 1
-          if (-not $linkLib) { throw "onnxruntime.lib missing from CPU shared archive" }
-          "SHERPA_ONNX_LIB_DIR=$($linkLib.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-          curl.exe -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-cuda-12.x-cudnn-9.x-win-x64-cuda.tar.bz2" -o "$env:RUNNER_TEMP\cuda.zip"
-          tar -xf "$env:RUNNER_TEMP\cuda.zip" -C "$env:USERPROFILE\gpu-runtime"
-          # DLLs must sit next to opendictate.exe at launch (the Windows
-          # loader does not search subdirectories), so copy them flat into
-          # src-tauri and declare them as root-level resources.
-          Get-ChildItem -Recurse "$env:USERPROFILE\gpu-runtime" -Filter "*.dll" | Copy-Item -Destination "src-tauri"
-          if (-not (Test-Path "src-tauri\onnxruntime_providers_cuda.dll")) { throw "CUDA provider dll missing from GPU archive" }
-
-          $conf = Get-Content "src-tauri\tauri.conf.json" -Raw | ConvertFrom-Json
-          # bundle.resources may not exist yet; -Force creates or overwrites.
-          $conf.bundle | Add-Member -NotePropertyName resources -NotePropertyValue @("*.dll") -Force
-          $conf | ConvertTo-Json -Depth 32 | Set-Content "src-tauri\tauri.conf.json"
-
-          $manifest = "crates/opendictate-core/Cargo.toml"
-          (Get-Content $manifest) -replace '^default = \["cpu-static"\]', 'default = ["gpu-shared"]' | Set-Content $manifest
-
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
         env:
