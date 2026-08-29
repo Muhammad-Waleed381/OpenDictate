@@ -35,7 +35,6 @@ with open(conf_path) as f:
 linux = conf.setdefault("bundle", {}).setdefault("linux", {})
 linux["deb"] = {"files": mapping}
 linux["rpm"] = {"files": mapping}
-linux["appimage"] = {"files": mapping}
 
 with open(conf_path, "w") as f:
     json.dump(conf, f, indent=2)

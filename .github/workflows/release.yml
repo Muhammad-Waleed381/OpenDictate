@@ -55,38 +55,12 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
             patchelf libasound2-dev libpulse-dev libudev-dev libgtk-3-dev \
             libfuse2 zsync pkg-config cmake build-essential
+          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
+          echo "NO_STRIP=true" >> "$GITHUB_ENV"
+          echo "ARCH=x86_64" >> "$GITHUB_ENV"
 
       - name: Install frontend dependencies
         run: npm ci
-
-      # Single dual-capable installer: Linux/Windows link against sherpa-onnx
-      # shared libraries built with GPU execution providers. On NVIDIA
-      # machines CUDA engages (Settings → GPU acceleration); everywhere else
-      # engines silently run CPU. macOS keeps the static CPU build until a
-      # CoreML-enabled archive is validated.
-      - name: Download GPU-capable libraries (Linux)
-        if: ${{ matrix.platform == 'ubuntu-22.04' }}
-        run: |
-          curl -fL "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-v1.13.4-cuda-12.x-cudnn-9.x-onnxruntime1.27.1-linux-x64-gpu.tar.bz2" -o /tmp/libs.tbz2
-          mkdir -p "$HOME/gpu-libs" && tar -xf /tmp/libs.tbz2 -C "$HOME/gpu-libs"
-          LIBDIR=$(find "$HOME/gpu-libs" -type f -name 'libsherpa-onnx-c-api.so' | head -1 | xargs dirname)
-          echo "SHERPA_ONNX_LIB_DIR=$LIBDIR" >> "$GITHUB_ENV"
-          # linuxdeploy resolves NEEDED chains with ldd: make the CUDA/cuDNN
-          # libraries visible, and never strip a GPU-linked binary.
-          echo "LD_LIBRARY_PATH=$LIBDIR:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          echo "NO_STRIP=true" >> "$GITHUB_ENV"
-          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
-          echo "ARCH=x86_64" >> "$GITHUB_ENV"
-          # The deb/rpm/appimage must SHIP the shared libraries and the binary
-          # must find them: libs install to /usr/lib/opendictate via the files
-          # map (key = destination, value = source), and build.rs bakes a
-          # matching RUNPATH from this env var ($ORIGIN-relative + absolute).
-          echo 'OPENDICTATE_LINUX_RPATH=$ORIGIN/../lib/opendictate:/usr/lib/opendictate' >> "$GITHUB_ENV"
-          # tauri-cli cannot pass --no-default-features to cargo, so select
-          # the shared link mode by flipping the manifest default instead.
-          sed -i 's/^default = \["cpu-static"\]/default = ["gpu-shared"]/' crates/opendictate-core/Cargo.toml
-          grep -n "^default" crates/opendictate-core/Cargo.toml
-          SHERPA_ONNX_LIB_DIR="$LIBDIR" python3 scripts/inject-linux-libs.py
 
       - name: Download GPU-capable libraries (Windows)
         if: ${{ matrix.platform == 'windows-latest' }}
