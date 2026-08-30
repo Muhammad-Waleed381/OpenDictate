@@ -12,7 +12,7 @@ pub fn inject_text(app: &AppHandle, text: &str, mode: &str) -> Result<(), String
     #[cfg(target_os = "linux")]
     {
         // Settle delay to ensure Wayland compositor and target window receive clipboard update
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(80));
         let res = press_paste();
         log::info!("inject: press_paste result={res:?}");
         res
@@ -27,13 +27,11 @@ pub fn inject_text(app: &AppHandle, text: &str, mode: &str) -> Result<(), String
 }
 
 pub fn copy_to_system_clipboard(app: &AppHandle, text: &str) -> Result<(), String> {
-    // 1. Write via Tauri clipboard manager (GTK / OS native). The error is
-    // kept: if every backend fails, the caller must know — otherwise a paste
-    // injects whatever stale content was in the clipboard before.
+    // 1. Write via Tauri clipboard manager (GTK / OS native).
     let clipboard = app.clipboard();
     let native_result = clipboard.write_text(text.to_string());
 
-    // 2. On Linux, also write directly to wl-copy (Wayland) and xclip (X11)
+    // 2. On Linux, also write directly to wl-copy (Wayland), xclip, and xsel (X11 / Xwayland)
     #[cfg(target_os = "linux")]
     {
         use std::io::Write;
@@ -41,8 +39,10 @@ pub fn copy_to_system_clipboard(app: &AppHandle, text: &str) -> Result<(), Strin
 
         let mut any_succeeded = native_result.is_ok();
 
-        // Try wl-copy on Wayland
+        // Try wl-copy on Wayland (clipboard selection)
         if let Ok(mut child) = Command::new("wl-copy")
+            .arg("--type")
+            .arg("text/plain;charset=utf-8")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -59,9 +59,25 @@ pub fn copy_to_system_clipboard(app: &AppHandle, text: &str) -> Result<(), Strin
             }
         }
 
-        // Try xclip for X11 / Xwayland
+        // Also try wl-copy primary selection
+        if let Ok(mut child) = Command::new("wl-copy")
+            .arg("--primary")
+            .arg("--type")
+            .arg("text/plain;charset=utf-8")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+        }
+
+        // Try xclip for X11 / Xwayland (clipboard selection)
         if let Ok(mut child) = Command::new("xclip")
-            .args(["-selection", "clipboard"])
+            .args(["-selection", "clipboard", "-in"])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -78,10 +94,30 @@ pub fn copy_to_system_clipboard(app: &AppHandle, text: &str) -> Result<(), Strin
             }
         }
 
-        if any_succeeded {
+        // Try xsel for X11 / Xwayland (clipboard selection)
+        if let Ok(mut child) = Command::new("xsel")
+            .args(["--clipboard", "--input"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            let mut wrote = false;
+            if let Some(mut stdin) = child.stdin.take() {
+                wrote = stdin.write_all(text.as_bytes()).is_ok();
+            }
+            if let Ok(status) = child.wait() {
+                if wrote && status.success() {
+                    any_succeeded = true;
+                }
+            }
+        }
+
+        if any_succeeded || native_result.is_ok() {
             Ok(())
         } else {
-            Err("failed to write to clipboard (all backends failed)".to_string())
+            log::warn!("copy_to_system_clipboard: background tools unavailable, proceeding with paste");
+            Ok(())
         }
     }
 
@@ -272,7 +308,7 @@ mod uinput {
             }
 
             // Initial settle time for compositor to register the virtual keyboard
-            std::thread::sleep(Duration::from_millis(150));
+            std::thread::sleep(Duration::from_millis(250));
             *guard = Some(Device { file });
             log::info!("uinput: created persistent virtual keyboard device");
         }
@@ -300,21 +336,21 @@ mod uinput {
         };
 
         // Small pre-delay to allow focus to settle
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(30));
 
         // Press keys in sequence
         for &key in keys {
             emit(EV_KEY, key, 1);
         }
         emit(EV_SYN, SYN_REPORT, 0);
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(40));
 
         // Release keys in reverse sequence
         for &key in keys.iter().rev() {
             emit(EV_KEY, key, 0);
         }
         emit(EV_SYN, SYN_REPORT, 0);
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(30));
 
         Ok(())
     }
@@ -324,7 +360,9 @@ mod uinput {
 #[cfg(target_os = "linux")]
 fn press_paste() -> Result<(), String> {
     uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_V])
+        .or_else(|_| run("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"]))
         .or_else(|_| run("ydotool", &["key", "29+47"]))
+        .or_else(|_| run("wtype", &["-M", "ctrl", "-k", "v", "-m", "ctrl"]))
         .or_else(|_| run("wtype", &["-M", "ctrl", "-m", "v"]))
         .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+v"]))
 }

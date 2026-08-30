@@ -726,13 +726,14 @@ fn process_utterance(
     let speech = run_vad(state, audio).map_err(|e| e.to_string())?;
     let (final_audio, duration_ms) = if speech.has_speech {
         (speech.trimmed_audio, speech.speech_duration_ms)
-    } else if !continuous && opendictate_core::audio::vad::compute_rms(audio) > 0.002 {
-        // Fallback for manual hotkey recordings: ensure quiet speech on quiet mics is never blocked.
-        // Trim trailing silence using energy VAD to prevent Whisper repetition loops.
+    } else if !continuous && audio.len() >= 2400 {
+        // Fallback for manual hotkey recordings: ensure speech is never discarded
+        // when the user explicitly pressed the hotkey to speak.
+        // Trim silence using energy VAD to prevent Whisper repetition loops.
         let energy_trimmed = opendictate_core::audio::vad::apply_energy_vad_with_config(
             audio,
             &opendictate_core::audio::vad::VadConfig {
-                energy_threshold: 0.002,
+                energy_threshold: 0.0005,
                 frame_size: 480,
                 min_speech_frames: 1,
                 hangover_frames: 15,
