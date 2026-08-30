@@ -14,6 +14,12 @@
 </p>
 
 <p align="center">
+  <a href="https://opendictate.vercel.app"><strong>🌐 Website</strong></a> &nbsp;•&nbsp;
+  <a href="https://opendictate.vercel.app/docs"><strong>📖 Tutorial & User Guide</strong></a> &nbsp;•&nbsp;
+  <a href="https://github.com/Muhammad-Waleed381/OpenDictate/releases"><strong>⚡ Releases</strong></a>
+</p>
+
+<p align="center">
   <img src="revamp-main.png" alt="OpenDictate Dashboard and Models Hub" width="800">
 </p>
 
@@ -63,6 +69,19 @@ Cloud dictation tools require sending raw audio across the internet, paying recu
 - 🪄 **Optional AI Voice Polish** — Clean up disfluencies, remove filler words ("um", "ah"), or auto-format raw thoughts into bullet points using local SLMs or cloud LLMs (Groq).
 - 📅 **History & Yearly Heatmap** — Full searchable history stored in a local SQLite database with GitHub-style annual activity heatmap.
 - 🔒 **100% Private & Offline** — No accounts, no subscriptions, no telemetry, and zero network calls after model downloads.
+
+---
+
+## 📚 Tutorials & Documentation
+
+Looking for step-by-step setup guides, voice coding cheat sheets, or troubleshooting tips?
+
+👉 **[Read the Full Documentation & Tutorial at opendictate.vercel.app/docs](https://opendictate.vercel.app/docs)**
+
+- 🚀 **[Quickstart Guide](https://opendictate.vercel.app/docs#quickstart)** — 0 to Voice in 60 seconds on Linux, macOS, and Windows.
+- 🎮 **[Voice Commands Reference](https://opendictate.vercel.app/docs#voice-commands)** — Complete list of casing modifiers, editing keys, and navigation macros.
+- 🤖 **[Hardware Acceleration](https://opendictate.vercel.app/docs#models)** — Choosing between FastConformer (80ms), Parakeet TDT, and Whisper.
+- ❓ **[Troubleshooting & FAQs](https://opendictate.vercel.app/docs#troubleshooting)** — Linux `/dev/uinput` configuration and macOS permissions.
 
 ---
 
