@@ -293,9 +293,8 @@ export function ModelCard() {
                         Coming soon
                       </span>
                     )}
-                    {model.engine_key != null &&
-                      model.installed &&
-                      isActive ? (
+                    {model.installed && (
+                      model.engine_key != null && isActive ? (
                         <span className="ml-auto animate-od-blink border border-primary-foreground px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
                           In use
                         </span>
@@ -315,7 +314,8 @@ export function ModelCard() {
                         >
                           Use
                         </Button>
-                      )}
+                      )
+                    )}
                   </div>
                   {progress && (
                     <div className="flex flex-col gap-1">

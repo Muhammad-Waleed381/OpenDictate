@@ -1,7 +1,7 @@
 import { useStore } from "@/lib/store";
 import { ModelCard } from "@/components/ModelCard";
 import { Badge } from "@/components/ui/badge";
-import { Cpu, HardDrive, CheckCircle2 } from "lucide-react";
+import { Cpu, HardDrive, CheckCircle2, Info } from "lucide-react";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "0 MB";
@@ -56,6 +56,14 @@ export function ModelsTab() {
             </Badge>
           </div>
         </div>
+      </div>
+
+      {/* Model Loading / Cold Start Disclaimer */}
+      <div className="flex items-center gap-2.5 border-2 border-border bg-card/60 px-3.5 py-2.5 text-xs text-muted-foreground">
+        <Info className="size-4 shrink-0 text-muted-foreground" />
+        <span>
+          <strong className="text-foreground">Note:</strong> First transcription after opening app will be slow due to initial model loading. Subsequent transcriptions will be instantaneous.
+        </span>
       </div>
 
       {/* Model Catalog & Actions */}

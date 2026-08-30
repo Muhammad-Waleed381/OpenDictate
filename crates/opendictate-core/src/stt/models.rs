@@ -509,6 +509,8 @@ pub fn download_to_with_progress_cancel(
     let mut file = File::create(dest)?;
     let mut received = 0u64;
     let mut chunk = [0u8; 64 * 1024];
+    let mut last_progress_emit = std::time::Instant::now();
+    let mut last_emitted_bytes = 0u64;
     loop {
         if is_cancelled() {
             drop(file);
@@ -521,11 +523,22 @@ pub fn download_to_with_progress_cancel(
         }
         file.write_all(&chunk[..n])?;
         received += n as u64;
-        on_progress(received, total);
+
+        let elapsed = last_progress_emit.elapsed();
+        if elapsed.as_millis() >= 50
+            || received - last_emitted_bytes >= 256 * 1024
+            || (total > 0 && received >= total)
+        {
+            on_progress(received, total);
+            last_progress_emit = std::time::Instant::now();
+            last_emitted_bytes = received;
+        }
+
         if received.is_multiple_of(4 * 1024 * 1024) {
             log::info!("downloaded {received} bytes -> {}", dest.display());
         }
     }
+    on_progress(received, total);
     if is_cancelled() {
         drop(file);
         let _ = std::fs::remove_file(dest);

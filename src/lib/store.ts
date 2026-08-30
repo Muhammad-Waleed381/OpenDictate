@@ -8,6 +8,7 @@ export interface ModelProgress {
   speedBytesPerSec?: number;
   etaSeconds?: number;
   lastUpdated?: number;
+  lastSampleBytes?: number;
 }
 
 interface OpenDictateStore {
@@ -95,23 +96,49 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
       // from the previous attempt instead of carrying it over.
       if (existing && progress.received < existing.received) {
         const rest = state.modelProgress.filter((p) => p.file !== progress.file);
-        return { modelProgress: [...rest, { ...progress, lastUpdated: now }] };
+        return {
+          modelProgress: [
+            ...rest,
+            {
+              ...progress,
+              lastUpdated: now,
+              lastSampleBytes: progress.received,
+              speedBytesPerSec: 0,
+              etaSeconds: undefined,
+            },
+          ],
+        };
       }
+
       let speedBytesPerSec = existing?.speedBytesPerSec;
       let etaSeconds = existing?.etaSeconds;
+      let lastUpdated = existing?.lastUpdated ?? now;
+      let lastSampleBytes = existing?.lastSampleBytes ?? (existing?.received ?? progress.received);
+
       if (existing && existing.lastUpdated && now > existing.lastUpdated) {
         const dt = (now - existing.lastUpdated) / 1000;
-        const db = progress.received - existing.received;
-        if (dt >= 0.25 && db >= 0) {
-          const currentSpeed = db / dt;
-          speedBytesPerSec = existing.speedBytesPerSec
-            ? existing.speedBytesPerSec * 0.7 + currentSpeed * 0.3
-            : currentSpeed;
-          if (speedBytesPerSec > 0 && progress.total > progress.received) {
-            etaSeconds = Math.round((progress.total - progress.received) / speedBytesPerSec);
+        if (dt >= 0.25) {
+          const sampleBytes = existing.lastSampleBytes ?? existing.received;
+          const db = progress.received - sampleBytes;
+          if (db >= 0) {
+            const currentSpeed = db / dt;
+            // Smooth speed with exponential moving average (60% previous, 40% current)
+            speedBytesPerSec =
+              existing.speedBytesPerSec && existing.speedBytesPerSec > 0
+                ? existing.speedBytesPerSec * 0.6 + currentSpeed * 0.4
+                : currentSpeed;
+            if (speedBytesPerSec > 0 && progress.total > progress.received) {
+              etaSeconds = Math.max(1, Math.round((progress.total - progress.received) / speedBytesPerSec));
+            }
           }
+          lastUpdated = now;
+          lastSampleBytes = progress.received;
         }
+      } else {
+        lastUpdated = now;
+        lastSampleBytes = progress.received;
       }
+
       const rest = state.modelProgress.filter((p) => p.file !== progress.file);
       if (progress.total > 0 && progress.received >= progress.total) {
         return { modelProgress: rest };
@@ -123,7 +150,8 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
             ...progress,
             speedBytesPerSec,
             etaSeconds,
-            lastUpdated: existing?.lastUpdated && now - existing.lastUpdated < 250 ? existing.lastUpdated : now,
+            lastUpdated,
+            lastSampleBytes,
           },
         ],
       };
