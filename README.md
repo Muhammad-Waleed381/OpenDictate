@@ -66,6 +66,20 @@ Cloud dictation tools require sending raw audio across the internet, paying recu
 
 ---
 
+## 📸 App Showcase
+
+| **Local Neural Models Hub** | **Productivity & Words Heatmap** |
+| :---: | :---: |
+| <img src="docs/screenshots/models.png" alt="OpenDictate Models Hub" width="450"> | <img src="docs/screenshots/activity.png" alt="OpenDictate Activity Heatmap" width="450"> |
+| *Manage local Whisper & Parakeet models with CUDA GPU acceleration* | *Track your typing speed, streak days, and yearly activity* |
+
+| **Voice Snippets & Templates** | **Searchable Dictation History** |
+| :---: | :---: |
+| <img src="docs/screenshots/snippets.png" alt="OpenDictate Snippets" width="450"> | <img src="docs/screenshots/history.png" alt="OpenDictate History" width="450"> |
+| *Expand multi-line boilerplates instantly by voice trigger* | *Local SQLite database of all transcribed utterances* |
+
+---
+
 ## 💻 Platform Support
 
 | Platform | Status | Input Injection | Autostart Support | Package Types |
