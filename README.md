@@ -23,7 +23,7 @@
 
 Get the latest installer for your operating system directly from [Releases](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest):
 
-| 🪟 Windows | 🍎 macOS | 🐧 Linux |
+| 🪟 Windows (Experimental) | 🍎 macOS | 🐧 Linux |
 | :---: | :---: | :---: |
 | [**Download Setup (.exe)**](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest) / [.msi](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest) | [**Download DMG (.dmg)**](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest) | [**Download AppImage**](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest) / [.deb](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest) |
 | *Windows 10 / 11 (x64)* | *Universal (Apple Silicon & Intel)* | *Ubuntu / Debian / Fedora / Arch* |
@@ -38,7 +38,7 @@ Cloud dictation tools require sending raw audio across the internet, paying recu
 | :--- | :---: | :---: | :---: | :---: |
 | **Pricing** | **100% Free & Open Source (MIT)** | \$12 – \$20 / month | \$8 / month or \$199 | Built-in |
 | **Privacy & Cloud** | **100% Local (Zero Cloud Required)** | Cloud API dependency | Local (Mac only) | Cloud / Telemetry |
-| **Platform Support** | **Windows, macOS, Linux** | Mac & Windows | macOS only | Single OS |
+| **Platform Support** | **Linux, macOS, Windows (Exp)** | Mac & Windows | macOS only | Single OS |
 | **AI Speech Models** | **Whisper, FastConformer 80ms, Parakeet** | Proprietary Cloud | Whisper | Proprietary |
 | **Voice Actions / Coding** | **Yes** (Casing, navigation, undo, edit) | Partial | Partial | Basic |
 | **Latency** | **~80ms** (FastConformer Streaming) | ~500ms+ (Network lag) | ~300ms | ~400ms |
@@ -70,9 +70,9 @@ Cloud dictation tools require sending raw audio across the internet, paying recu
 
 | Platform | Status | Input Injection | Autostart Support | Package Types |
 | :--- | :---: | :--- | :--- | :--- |
-| **Windows** | ✅ Supported | `SendInput` API (Enigo) | Windows Registry (`Run`) | `.exe` (NSIS), `.msi` |
-| **macOS** | ✅ Supported | `CGEvent` & Native Modifiers | LaunchAgent Plist | Universal `.dmg` (Apple Silicon & Intel) |
 | **Linux** | ✅ Supported | Persistent `/dev/uinput` device | XDG Autostart (`.desktop`) | `.AppImage`, `.deb`, `.rpm` |
+| **macOS** | ✅ Supported | `CGEvent` & Native Modifiers | LaunchAgent Plist | Universal `.dmg` (Apple Silicon & Intel) |
+| **Windows** | 🧪 Experimental | `SendInput` API (Enigo) | Windows Registry (`Run`) | `.exe` (NSIS), `.msi` |
 
 ---
 
