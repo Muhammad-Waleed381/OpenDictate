@@ -172,12 +172,6 @@ OpenDictate is built on strict local-first principles:
 
 ---
 
-## ⭐ Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Muhammad-Waleed381/OpenDictate&type=Date)](https://star-history.com/#Muhammad-Waleed381/OpenDictate&Date)
-
----
-
 ## 📜 License & Disclaimers
 
 This project is licensed under the [MIT License](LICENSE) © Muhammad Waleed.
