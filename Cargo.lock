@@ -3525,6 +3525,7 @@ name = "opendictate-core"
 version = "0.2.1"
 dependencies = [
  "bzip2 0.5.2",
+ "chrono",
  "cpal",
  "env_logger",
  "libpulse-sys",

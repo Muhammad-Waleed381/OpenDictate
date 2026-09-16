@@ -15,6 +15,7 @@ gpu-shared = ["sherpa-onnx/shared"]
 
 [dependencies]
 bzip2 = "0.5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 cpal = "0.15"
 env_logger = "0.11"
 sherpa-onnx = { version = "1.12", default-features = false }

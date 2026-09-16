@@ -446,6 +446,68 @@ pub fn fuzzy_match_trigger(spoken: &str, triggers: &[String], threshold: f32) ->
     best
 }
 
+/// Expands dynamic template variables in snippet text.
+///
+/// Supported placeholders (case-insensitive):
+/// - `{date}` / `{DATE}`: Current local date as `YYYY-MM-DD`
+/// - `{time}` / `{TIME}`: Current local time as `HH:MM`
+/// - `{datetime}` / `{DATETIME}`: Current local datetime as `YYYY-MM-DD HH:MM`
+/// - `{clipboard}` / `{CLIPBOARD}`: Contents of clipboard, or empty string if None/empty
+///
+/// Any unrecognized placeholders (e.g. `{unknown}`) and malformed braces are preserved as-is.
+pub fn expand_snippet_template(template: &str, clipboard: Option<&str>) -> String {
+    let now = chrono::Local::now();
+    let date_str = now.format("%Y-%m-%d").to_string();
+    let time_str = now.format("%H:%M").to_string();
+    let datetime_str = now.format("%Y-%m-%d %H:%M").to_string();
+    let clipboard_str = clipboard.unwrap_or("");
+
+    let mut result = String::with_capacity(template.len());
+    let mut cursor = 0;
+
+    while cursor < template.len() {
+        if let Some(open_rel) = template[cursor..].find('{') {
+            let open_idx = cursor + open_rel;
+            result.push_str(&template[cursor..open_idx]);
+
+            if let Some(close_rel) = template[open_idx + 1..].find('}') {
+                let close_idx = open_idx + 1 + close_rel;
+                let candidate = &template[open_idx + 1..close_idx];
+
+                if let Some(inner_open_rel) = candidate.rfind('{') {
+                    // There is an unclosed '{' before '}' (e.g. "{prefix {date}")
+                    let inner_open_idx = open_idx + 1 + inner_open_rel;
+                    result.push_str(&template[open_idx..inner_open_idx]);
+                    cursor = inner_open_idx;
+                } else {
+                    if candidate.eq_ignore_ascii_case("date") {
+                        result.push_str(&date_str);
+                    } else if candidate.eq_ignore_ascii_case("time") {
+                        result.push_str(&time_str);
+                    } else if candidate.eq_ignore_ascii_case("datetime") {
+                        result.push_str(&datetime_str);
+                    } else if candidate.eq_ignore_ascii_case("clipboard") {
+                        result.push_str(clipboard_str);
+                    } else {
+                        // Unknown placeholder, preserve verbatim including braces
+                        result.push_str(&template[open_idx..=close_idx]);
+                    }
+                    cursor = close_idx + 1;
+                }
+            } else {
+                // No closing '}' found; append remainder as-is
+                result.push_str(&template[open_idx..]);
+                break;
+            }
+        } else {
+            result.push_str(&template[cursor..]);
+            break;
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::correct_dictionary_terms;
@@ -634,3 +696,160 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod snippet_template_tests {
+    use super::expand_snippet_template;
+    use chrono::Local;
+
+    #[test]
+    fn expands_date_placeholders() {
+        let before = Local::now();
+        let result = expand_snippet_template("Date: {date}", None);
+        let after = Local::now();
+        let expected_before = format!("Date: {}", before.format("%Y-%m-%d"));
+        let expected_after = format!("Date: {}", after.format("%Y-%m-%d"));
+        assert!(
+            result == expected_before || result == expected_after,
+            "result {result:?} should match {expected_before:?} or {expected_after:?}"
+        );
+
+        let result_upper = expand_snippet_template("Date: {DATE}", None);
+        assert!(
+            result_upper == expected_before || result_upper == expected_after,
+            "result {result_upper:?} should match {expected_before:?} or {expected_after:?}"
+        );
+    }
+
+    #[test]
+    fn expands_time_placeholders() {
+        let before = Local::now();
+        let result = expand_snippet_template("Time: {time}", None);
+        let after = Local::now();
+        let expected_before = format!("Time: {}", before.format("%H:%M"));
+        let expected_after = format!("Time: {}", after.format("%H:%M"));
+        assert!(
+            result == expected_before || result == expected_after,
+            "result {result:?} should match {expected_before:?} or {expected_after:?}"
+        );
+
+        let result_upper = expand_snippet_template("Time: {TIME}", None);
+        assert!(
+            result_upper == expected_before || result_upper == expected_after,
+            "result {result_upper:?} should match {expected_before:?} or {expected_after:?}"
+        );
+    }
+
+    #[test]
+    fn expands_datetime_placeholders() {
+        let before = Local::now();
+        let result = expand_snippet_template("Now: {datetime}", None);
+        let after = Local::now();
+        let expected_before = format!("Now: {}", before.format("%Y-%m-%d %H:%M"));
+        let expected_after = format!("Now: {}", after.format("%Y-%m-%d %H:%M"));
+        assert!(
+            result == expected_before || result == expected_after,
+            "result {result:?} should match {expected_before:?} or {expected_after:?}"
+        );
+
+        let result_upper = expand_snippet_template("Now: {DATETIME}", None);
+        assert!(
+            result_upper == expected_before || result_upper == expected_after,
+            "result {result_upper:?} should match {expected_before:?} or {expected_after:?}"
+        );
+    }
+
+    #[test]
+    fn expands_clipboard_placeholder() {
+        assert_eq!(
+            expand_snippet_template("Value: {clipboard}", Some("copied text")),
+            "Value: copied text"
+        );
+        assert_eq!(
+            expand_snippet_template("Value: {CLIPBOARD}", Some("copied text")),
+            "Value: copied text"
+        );
+    }
+
+    #[test]
+    fn handles_empty_or_none_clipboard() {
+        assert_eq!(
+            expand_snippet_template("Value: {clipboard}", None),
+            "Value: "
+        );
+        assert_eq!(
+            expand_snippet_template("Value: {clipboard}", Some("")),
+            "Value: "
+        );
+    }
+
+    #[test]
+    fn preserves_unknown_placeholders() {
+        assert_eq!(
+            expand_snippet_template("Hello {name}, your code is {code}.", None),
+            "Hello {name}, your code is {code}."
+        );
+        assert_eq!(
+            expand_snippet_template("{unknown}", None),
+            "{unknown}"
+        );
+    }
+
+    #[test]
+    fn handles_plain_text_and_empty() {
+        assert_eq!(expand_snippet_template("", None), "");
+        assert_eq!(
+            expand_snippet_template("Simple text without variables", None),
+            "Simple text without variables"
+        );
+    }
+
+    #[test]
+    fn handles_malformed_braces() {
+        let now = Local::now();
+        let expected_date = now.format("%Y-%m-%d").to_string();
+        assert_eq!(expand_snippet_template("{", None), "{");
+        assert_eq!(expand_snippet_template("}", None), "}");
+        assert_eq!(expand_snippet_template("{}", None), "{}");
+        assert_eq!(expand_snippet_template("{date", None), "{date");
+        assert_eq!(
+            expand_snippet_template("{date} {time", None),
+            format!("{expected_date} {{time")
+        );
+    }
+
+    #[test]
+    fn does_not_recursively_expand_clipboard() {
+        assert_eq!(
+            expand_snippet_template("Clip: {clipboard}", Some("{date} and {time}")),
+            "Clip: {date} and {time}"
+        );
+    }
+
+    #[test]
+    fn handles_multiple_and_mixed_placeholders() {
+        let now = Local::now();
+        let expected_date = now.format("%Y-%m-%d").to_string();
+        let expected_time = now.format("%H:%M").to_string();
+        let template = "[{date} {time}] {clipboard} - Status: {status}";
+        let result = expand_snippet_template(template, Some("Task finished"));
+        assert_eq!(
+            result,
+            format!("[{expected_date} {expected_time}] Task finished - Status: {{status}}")
+        );
+    }
+
+    #[test]
+    fn handles_unicode_characters() {
+        let now = Local::now();
+        let expected_date = now.format("%Y-%m-%d").to_string();
+        let template = "Hej världen! 🚀 Idag är {date}, innehåll: {clipboard}";
+        let result = expand_snippet_template(template, Some("Café ☕"));
+        assert_eq!(
+            result,
+            format!("Hej världen! 🚀 Idag är {expected_date}, innehåll: Café ☕")
+        );
+    }
+}
+
+
