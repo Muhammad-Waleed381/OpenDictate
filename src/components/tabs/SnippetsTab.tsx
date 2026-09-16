@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from "react";
+import { useState, useRef, type ChangeEvent } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -18,6 +18,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
+const SNIPPET_PLACEHOLDERS = ["{date}", "{time}", "{datetime}", "{clipboard}"] as const;
+
 export function SnippetsTab() {
   const snippets = useStore((s) => s.snippets);
   const lastResult = useStore((s) => s.lastResult);
@@ -27,6 +29,45 @@ export function SnippetsTab() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editTrigger, setEditTrigger] = useState("");
   const [editText, setEditText] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const handleInsertPlaceholder = (token: string, isEdit = false) => {
+    const textarea = isEdit ? editTextareaRef.current : textareaRef.current;
+    const current = isEdit ? editText : text;
+
+    if (textarea && document.activeElement === textarea) {
+      const start = textarea.selectionStart ?? current.length;
+      const end = textarea.selectionEnd ?? current.length;
+      const before = current.slice(0, start);
+      const after = current.slice(end);
+      const next = `${before}${token}${after}`;
+      if (isEdit) {
+        setEditText(next);
+      } else {
+        setText(next);
+      }
+      setTimeout(() => {
+        textarea.focus();
+        const nextPos = start + token.length;
+        textarea.setSelectionRange(nextPos, nextPos);
+      }, 0);
+    } else {
+      const next = current
+        ? (current.endsWith(" ") ? `${current}${token}` : `${current} ${token}`)
+        : token;
+      if (isEdit) {
+        setEditText(next);
+      } else {
+        setText(next);
+      }
+      if (textarea) {
+        setTimeout(() => {
+          textarea.focus();
+        }, 0);
+      }
+    }
+  };
 
   const handleAdd = async () => {
     if (!trigger.trim() || !text.trim()) return;
@@ -179,12 +220,35 @@ export function SnippetsTab() {
             From last dictation
           </Button>
         </div>
-        <Textarea
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          placeholder="Template text that gets inserted when you say: “insert snippet <trigger>”…"
-          rows={3}
-        />
+        <div className="flex flex-col gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              Placeholders:
+            </span>
+            {SNIPPET_PLACEHOLDERS.map((token) => (
+              <button
+                key={token}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => handleInsertPlaceholder(token, false)}
+                className="inline-flex h-6 items-center border border-border bg-secondary/70 px-2 font-mono text-xs font-semibold text-secondary-foreground transition-all hover:bg-primary hover:text-primary-foreground active:translate-x-[1px] active:translate-y-[1px] cursor-pointer"
+                title={`Insert ${token}`}
+              >
+                {token}
+              </button>
+            ))}
+          </div>
+          <Textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            placeholder="Template text that gets inserted when you say: “insert snippet <trigger>”…"
+            rows={3}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Placeholders like &#123;date&#125;, &#123;time&#125;, &#123;datetime&#125;, and &#123;clipboard&#125; are dynamically replaced when inserted.
+          </p>
+        </div>
         </CardContent>
       </Card>
 
@@ -233,12 +297,35 @@ export function SnippetsTab() {
                       />
                     </TableCell>
                     <TableCell className="align-top">
-                      <Textarea
-                        value={editText}
-                        onChange={(e) => setEditText(e.target.value)}
-                        rows={3}
-                        aria-label="Edit snippet text"
-                      />
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                            Placeholders:
+                          </span>
+                          {SNIPPET_PLACEHOLDERS.map((token) => (
+                            <button
+                              key={token}
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => handleInsertPlaceholder(token, true)}
+                              className="inline-flex h-5 items-center border border-border bg-secondary/70 px-1.5 font-mono text-[11px] font-semibold text-secondary-foreground transition-all hover:bg-primary hover:text-primary-foreground active:translate-x-[1px] active:translate-y-[1px] cursor-pointer"
+                              title={`Insert ${token}`}
+                            >
+                              {token}
+                            </button>
+                          ))}
+                        </div>
+                        <Textarea
+                          ref={editTextareaRef}
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          rows={3}
+                          aria-label="Edit snippet text"
+                        />
+                        <p className="text-[10px] text-muted-foreground">
+                          Placeholders like &#123;date&#125;, &#123;time&#125;, &#123;datetime&#125;, and &#123;clipboard&#125; are dynamically replaced when inserted.
+                        </p>
+                      </div>
                     </TableCell>
                     <TableCell className="align-top">
                       <div className="flex gap-1">

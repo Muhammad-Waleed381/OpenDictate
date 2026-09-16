@@ -1108,10 +1108,15 @@ fn handle_snippet_command(app: &AppHandle, state: &AppState, text: &str) -> Opti
         }
     };
 
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let clipboard_text = app.clipboard().read_text().ok();
+    let expanded_snippet_text =
+        opendictate_core::text::expand_snippet_template(&snippet.text, clipboard_text.as_deref());
+
     let inserted = if tail.is_empty() {
-        snippet.text.clone()
+        expanded_snippet_text
     } else {
-        format!("{} {}", snippet.text.trim(), tail)
+        format!("{} {}", expanded_snippet_text.trim(), tail)
     };
 
     if let Err(e) = inject::inject_text(app, &inserted, &insert_mode(state)) {
