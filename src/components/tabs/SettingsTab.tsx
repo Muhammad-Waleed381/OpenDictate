@@ -419,6 +419,21 @@ export function SettingsTab() {
     }
   };
 
+  const handleDockPositionChange = async (position: string | null) => {
+    if (!position) return;
+    const current = useStore.getState().settings;
+    if (!current) return;
+    const pos = position as api.DockPosition;
+    useStore.getState().setSettings({ ...current, dock_position: pos });
+    try {
+      await api.setSettings({ dock_position: pos });
+    } catch {
+      const latest = await api.getSettings().catch(() => null);
+      if (latest) useStore.getState().setSettings(latest);
+      toast.error("Could not save dock position — reverted");
+    }
+  };
+
   const volumeTimer = useRef<number | null>(null);
 
   const handleVolumeChange = (value: number) => {
@@ -454,6 +469,30 @@ export function SettingsTab() {
             <SelectItem value="system">System</SelectItem>
             <SelectItem value="light">Light</SelectItem>
             <SelectItem value="dark">Dark</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="dock-position">Dock placement</Label>
+          <p className="text-xs text-muted-foreground">
+            Choose where the floating dock pill anchors on screen.
+          </p>
+        </div>
+        <Select
+          value={settings?.dock_position ?? "bottom_right"}
+          onValueChange={handleDockPositionChange}
+        >
+          <SelectTrigger id="dock-position" className="w-52">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="bottom_right">Bottom Right (Default)</SelectItem>
+            <SelectItem value="bottom_center">Bottom Center</SelectItem>
+            <SelectItem value="bottom_left">Bottom Left</SelectItem>
+            <SelectItem value="top_right">Top Right</SelectItem>
+            <SelectItem value="top_left">Top Left</SelectItem>
           </SelectContent>
         </Select>
       </div>

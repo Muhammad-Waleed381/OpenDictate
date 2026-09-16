@@ -32,6 +32,7 @@ pub struct SettingsPatch {
     pub polish_mode: Option<String>,
     pub groq_api_key: Option<String>,
     pub groq_model: Option<String>,
+    pub dock_position: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +81,8 @@ pub struct Settings {
     pub groq_api_key: Option<String>,
     #[serde(default = "default_groq_model")]
     pub groq_model: Option<String>,
+    #[serde(default = "default_dock_position")]
+    pub dock_position: String,
 }
 
 fn default_stt_model() -> String {
@@ -126,6 +129,10 @@ fn default_groq_model() -> Option<String> {
     Some("llama-3.1-8b-instant".to_string())
 }
 
+fn default_dock_position() -> String {
+    "bottom_right".to_string()
+}
+
 /// macOS reserves the Ctrl+Alt/Option row for input-source switching and treats
 /// Cmd as the primary modifier, so `ctrl+alt+space` is both unidiomatic and
 /// liable to collide there. Cmd+Space (Spotlight) and Cmd+Option+Space (Finder
@@ -167,6 +174,7 @@ impl Default for Settings {
             polish_mode: default_polish_mode(),
             groq_api_key: None,
             groq_model: default_groq_model(),
+            dock_position: default_dock_position(),
         }
     }
 }

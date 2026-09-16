@@ -410,6 +410,7 @@ mod tests {
         assert_eq!(s.hotkey, "ctrl+k");
         assert!(s.onboarded);
         assert_eq!(s.stt_model, "parakeet-tdt-ctc-110m-int8");
+        assert_eq!(s.dock_position, "bottom_right");
         assert!(!s.spoken_punctuation);
         assert!(!s.audio_feedback);
         assert_eq!(s.audio_feedback_volume, 0.5);
@@ -422,6 +423,7 @@ mod tests {
         assert!(!raw.contains("sttModel"));
         assert!(raw.contains("\"spoken_punctuation\""));
         assert!(raw.contains("\"audio_feedback\""));
+        assert!(raw.contains("\"dock_position\""));
 
         let mut patched = s;
         patched.audio_feedback = true;
@@ -430,6 +432,26 @@ mod tests {
         let reloaded = load_settings(&conn);
         assert!(reloaded.audio_feedback);
         assert_eq!(reloaded.audio_feedback_volume, 0.25);
+    }
+
+    #[test]
+    fn settings_backwards_compatible_dock_position_default() {
+        let json_without_dock = r#"{"hotkey":"ctrl+space","engine":"parakeet","language":"auto","onboarded":true}"#;
+        let s: Settings = serde_json::from_str(json_without_dock).unwrap();
+        assert_eq!(s.dock_position, "bottom_right");
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('app', ?1)",
+            [json_without_dock],
+        )
+        .unwrap();
+        let loaded = load_settings(&conn);
+        assert_eq!(loaded.dock_position, "bottom_right");
     }
 
     #[test]

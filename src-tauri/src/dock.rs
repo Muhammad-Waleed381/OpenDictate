@@ -23,15 +23,41 @@ fn current_width() -> u32 {
     }
 }
 
-fn bottom_right(win: &WebviewWindow, width: u32, height: u32) -> PhysicalPosition<i32> {
+fn calculate_position(win: &WebviewWindow, width: u32, height: u32, position: &str) -> PhysicalPosition<i32> {
     let default = PhysicalPosition { x: 100, y: 16 };
     let Some(monitor) = win.current_monitor().ok().flatten() else {
         return default;
     };
     let size = monitor.size();
-    let x = (size.width.saturating_sub(width) as f64 - MARGIN).max(0.0) as i32;
-    let y = (size.height.saturating_sub(height) as f64 - MARGIN).max(0.0) as i32;
+    let (x, y) = match position {
+        "bottom_center" => (
+            ((size.width.saturating_sub(width) as f64) / 2.0).max(0.0) as i32,
+            (size.height.saturating_sub(height) as f64 - MARGIN).max(0.0) as i32,
+        ),
+        "bottom_left" => (
+            MARGIN.max(0.0) as i32,
+            (size.height.saturating_sub(height) as f64 - MARGIN).max(0.0) as i32,
+        ),
+        "top_right" => (
+            (size.width.saturating_sub(width) as f64 - MARGIN).max(0.0) as i32,
+            MARGIN.max(0.0) as i32,
+        ),
+        "top_left" => (
+            MARGIN.max(0.0) as i32,
+            MARGIN.max(0.0) as i32,
+        ),
+        _ => (
+            (size.width.saturating_sub(width) as f64 - MARGIN).max(0.0) as i32,
+            (size.height.saturating_sub(height) as f64 - MARGIN).max(0.0) as i32,
+        ),
+    };
     PhysicalPosition { x, y }
+}
+
+pub fn reposition(app: &AppHandle) {
+    LAST_ASSERT_MS.store(0, Ordering::Relaxed);
+    apply_dock_size(app);
+    enforce(app);
 }
 
 pub fn init(app: &AppHandle) {
@@ -90,9 +116,9 @@ pub fn ensure(app: &AppHandle) {
     apply_dock_size(app);
 }
 
-/// Parks the dock at the bottom-right corner. The window size is constrained
+/// Parks the dock at the configured anchor position. The window size is constrained
 /// by the config (min/max 210x29) and WebKit's natural height request; the
-/// pill content is bottom-aligned so it hugs the corner regardless.
+/// pill content is aligned so it hugs the corner regardless.
 fn apply_dock_size(app: &AppHandle) {
     if let Some(win) = window(app) {
         let width = current_width();
@@ -101,7 +127,11 @@ fn apply_dock_size(app: &AppHandle) {
             width,
             height: DOCK_SIZE as u32,
         });
-        let target = bottom_right(&win, size.width, size.height);
+        let dock_position = app
+            .try_state::<crate::state::AppState>()
+            .and_then(|s| s.settings.lock().ok().map(|settings| settings.dock_position.clone()))
+            .unwrap_or_else(|| "bottom_right".to_string());
+        let target = calculate_position(&win, size.width, size.height, &dock_position);
         let placed = win
             .outer_position()
             .ok()

@@ -199,6 +199,7 @@ pub fn reset_settings(
         db::save_settings(&conn, &default_settings).map_err(|e| e.to_string())?;
     }
     let _ = crate::hotkey::register(&app, &state, &default_settings.hotkey);
+    crate::dock::reposition(&app);
     let _ = app.emit("settings-changed", serde_json::json!({}));
     Ok(default_settings)
 }
@@ -420,9 +421,27 @@ pub fn set_settings(
             current.groq_model = Some(groq_model.trim().to_string());
         }
     }
+    let mut dock_changed = false;
+    if let Some(dock_pos) = &settings.dock_position {
+        let valid = matches!(
+            dock_pos.as_str(),
+            "bottom_right" | "bottom_center" | "bottom_left" | "top_right" | "top_left"
+        );
+        if valid {
+            let changed = current.dock_position != *dock_pos;
+            current.dock_position = dock_pos.clone();
+            if changed {
+                dock_changed = true;
+            }
+        }
+    }
     let gpu_mode_now = current.gpu.clone();
     let settings = current.clone();
     drop(current);
+
+    if dock_changed {
+        crate::dock::reposition(&app);
+    }
 
     if hotkey_changed {
         if let Err(e) = crate::hotkey::register(&app, &state, &settings.hotkey) {

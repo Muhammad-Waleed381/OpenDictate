@@ -23,6 +23,13 @@ export interface ModelInfo {
   streaming: boolean;
 }
 
+export type DockPosition =
+  | "bottom_right"
+  | "bottom_center"
+  | "bottom_left"
+  | "top_right"
+  | "top_left";
+
 export interface Settings {
   gpu?: string;
   hotkey: string;
@@ -48,6 +55,7 @@ export interface Settings {
   polish_mode: "clean" | "bullets";
   groq_api_key?: string | null;
   groq_model?: string | null;
+  dock_position?: "bottom_right" | "bottom_center" | "bottom_left" | "top_right" | "top_left";
 }
 
 export type SettingsPatch = Partial<
@@ -75,6 +83,7 @@ export type SettingsPatch = Partial<
     | "polish_mode"
     | "groq_api_key"
     | "groq_model"
+    | "dock_position"
   >
 >;
 
