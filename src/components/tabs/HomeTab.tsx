@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -45,10 +45,23 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 function ReadyStrip() {
   const mics = useStore((s) => s.mics);
   const mic = useStore((s) => s.mic);
+  const level = useStore((s) => s.level);
+  const recording = useStore((s) => s.recording);
   const settings = useStore((s) => s.settings);
   const catalog = useStore((s) => s.catalog);
   const modelProgress = useStore((s) => s.modelProgress);
   const [downloading, setDownloading] = useState(false);
+  const [testing, setTesting] = useState(false);
+
+  const testingRef = useRef(false);
+  testingRef.current = testing;
+  useEffect(() => {
+    return () => {
+      if (testingRef.current) {
+        api.cancelRecording().catch(() => {});
+      }
+    };
+  }, []);
 
   const activeModel = catalog.find((m) => m.id === settings?.stt_model);
   const progress = activeModel
@@ -63,8 +76,33 @@ function ReadyStrip() {
       await api.setMic(name);
       useStore.getState().setMic(name);
       toast.success(`Microphone: ${micLabel(name, mics)}`);
+      if (testing) {
+        await api.cancelRecording().catch(() => {});
+        await api.startRecording("test");
+      }
     } catch (e) {
       toast.error(`Microphone switch failed: ${String(e)}`);
+    }
+  };
+
+  const handleTestToggle = async () => {
+    if (testing) {
+      try {
+        await api.stopRecording();
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setTesting(false);
+      }
+    } else {
+      setTesting(true);
+      try {
+        await api.cancelRecording().catch(() => {});
+        await api.startRecording("test");
+      } catch (e) {
+        setTesting(false);
+        toast.error(String(e));
+      }
     }
   };
 
@@ -130,6 +168,34 @@ function ReadyStrip() {
               )}
             </SelectContent>
           </Select>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              {testing ? "Testing input…" : (recording ? "Dictating…" : "Input level")}
+            </span>
+            <Button
+              type="button"
+              variant={testing ? "destructive" : "outline"}
+              size="sm"
+              onClick={handleTestToggle}
+            >
+              {testing ? "■ Stop" : "● Test"}
+            </Button>
+          </div>
+          <div className="flex h-4 items-end gap-[2px] border border-border/60 bg-card p-1 rounded-sm">
+            {Array.from({ length: 16 }, (_, i) => {
+              const threshold = i / 15;
+              const active = (testing || recording) && level > threshold;
+              return (
+                <span
+                  key={i}
+                  className={`flex-1 transition-colors duration-75 rounded-[1px] ${
+                    active ? "bg-primary" : "bg-muted/40"
+                  }`}
+                  style={{ height: "100%" }}
+                />
+              );
+            })}
+          </div>
           </CardContent>
         </Card>
 
