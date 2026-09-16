@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
@@ -56,6 +57,7 @@ export function ModelCard() {
   } | null>(null);
   const cancelAllRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [view, setView] = useState<"streaming" | "non-streaming">(() => {
     const active = catalog.find((m) => m.id === settings?.stt_model);
     return active?.streaming ? "streaming" : "non-streaming";
@@ -224,11 +226,50 @@ export function ModelCard() {
   const captionProgress = captionModel ? modelProgress.find((p) => p.file === captionModel.id) : undefined;
   const captionBusy = captionModel ? isModelDownloading(captionModel.id) : false;
   const captionCancelling = captionModel ? isModelCancelling(captionModel.id) : false;
-  const visibleModels = sttModels.filter((m) => m.streaming === (view === "streaming"));
+  const q = searchQuery.trim().toLowerCase();
+  const tabModels = sttModels.filter((m) => m.streaming === (view === "streaming"));
+  const visibleModels = q
+    ? tabModels.filter(
+        (m) =>
+          m.name.toLowerCase().includes(q) ||
+          m.id.toLowerCase().includes(q) ||
+          (m.engine_key ?? "").toLowerCase().includes(q)
+      )
+    : tabModels;
   const missingCount = visibleModels.filter((m) => m.available && !m.installed).length;
+  const otherTab = view === "streaming" ? "non-streaming" : "streaming";
+  const otherTabMatches = q
+    ? sttModels
+        .filter((m) => m.streaming === (otherTab === "streaming"))
+        .filter(
+          (m) =>
+            m.name.toLowerCase().includes(q) ||
+            m.id.toLowerCase().includes(q) ||
+            (m.engine_key ?? "").toLowerCase().includes(q)
+        ).length
+    : 0;
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="relative flex items-center">
+        <Input
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Filter models by name, id, or engine..."
+          className="pr-8"
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery("")}
+            className="absolute right-2.5 flex size-5 items-center justify-center text-xs font-bold text-muted-foreground hover:text-foreground cursor-pointer"
+            aria-label="Clear search"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+
       <div className="flex border-2 border-border">
         {(["streaming", "non-streaming"] as const).map((tab) => (
           <button
@@ -245,7 +286,7 @@ export function ModelCard() {
         ))}
       </div>
 
-      {visibleModels.length > 0 && (
+      {(tabModels.length > 0 || (searchQuery.trim() && catalog.length > 0)) && (
         <div className="flex flex-col gap-2">
           <div className="flex flex-col">
             <h3 className="text-xs font-bold uppercase tracking-widest">
@@ -253,152 +294,195 @@ export function ModelCard() {
             </h3>
             <p className="mb-2 text-xs text-muted-foreground">{SECTION_HINTS[view]}</p>
           </div>
-          <div className="flex flex-col">
-            {visibleModels.map((model, i) => {
-              const progress = modelProgress.find((p) => p.file === model.id);
-              const isActive =
-                model.engine_key != null &&
-                settings?.engine === model.engine_key &&
-                settings?.stt_model === model.id;
-              const busy = isModelDownloading(model.id);
-              const cancelling = isModelCancelling(model.id);
-              const size = modelSize(model);
-              return (
-                <div
-                  key={model.id}
-                  className={`flex flex-col gap-2 border-2 p-3 ${
-                    model.available
-                      ? isActive
-                        ? "border-border bg-primary text-primary-foreground"
-                        : "border-border bg-card"
-                      : "border-muted bg-muted"
-                  } ${i > 0 ? "border-t-0" : ""}`}
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span
-                      className={`flex size-5 shrink-0 items-center justify-center border-2 text-[10px] font-bold ${
-                        model.available
-                          ? isActive
-                            ? "border-primary-foreground bg-primary-foreground text-primary"
-                            : "border-primary bg-primary text-primary-foreground"
-                          : "border-muted-foreground/50 text-muted-foreground"
-                      }`}
-                    >
-                      ASR
-                    </span>
-                    <span className="flex-1 truncate text-sm font-bold tracking-wide uppercase">
-                      {model.name}
-                    </span>
-                    <span
-                      className={`min-w-0 truncate text-[11px] font-bold tracking-wider uppercase tabular-nums ${
-                        isActive ? "text-primary-foreground/70" : "text-muted-foreground"
-                      }`}
-                    >
-                      {size !== null
-                        ? `${formatBytes(size)}${model.installed ? " on disk" : " download"}`
-                        : "size unknown"}
-                    </span>
-                  </div>
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    {model.installed ? (
-                      <>
-                        <span
-                          className={`border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
-                            isActive
-                              ? "border-primary-foreground text-primary bg-primary-foreground"
+          {visibleModels.length > 0 ? (
+            <div className="flex flex-col">
+              {visibleModels.map((model, i) => {
+                const progress = modelProgress.find((p) => p.file === model.id);
+                const isActive =
+                  model.engine_key != null &&
+                  settings?.engine === model.engine_key &&
+                  settings?.stt_model === model.id;
+                const busy = isModelDownloading(model.id);
+                const cancelling = isModelCancelling(model.id);
+                const size = modelSize(model);
+                return (
+                  <div
+                    key={model.id}
+                    className={`flex flex-col gap-2 border-2 p-3 ${
+                      model.available
+                        ? isActive
+                          ? "border-border bg-primary text-primary-foreground"
+                          : "border-border bg-card"
+                        : "border-muted bg-muted"
+                    } ${i > 0 ? "border-t-0" : ""}`}
+                  >
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span
+                        className={`flex size-5 shrink-0 items-center justify-center border-2 text-[10px] font-bold ${
+                          model.available
+                            ? isActive
+                              ? "border-primary-foreground bg-primary-foreground text-primary"
                               : "border-primary bg-primary text-primary-foreground"
-                          }`}
-                        >
-                          ✓ Installed
-                        </span>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className={isActive ? "text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground" : "text-muted-foreground"}
-                          onClick={() => handleDelete(model.id)}
-                        >
-                          Delete
-                        </Button>
-                      </>
-                    ) : model.available ? (
-                      busy ? (
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          disabled={cancelling}
-                          onClick={() => handleCancelDownload(model.id)}
-                        >
-                          {cancelling ? "Cancelling…" : "✕ Cancel"}
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant={isActive ? "outline" : "default"}
-                          className={isActive ? "border-primary-foreground text-primary-foreground shadow-none" : ""}
-                          onClick={() => handleDownload(model.id)}
-                          disabled={anyDownloading}
-                        >
-                          Download
-                        </Button>
-                      )
-                    ) : (
-                      <span className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground">
-                        Coming soon
+                            : "border-muted-foreground/50 text-muted-foreground"
+                        }`}
+                      >
+                        ASR
                       </span>
-                    )}
-                    {model.installed && (
-                      model.engine_key != null && isActive ? (
-                        <span className="ml-auto animate-od-blink border border-primary-foreground px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
-                          In use
+                      <span className="text-sm font-bold tracking-wide uppercase">
+                        {model.name}
+                      </span>
+                      {model.id === "nemo-streaming-fastconformer-ctc-en-80ms" && (
+                        <span className="border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-500 uppercase tracking-wider">
+                          ★ Recommended (Streaming Speed)
                         </span>
-                      ) : streamingTooSlow && model.streaming ? (
-                        <span
-                          className="ml-auto border border-destructive px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-destructive"
-                          title={`This model decodes ~${((modelsStatus?.streaming_rtf_x100 ?? 0) / 100).toFixed(1)}x slower than real time on your CPU — dictation results would be delayed. Pick a non-streaming model instead.`}
-                        >
-                          Too slow for this CPU
+                      )}
+                      {model.id === "parakeet-tdt-ctc-110m-int8" && (
+                        <span className="border border-emerald-500/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-500 uppercase tracking-wider">
+                          ★ Recommended (Default / Balanced)
                         </span>
+                      )}
+                      {model.id === "whisper-turbo-en" && (
+                        <span className="border border-sky-500/50 bg-sky-500/10 px-2 py-0.5 text-[10px] font-bold text-sky-500 uppercase tracking-wider">
+                          ★ Recommended (High Accuracy)
+                        </span>
+                      )}
+                      <span
+                        className={`ml-auto min-w-0 truncate text-[11px] font-bold tracking-wider uppercase tabular-nums ${
+                          isActive ? "text-primary-foreground/70" : "text-muted-foreground"
+                        }`}
+                      >
+                        {size !== null
+                          ? `${formatBytes(size)}${model.installed ? " on disk" : " download"}`
+                          : "size unknown"}
+                      </span>
+                    </div>
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      {model.installed ? (
+                        <>
+                          <span
+                            className={`border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
+                              isActive
+                                ? "border-primary-foreground text-primary bg-primary-foreground"
+                                : "border-primary bg-primary text-primary-foreground"
+                            }`}
+                          >
+                            ✓ Installed
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className={isActive ? "text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground" : "text-muted-foreground"}
+                            onClick={() => handleDelete(model.id)}
+                          >
+                            Delete
+                          </Button>
+                        </>
+                      ) : model.available ? (
+                        busy ? (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            disabled={cancelling}
+                            onClick={() => handleCancelDownload(model.id)}
+                          >
+                            {cancelling ? "Cancelling…" : "✕ Cancel"}
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant={isActive ? "outline" : "default"}
+                            className={isActive ? "border-primary-foreground text-primary-foreground shadow-none" : ""}
+                            onClick={() => handleDownload(model.id)}
+                            disabled={anyDownloading}
+                          >
+                            Download
+                          </Button>
+                        )
                       ) : (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="ml-auto"
-                          onClick={() => handleUse(model.id, model.engine_key!)}
-                        >
-                          Use
-                        </Button>
-                      )
+                        <span className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground">
+                          Coming soon
+                        </span>
+                      )}
+                      {model.installed && (
+                        model.engine_key != null && isActive ? (
+                          <span className="ml-auto animate-od-blink border border-primary-foreground px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
+                            In use
+                          </span>
+                        ) : streamingTooSlow && model.streaming ? (
+                          <span
+                            className="ml-auto border border-destructive px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-destructive"
+                            title={`This model decodes ~${((modelsStatus?.streaming_rtf_x100 ?? 0) / 100).toFixed(1)}x slower than real time on your CPU — dictation results would be delayed. Pick a non-streaming model instead.`}
+                          >
+                            Too slow for this CPU
+                          </span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="ml-auto"
+                            onClick={() => handleUse(model.id, model.engine_key!)}
+                          >
+                            Use
+                          </Button>
+                        )
+                      )}
+                    </div>
+                    {progress && (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
+                          <span>
+                            Downloading…
+                            {progress.speedBytesPerSec && progress.speedBytesPerSec > 0
+                              ? ` (${formatBytes(progress.speedBytesPerSec)}/s)`
+                              : ""}
+                          </span>
+                          <span>
+                            {formatBytes(progress.received)}
+                            {progress.total > 0
+                              ? ` / ${formatBytes(progress.total)}`
+                              : " so far"}
+                            {progress.etaSeconds != null && progress.etaSeconds > 0
+                              ? ` · ETA ${progress.etaSeconds < 60 ? `${progress.etaSeconds}s` : `${Math.floor(progress.etaSeconds / 60)}m ${progress.etaSeconds % 60}s`}`
+                              : ""}
+                          </span>
+                        </div>
+                        <Progress
+                          value={progressPercent(progress.received, progress.total)}
+                          className="w-full"
+                        />
+                      </div>
                     )}
                   </div>
-                  {progress && (
-                    <div className="flex flex-col gap-1">
-                      <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
-                        <span>
-                          Downloading…
-                          {progress.speedBytesPerSec && progress.speedBytesPerSec > 0
-                            ? ` (${formatBytes(progress.speedBytesPerSec)}/s)`
-                            : ""}
-                        </span>
-                        <span>
-                          {formatBytes(progress.received)}
-                          {progress.total > 0
-                            ? ` / ${formatBytes(progress.total)}`
-                            : " so far"}
-                          {progress.etaSeconds != null && progress.etaSeconds > 0
-                            ? ` · ETA ${progress.etaSeconds < 60 ? `${progress.etaSeconds}s` : `${Math.floor(progress.etaSeconds / 60)}m ${progress.etaSeconds % 60}s`}`
-                            : ""}
-                        </span>
-                      </div>
-                      <Progress
-                        value={progressPercent(progress.received, progress.total)}
-                        className="w-full"
-                      />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center border-2 border-dashed border-border p-6 text-center">
+              <p className="text-xs text-muted-foreground">
+                No models match “<span className="font-semibold text-foreground">{searchQuery}</span>”
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => setSearchQuery("")}
+                >
+                  Clear search
+                </Button>
+                {otherTabMatches > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => setView(otherTab)}
+                  >
+                    View in {SECTION_LABELS[otherTab]} ({otherTabMatches})
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
