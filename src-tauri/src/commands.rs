@@ -137,6 +137,7 @@ pub fn ensure_model(id: String, app: AppHandle, state: State<AppState>) -> Resul
             Err(e) => {
                 if cancel_check() {
                     log::info!("model download cancelled: {id_clone}");
+                    opendictate_core::stt::models::remove_model(&id_clone).ok();
                     let _ = app_clone.emit("model-cancelled", serde_json::json!({ "file": id_clone }));
                 } else {
                     let _ = app_clone.emit(
@@ -157,6 +158,7 @@ pub fn cancel_model_download(id: String, app: AppHandle, state: State<AppState>)
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
+    opendictate_core::stt::models::remove_model(&id).ok();
     let _ = app.emit("model-cancelled", serde_json::json!({ "file": id }));
     Ok(())
 }

@@ -493,7 +493,13 @@ pub fn download_to_with_progress_cancel(
         std::fs::create_dir_all(parent).map_err(CoreError::Io)?;
     }
 
-    let response = ureq::get(url)
+    let agent = ureq::Agent::config_builder()
+        .timeout_connect(Some(std::time::Duration::from_secs(15)))
+        .build()
+        .new_agent();
+
+    let response = agent
+        .get(url)
         .call()
         .map_err(|e| CoreError::Download(format!("failed to fetch {url}: {e}")))?;
 
@@ -517,9 +523,22 @@ pub fn download_to_with_progress_cancel(
             let _ = std::fs::remove_file(dest);
             return Err(CoreError::Download("download cancelled by user".to_string()));
         }
-        let n = std::io::Read::read(&mut body, &mut chunk)?;
-        if n == 0 {
-            break;
+        let n = match std::io::Read::read(&mut body, &mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                drop(file);
+                let _ = std::fs::remove_file(dest);
+                if is_cancelled() {
+                    return Err(CoreError::Download("download cancelled by user".to_string()));
+                }
+                return Err(CoreError::Io(e));
+            }
+        };
+        if is_cancelled() {
+            drop(file);
+            let _ = std::fs::remove_file(dest);
+            return Err(CoreError::Download("download cancelled by user".to_string()));
         }
         file.write_all(&chunk[..n])?;
         received += n as u64;
@@ -561,12 +580,34 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn extract_archive(archive_path: &Path, dest: &Path) -> Result<()> {
+fn extract_archive(
+    archive_path: &Path,
+    dest: &Path,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    if is_cancelled() {
+        return Err(CoreError::Download("download cancelled by user".to_string()));
+    }
     let file = File::open(archive_path).map_err(CoreError::Io)?;
     let mut archive = Archive::new(BzDecoder::new(file));
-    archive.unpack(dest).map_err(|e| {
-        CoreError::Download(format!("failed to extract {}: {e}", archive_path.display()))
-    })
+    let entries = archive.entries().map_err(|e| {
+        CoreError::Download(format!("failed to read archive entries {}: {e}", archive_path.display()))
+    })?;
+    for entry in entries {
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
+        let mut entry = entry.map_err(|e| {
+            CoreError::Download(format!("corrupt entry in {}: {e}", archive_path.display()))
+        })?;
+        entry.unpack_in(dest).map_err(|e| {
+            CoreError::Download(format!("failed to unpack entry in {}: {e}", dest.display()))
+        })?;
+    }
+    if is_cancelled() {
+        return Err(CoreError::Download("download cancelled by user".to_string()));
+    }
+    Ok(())
 }
 
 fn clean_after(archive_path: &Path, extract_dir: &Path) {
@@ -583,71 +624,77 @@ fn install_stt_model(
     let archive_path = base.join("parakeet-tdt-ctc-110m.tar.bz2");
     let extract_dir = base.join(".extract");
 
-    for url in [PARAKEET_INT8_ARCHIVE, PARAKEET_ARCHIVE] {
-        if is_cancelled() {
-            clean_after(&archive_path, &extract_dir);
-            return Err(CoreError::Download("download cancelled by user".to_string()));
-        }
-        log::info!("downloading {url} -> {}", archive_path.display());
-        if download_to_with_progress_cancel(
-            url,
-            &archive_path,
-            &mut |received, total| on_progress(STT_MODEL_ID, received, total),
-            is_cancelled,
-        )
-        .is_err()
-        {
+    let res = (|| -> Result<bool> {
+        for url in [PARAKEET_INT8_ARCHIVE, PARAKEET_ARCHIVE] {
             if is_cancelled() {
-                clean_after(&archive_path, &extract_dir);
                 return Err(CoreError::Download("download cancelled by user".to_string()));
             }
-            log::warn!("download failed for {url}, trying next archive");
-            continue;
-        }
-        if extract_dir.exists() {
-            std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
-        }
-        if let Err(e) = extract_archive(&archive_path, &extract_dir) {
-            log::warn!("extraction failed: {e}");
-            continue;
-        }
+            log::info!("downloading {url} -> {}", archive_path.display());
+            if download_to_with_progress_cancel(
+                url,
+                &archive_path,
+                &mut |received, total| on_progress(STT_MODEL_ID, received, total),
+                is_cancelled,
+            )
+            .is_err()
+            {
+                if is_cancelled() {
+                    return Err(CoreError::Download("download cancelled by user".to_string()));
+                }
+                log::warn!("download failed for {url}, trying next archive");
+                continue;
+            }
+            if extract_dir.exists() {
+                std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
+            }
+            if let Err(e) = extract_archive(&archive_path, &extract_dir, is_cancelled) {
+                if is_cancelled() {
+                    return Err(CoreError::Download("download cancelled by user".to_string()));
+                }
+                log::warn!("extraction failed: {e}");
+                continue;
+            }
 
-        let mut files = Vec::new();
-        collect_files(&extract_dir, &mut files);
-        // Prefer the int8 variant: the catalog advertises int8 sizes and the
-        // runtime loads `model.int8.onnx` first (see `find_model_file`).
-        // `collect_files` order is filesystem-dependent, so a plain `find`
-        // could nondeterministically install the ~2x larger fp32 model.
-        let model_file = files
-            .iter()
-            .find(|p| p.file_name().is_some_and(|n| n == "model.int8.onnx"))
-            .or_else(|| {
-                files
-                    .iter()
-                    .find(|p| p.file_name().is_some_and(|n| n == "model.onnx"))
-            });
-        let tokens_file = files
-            .iter()
-            .find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"));
+            let mut files = Vec::new();
+            collect_files(&extract_dir, &mut files);
+            let model_file = files
+                .iter()
+                .find(|p| p.file_name().is_some_and(|n| n == "model.int8.onnx"))
+                .or_else(|| {
+                    files
+                        .iter()
+                        .find(|p| p.file_name().is_some_and(|n| n == "model.onnx"))
+                });
+            let tokens_file = files
+                .iter()
+                .find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"));
 
-        if let (Some(model), Some(tokens)) = (model_file, tokens_file) {
-            let model_dir = stt_model_dir();
-            std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
-            let model_name = model.file_name().unwrap_or_default();
-            std::fs::copy(model, model_dir.join(model_name)).map_err(CoreError::Io)?;
-            std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
-            log::info!(
-                "installed {} + tokens.txt -> {}",
-                model_name.to_string_lossy(),
-                model_dir.display()
-            );
-            clean_after(&archive_path, &extract_dir);
-            return Ok(true);
+            if let (Some(model), Some(tokens)) = (model_file, tokens_file) {
+                if is_cancelled() {
+                    return Err(CoreError::Download("download cancelled by user".to_string()));
+                }
+                let model_dir = stt_model_dir();
+                std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
+                let model_name = model.file_name().unwrap_or_default();
+                std::fs::copy(model, model_dir.join(model_name)).map_err(CoreError::Io)?;
+                std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+                log::info!(
+                    "installed {} + tokens.txt -> {}",
+                    model_name.to_string_lossy(),
+                    model_dir.display()
+                );
+                return Ok(true);
+            }
+            log::warn!("archive {} has no recognizer files, trying next", url);
         }
-        log::warn!("archive {} has no recognizer files, trying next", url);
+        Ok(false)
+    })();
+
+    clean_after(&archive_path, &extract_dir);
+    if res.is_err() && is_cancelled() {
+        let _ = remove_model(STT_MODEL_ID);
     }
-
-    Ok(false)
+    res
 }
 
 fn install_whisper_model(
@@ -661,55 +708,67 @@ fn install_whisper_model(
     let archive_path = base.join(format!("{id}.tar.bz2"));
     let extract_dir = base.join(format!(".extract-{id}"));
 
-    log::info!("downloading {} -> {}", def.url, archive_path.display());
-    download_to_with_progress_cancel(
-        def.url,
-        &archive_path,
-        &mut |received, total| on_progress(id, received, total),
-        is_cancelled,
-    )?;
-    if is_cancelled() {
-        clean_after(&archive_path, &extract_dir);
-        return Err(CoreError::Download("download cancelled by user".to_string()));
-    }
-    if extract_dir.exists() {
-        std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
-    }
-    extract_archive(&archive_path, &extract_dir)?;
+    let res = (|| -> Result<()> {
+        log::info!("downloading {} -> {}", def.url, archive_path.display());
+        download_to_with_progress_cancel(
+            def.url,
+            &archive_path,
+            &mut |received, total| on_progress(id, received, total),
+            is_cancelled,
+        )?;
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
+        if extract_dir.exists() {
+            std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
+        }
+        extract_archive(&archive_path, &extract_dir, is_cancelled)?;
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
 
-    let mut files = Vec::new();
-    collect_files(&extract_dir, &mut files);
-    let encoder = files.iter().find(|p| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with("encoder.onnx"))
-    });
-    let decoder = files.iter().find(|p| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with("decoder.onnx"))
-    });
-    let tokens = files.iter().find(|p| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with("tokens.txt"))
-    });
+        let mut files = Vec::new();
+        collect_files(&extract_dir, &mut files);
+        let encoder = files.iter().find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with("encoder.onnx"))
+        });
+        let decoder = files.iter().find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with("decoder.onnx"))
+        });
+        let tokens = files.iter().find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with("tokens.txt"))
+        });
 
-    let (Some(encoder), Some(decoder), Some(tokens)) = (encoder, decoder, tokens) else {
-        clean_after(&archive_path, &extract_dir);
-        return Err(CoreError::Download(format!(
-            "archive {id} has no encoder/decoder/tokens files"
-        )));
-    };
+        let (Some(encoder), Some(decoder), Some(tokens)) = (encoder, decoder, tokens) else {
+            return Err(CoreError::Download(format!(
+                "archive {id} has no encoder/decoder/tokens files"
+            )));
+        };
 
-    let model_dir = model_dir_for(id);
-    std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
-    std::fs::copy(encoder, model_dir.join("encoder.onnx")).map_err(CoreError::Io)?;
-    std::fs::copy(decoder, model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
-    std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
-    log::info!("installed {id} -> {}", model_dir.display());
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
+
+        let model_dir = model_dir_for(id);
+        std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
+        std::fs::copy(encoder, model_dir.join("encoder.onnx")).map_err(CoreError::Io)?;
+        std::fs::copy(decoder, model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
+        std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+        log::info!("installed {id} -> {}", model_dir.display());
+        Ok(())
+    })();
+
     clean_after(&archive_path, &extract_dir);
-    Ok(())
+    if res.is_err() && is_cancelled() {
+        let _ = remove_model(id);
+    }
+    res
 }
 
 fn install_transducer_model(
@@ -723,61 +782,73 @@ fn install_transducer_model(
     let archive_path = base.join(format!("{id}.tar.bz2"));
     let extract_dir = base.join(format!(".extract-{id}"));
 
-    log::info!("downloading {} -> {}", def.url, archive_path.display());
-    download_to_with_progress_cancel(
-        def.url,
-        &archive_path,
-        &mut |received, total| on_progress(id, received, total),
-        is_cancelled,
-    )?;
-    if is_cancelled() {
-        clean_after(&archive_path, &extract_dir);
-        return Err(CoreError::Download("download cancelled by user".to_string()));
-    }
-    if extract_dir.exists() {
-        std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
-    }
-    extract_archive(&archive_path, &extract_dir)?;
+    let res = (|| -> Result<()> {
+        log::info!("downloading {} -> {}", def.url, archive_path.display());
+        download_to_with_progress_cancel(
+            def.url,
+            &archive_path,
+            &mut |received, total| on_progress(id, received, total),
+            is_cancelled,
+        )?;
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
+        if extract_dir.exists() {
+            std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
+        }
+        extract_archive(&archive_path, &extract_dir, is_cancelled)?;
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
 
-    let mut files = Vec::new();
-    collect_files(&extract_dir, &mut files);
-    let part = |needle: &str| {
-        let mut hits: Vec<_> = files
-            .iter()
-            .filter(|p| {
-                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                    n.ends_with(".onnx") && n.contains(needle)
+        let mut files = Vec::new();
+        collect_files(&extract_dir, &mut files);
+        let part = |needle: &str| {
+            let mut hits: Vec<_> = files
+                .iter()
+                .filter(|p| {
+                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        n.ends_with(".onnx") && n.contains(needle)
+                    })
                 })
-            })
-            .cloned()
-            .collect();
-        hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
-        hits.first().cloned()
-    };
-    let (Some(encoder), Some(decoder), Some(joiner), Some(tokens)) = (
-        part("encoder"),
-        part("decoder"),
-        part("joiner"),
-        files
-            .iter()
-            .find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"))
-            .cloned(),
-    ) else {
-        clean_after(&archive_path, &extract_dir);
-        return Err(CoreError::Download(format!(
-            "archive {id} has no encoder/decoder/joiner/tokens files"
-        )));
-    };
+                .cloned()
+                .collect();
+            hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
+            hits.first().cloned()
+        };
+        let (Some(encoder), Some(decoder), Some(joiner), Some(tokens)) = (
+            part("encoder"),
+            part("decoder"),
+            part("joiner"),
+            files
+                .iter()
+                .find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"))
+                .cloned(),
+        ) else {
+            return Err(CoreError::Download(format!(
+                "archive {id} has no encoder/decoder/joiner/tokens files"
+            )));
+        };
 
-    let model_dir = model_dir_for(id);
-    std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
-    std::fs::copy(encoder, model_dir.join("encoder.onnx")).map_err(CoreError::Io)?;
-    std::fs::copy(decoder, model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
-    std::fs::copy(joiner, model_dir.join("joiner.onnx")).map_err(CoreError::Io)?;
-    std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
-    log::info!("installed {id} -> {}", model_dir.display());
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
+
+        let model_dir = model_dir_for(id);
+        std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
+        std::fs::copy(encoder, model_dir.join("encoder.onnx")).map_err(CoreError::Io)?;
+        std::fs::copy(decoder, model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
+        std::fs::copy(joiner, model_dir.join("joiner.onnx")).map_err(CoreError::Io)?;
+        std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+        log::info!("installed {id} -> {}", model_dir.display());
+        Ok(())
+    })();
+
     clean_after(&archive_path, &extract_dir);
-    Ok(())
+    if res.is_err() && is_cancelled() {
+        let _ = remove_model(id);
+    }
+    res
 }
 
 fn install_nemo_ctc_model(
@@ -791,55 +862,67 @@ fn install_nemo_ctc_model(
     let archive_path = base.join(format!("{id}.tar.bz2"));
     let extract_dir = base.join(format!(".extract-{id}"));
 
-    log::info!("downloading {} -> {}", def.url, archive_path.display());
-    download_to_with_progress_cancel(
-        def.url,
-        &archive_path,
-        &mut |received, total| on_progress(id, received, total),
-        is_cancelled,
-    )?;
-    if is_cancelled() {
-        clean_after(&archive_path, &extract_dir);
-        return Err(CoreError::Download("download cancelled by user".to_string()));
-    }
-    if extract_dir.exists() {
-        std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
-    }
-    extract_archive(&archive_path, &extract_dir)?;
+    let res = (|| -> Result<()> {
+        log::info!("downloading {} -> {}", def.url, archive_path.display());
+        download_to_with_progress_cancel(
+            def.url,
+            &archive_path,
+            &mut |received, total| on_progress(id, received, total),
+            is_cancelled,
+        )?;
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
+        if extract_dir.exists() {
+            std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
+        }
+        extract_archive(&archive_path, &extract_dir, is_cancelled)?;
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
 
-    let mut files = Vec::new();
-    collect_files(&extract_dir, &mut files);
-    let mut hits: Vec<_> = files
-        .iter()
-        .filter(|p| {
-            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                n.ends_with(".onnx") && (n.starts_with("model") || n.contains("conformer"))
+        let mut files = Vec::new();
+        collect_files(&extract_dir, &mut files);
+        let mut hits: Vec<_> = files
+            .iter()
+            .filter(|p| {
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    n.ends_with(".onnx") && (n.starts_with("model") || n.contains("conformer"))
+                })
             })
-        })
-        .cloned()
-        .collect();
-    hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
-    let model_file = hits.first().cloned();
-    let tokens_file = files
-        .iter()
-        .find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"))
-        .cloned();
+            .cloned()
+            .collect();
+        hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
+        let model_file = hits.first().cloned();
+        let tokens_file = files
+            .iter()
+            .find(|p| p.file_name().is_some_and(|n| n == "tokens.txt"))
+            .cloned();
 
-    let (Some(model), Some(tokens)) = (model_file, tokens_file) else {
-        clean_after(&archive_path, &extract_dir);
-        return Err(CoreError::Download(format!(
-            "archive {id} has no model/tokens files"
-        )));
-    };
+        let (Some(model), Some(tokens)) = (model_file, tokens_file) else {
+            return Err(CoreError::Download(format!(
+                "archive {id} has no model/tokens files"
+            )));
+        };
 
-    let model_dir = model_dir_for(id);
-    std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
-    let model_name = model.file_name().unwrap_or_default().to_owned();
-    std::fs::copy(&model, model_dir.join(model_name)).map_err(CoreError::Io)?;
-    std::fs::copy(&tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
-    log::info!("installed {id} -> {}", model_dir.display());
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".to_string()));
+        }
+
+        let model_dir = model_dir_for(id);
+        std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
+        let model_name = model.file_name().unwrap_or_default().to_owned();
+        std::fs::copy(&model, model_dir.join(model_name)).map_err(CoreError::Io)?;
+        std::fs::copy(&tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+        log::info!("installed {id} -> {}", model_dir.display());
+        Ok(())
+    })();
+
     clean_after(&archive_path, &extract_dir);
-    Ok(())
+    if res.is_err() && is_cancelled() {
+        let _ = remove_model(id);
+    }
+    res
 }
 
 pub fn ensure_model(id: &str, on_progress: &mut dyn FnMut(&str, u64, u64)) -> Result<()> {
@@ -1072,5 +1155,24 @@ mod tests {
         assert_eq!(whisper.disk_bytes, 0);
         std::env::remove_var("XDG_DATA_HOME");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn cancellation_aborts_immediately_and_cleans_up() {
+        let tmp = std::env::temp_dir().join("opendictate-test-cancel");
+        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let is_cancelled = || true;
+        let mut progress_called = false;
+        let result = ensure_model_with_cancel(
+            WHISPER_TINY_MODEL_ID,
+            &mut |_, _, _| progress_called = true,
+            &is_cancelled,
+        );
+        std::env::remove_var("XDG_DATA_HOME");
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(result.is_err());
+        assert!(!progress_called);
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("cancelled by user"));
     }
 }
