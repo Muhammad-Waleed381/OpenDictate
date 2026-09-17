@@ -10,7 +10,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
-import { ClipboardPaste, Copy, Pencil, Trash2 } from "lucide-react";
+import { ClipboardPaste, Copy, Pencil, Trash2, Zap } from "lucide-react";
+import { calculateWpm, calculateAggregateSpeed } from "@/lib/utils";
 import {
   Table,
   TableBody,
@@ -51,6 +52,8 @@ export function HistoryTab() {
     if (!q) return history;
     return history.filter((entry) => entry.text.toLowerCase().includes(q));
   }, [history, query]);
+
+  const speedStats = useMemo(() => calculateAggregateSpeed(history), [history]);
 
   const toggleSelectAll = () => {
     if (selectedIds.size === filtered.length) {
@@ -187,6 +190,29 @@ export function HistoryTab() {
 
   return (
     <div className="flex flex-col gap-4">
+      {speedStats && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-2 border-border bg-card p-3 shadow-[2px_2px_0_0_var(--od-shadow)]">
+          <div className="flex items-center gap-2.5">
+            <span className="flex size-7 items-center justify-center border-2 border-border bg-primary text-xs font-bold text-primary-foreground">
+              <Zap className="size-4" />
+            </span>
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-foreground">
+                  Average Dictation Speed: <span className="text-primary font-black">{speedStats.avgWpm} WPM</span>
+                </span>
+                <span className="border border-primary/50 bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary uppercase tracking-wide">
+                  {speedStats.multiplier}× typing speed
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                You dictated {speedStats.totalWords.toLocaleString()} words across {history.length} session{history.length === 1 ? "" : "s"} at ~{speedStats.multiplier}× average typing speed.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-2">
         <Input
           value={query}
@@ -269,8 +295,9 @@ export function HistoryTab() {
                     aria-label="Select all dictations"
                   />
                 </TableHead>
-                <TableHead className="w-[40%]">Text</TableHead>
+                <TableHead className="w-[35%]">Text</TableHead>
                 <TableHead>Duration</TableHead>
+                <TableHead>Speed</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -314,6 +341,20 @@ export function HistoryTab() {
                   </TableCell>
                   <TableCell className="text-xs font-bold text-muted-foreground tabular-nums whitespace-nowrap">
                     {formatDuration(entry.duration_ms)}
+                  </TableCell>
+                  <TableCell className="text-xs tabular-nums whitespace-nowrap">
+                    {(() => {
+                      const wpm = calculateWpm(entry.text, entry.duration_ms);
+                      if (!wpm) return <span className="text-muted-foreground">—</span>;
+                      return (
+                        <span
+                          className="inline-flex items-center gap-1 border border-primary/50 bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary uppercase tracking-wide"
+                          title={`${(wpm / 40).toFixed(1)}× faster than typing`}
+                        >
+                          ⚡ {wpm} WPM
+                        </span>
+                      );
+                    })()}
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
                     {formatDate(entry.created_at)}

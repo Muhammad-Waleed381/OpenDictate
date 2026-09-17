@@ -5,6 +5,7 @@ import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { calculateAggregateSpeed } from "@/lib/utils";
 
 const CELL_PX = 13;
 const GAP_PX = 3;
@@ -94,10 +95,12 @@ interface HeatmapCell {
 
 export function HeatmapTab() {
   const stats = useStore((s) => s.stats);
+  const history = useStore((s) => s.history);
   const hydrated = useStore((s) => s.hydrated);
   const settings = useStore((s) => s.settings);
   const color = settings?.heatmap_color ?? DEFAULT_COLOR;
   const cellColors = useMemo(() => shadesFor(color), [color]);
+  const speedStats = useMemo(() => calculateAggregateSpeed(history), [history]);
   const [hoveredCell, setHoveredCell] = useState<{
     cell: HeatmapCell;
     rect: DOMRect;
@@ -215,13 +218,13 @@ export function HeatmapTab() {
   return (
     <div className="flex flex-col gap-6">
       {stats === null && !hydrated ? (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          {[0, 1, 2, 3].map((i) => (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+          {[0, 1, 2, 3, 4].map((i) => (
             <Skeleton key={i} className="h-24" />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
           <Card size="sm" className={statCard}>
             <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
               Words transcribed
@@ -256,6 +259,24 @@ export function HeatmapTab() {
             </span>
             <span className="text-xs font-bold text-muted-foreground">
               {totals.best_words > 0 ? `words · ${bestLabel}` : "—"}
+            </span>
+          </Card>
+          <Card size="sm" className={statCard}>
+            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+              Average speed
+            </span>
+            <span className="text-3xl font-black tabular-nums">
+              {speedStats ? (
+                <>
+                  {speedStats.avgWpm}
+                  <span className="ml-1 text-sm font-bold text-muted-foreground">WPM</span>
+                </>
+              ) : (
+                "—"
+              )}
+            </span>
+            <span className="text-xs font-bold text-muted-foreground">
+              {speedStats ? `⚡ ${speedStats.multiplier}× typing speed` : "—"}
             </span>
           </Card>
         </div>

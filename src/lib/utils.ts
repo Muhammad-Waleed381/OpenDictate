@@ -80,3 +80,44 @@ export function tailForDisplay(text: string, maxChars: number): string {
   }
   return `…${cut}`;
 }
+
+/**
+ * Calculates words per minute (WPM) from text and duration in ms.
+ * Returns null if duration is under 500ms or resulting WPM is outside reasonable bounds.
+ */
+export function calculateWpm(text: string, durationMs: number): number | null {
+  if (!durationMs || durationMs < 500) return null;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  if (words === 0) return null;
+  const minutes = durationMs / 60000;
+  const wpm = Math.round(words / minutes);
+  if (wpm < 5 || wpm > 600) return null;
+  return wpm;
+}
+
+/**
+ * Computes aggregate speaking speed statistics across a list of history entries.
+ */
+export function calculateAggregateSpeed(entries: { text: string; duration_ms: number }[]): {
+  avgWpm: number;
+  multiplier: string;
+  totalWords: number;
+  totalDurationMs: number;
+} | null {
+  let totalWords = 0;
+  let totalDurationMs = 0;
+  for (const entry of entries) {
+    if (entry.duration_ms >= 500) {
+      const words = entry.text.trim().split(/\s+/).filter(Boolean).length;
+      if (words > 0) {
+        totalWords += words;
+        totalDurationMs += entry.duration_ms;
+      }
+    }
+  }
+  if (totalDurationMs === 0 || totalWords === 0) return null;
+  const avgWpm = Math.round((totalWords * 60000) / totalDurationMs);
+  if (avgWpm < 5 || avgWpm > 600) return null;
+  const multiplier = (avgWpm / 40).toFixed(1);
+  return { avgWpm, multiplier, totalWords, totalDurationMs };
+}
