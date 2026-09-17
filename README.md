@@ -25,7 +25,7 @@
 
 ---
 
-## ⚡ Instant Downloads (v0.2.1)
+## ⚡ Instant Downloads (v0.3.0)
 
 Get the latest installer for your operating system directly from [Releases](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest):
 

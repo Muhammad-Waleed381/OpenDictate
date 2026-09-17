@@ -39,3 +39,4 @@ stream-app-main.png
 # Private development docs
 .superpowers
 docs/superpowers
+.agent-logs
