@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sherpa_onnx::{
     OfflineModelConfig, OfflineNemoEncDecCtcModelConfig, OfflineRecognizer,
@@ -81,15 +81,52 @@ impl SttEngine {
 
         let config = match kind {
             ModelKind::Whisper => {
-            let encoder = model_dir.join("encoder.onnx");
-            let decoder = model_dir.join("decoder.onnx");
-            let tokens = model_dir.join("tokens.txt");
-            if !encoder.exists() || !decoder.exists() || !tokens.exists() {
+            let find_part = |needle: &str| -> Option<PathBuf> {
+                let direct = model_dir.join(format!("{needle}.onnx"));
+                if direct.exists() {
+                    return Some(direct);
+                }
+                let mut hits: Vec<PathBuf> = std::fs::read_dir(&model_dir)
+                    .ok()?
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                            let lower = n.to_lowercase();
+                            lower.ends_with(".onnx") && lower.contains(needle)
+                        })
+                    })
+                    .collect();
+                hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
+                hits.first().cloned()
+            };
+            let find_tokens = || -> Option<PathBuf> {
+                let direct = model_dir.join("tokens.txt");
+                if direct.exists() {
+                    return Some(direct);
+                }
+                std::fs::read_dir(&model_dir)
+                    .ok()?
+                    .flatten()
+                    .map(|e| e.path())
+                    .find(|p| {
+                        p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                            let lower = n.to_lowercase();
+                            lower.contains("tokens") && lower.ends_with(".txt")
+                        })
+                    })
+            };
+
+            let (Some(encoder), Some(decoder), Some(tokens)) = (
+                find_part("encoder"),
+                find_part("decoder"),
+                find_tokens(),
+            ) else {
                 return Err(CoreError::Transcription(format!(
                     "whisper model incomplete in {} (need encoder.onnx, decoder.onnx, tokens.txt)",
                     model_dir.display()
                 )));
-            }
+            };
             OfflineRecognizerConfig {
                 model_config: OfflineModelConfig {
                     whisper: OfflineWhisperModelConfig {
@@ -275,5 +312,22 @@ mod tests {
         assert!(SttEngine::new(&missing, ModelKind::NemoCtc, None).is_err());
         assert!(SttEngine::new(&missing, ModelKind::Whisper, None).is_err());
         assert!(SttEngine::new(&missing, ModelKind::NemoTransducer, None).is_err());
+    }
+
+    #[test]
+    fn engine_loads_installed_whisper_turbo_if_present() {
+        let dir = crate::stt::models::model_dir_for(crate::stt::models::WHISPER_TURBO_MODEL_ID);
+        if crate::stt::models::is_model_installed(crate::stt::models::WHISPER_TURBO_MODEL_ID) {
+            let engine = SttEngine::new(&dir, ModelKind::Whisper, None);
+            assert!(
+                engine.is_ok(),
+                "failed to load whisper-turbo engine: {:?}",
+                engine.err()
+            );
+            // Verify inference on 1 second of silence
+            let silence = vec![0.0f32; 16000];
+            let res = engine.unwrap().transcribe(&silence, None);
+            assert!(res.is_ok(), "transcribe error: {:?}", res.err());
+        }
     }
 }

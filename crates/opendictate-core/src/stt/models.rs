@@ -355,9 +355,35 @@ fn is_parakeet_ready() -> bool {
 
 fn is_whisper_ready(id: &str) -> bool {
     let dir = model_dir_for(id);
-    valid_file_size(&dir.join("encoder.onnx"), WHISPER_PART_MIN_BYTES).is_some()
-        && valid_file_size(&dir.join("decoder.onnx"), WHISPER_PART_MIN_BYTES).is_some()
-        && valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
+    if !dir.exists() {
+        return false;
+    }
+    let has_part = |needle: &str| -> bool {
+        if valid_file_size(&dir.join(format!("{needle}.onnx")), WHISPER_PART_MIN_BYTES).is_some() {
+            return true;
+        }
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            entries.flatten().any(|e| {
+                let n = e.file_name().to_string_lossy().to_lowercase();
+                n.ends_with(".onnx")
+                    && n.contains(needle)
+                    && valid_file_size(&e.path(), WHISPER_PART_MIN_BYTES).is_some()
+            })
+        } else {
+            false
+        }
+    };
+    let has_tokens = valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
+        || std::fs::read_dir(&dir).map_or(false, |entries| {
+            entries.flatten().any(|e| {
+                let n = e.file_name().to_string_lossy().to_lowercase();
+                n.contains("tokens")
+                    && n.ends_with(".txt")
+                    && valid_file_size(&e.path(), TOKENS_MIN_BYTES).is_some()
+            })
+        });
+
+    has_part("encoder") && has_part("decoder") && has_tokens
 }
 
 fn is_transducer_ready(id: &str) -> bool {
@@ -588,6 +614,7 @@ fn extract_archive(
     if is_cancelled() {
         return Err(CoreError::Download("download cancelled by user".to_string()));
     }
+    std::fs::create_dir_all(dest).map_err(CoreError::Io)?;
     let file = File::open(archive_path).map_err(CoreError::Io)?;
     let mut archive = Archive::new(BzDecoder::new(file));
     let entries = archive.entries().map_err(|e| {
@@ -729,21 +756,34 @@ fn install_whisper_model(
 
         let mut files = Vec::new();
         collect_files(&extract_dir, &mut files);
-        let encoder = files.iter().find(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with("encoder.onnx"))
-        });
-        let decoder = files.iter().find(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with("decoder.onnx"))
-        });
-        let tokens = files.iter().find(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with("tokens.txt"))
-        });
+        let find_part = |needle: &str| {
+            let mut hits: Vec<_> = files
+                .iter()
+                .filter(|p| {
+                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        let lower = n.to_lowercase();
+                        lower.ends_with(".onnx")
+                            && lower.contains(needle)
+                            && valid_file_size(p, WHISPER_PART_MIN_BYTES).is_some()
+                    })
+                })
+                .cloned()
+                .collect();
+            hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
+            hits.first().cloned()
+        };
+
+        let encoder = find_part("encoder");
+        let decoder = find_part("decoder");
+        let tokens = files
+            .iter()
+            .find(|p| {
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    let lower = n.to_lowercase();
+                    lower.contains("tokens") && lower.ends_with(".txt")
+                })
+            })
+            .cloned();
 
         let (Some(encoder), Some(decoder), Some(tokens)) = (encoder, decoder, tokens) else {
             return Err(CoreError::Download(format!(
@@ -757,15 +797,21 @@ fn install_whisper_model(
 
         let model_dir = model_dir_for(id);
         std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
-        std::fs::copy(encoder, model_dir.join("encoder.onnx")).map_err(CoreError::Io)?;
-        std::fs::copy(decoder, model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
-        std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+        let move_or_copy = |src: &Path, dst: &Path| -> std::io::Result<()> {
+            if std::fs::rename(src, dst).is_err() {
+                std::fs::copy(src, dst)?;
+            }
+            Ok(())
+        };
+        move_or_copy(&encoder, &model_dir.join("encoder.onnx")).map_err(CoreError::Io)?;
+        move_or_copy(&decoder, &model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
+        move_or_copy(&tokens, &model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
         log::info!("installed {id} -> {}", model_dir.display());
         Ok(())
     })();
 
     clean_after(&archive_path, &extract_dir);
-    if res.is_err() && is_cancelled() {
+    if res.is_err() {
         let _ = remove_model(id);
     }
     res
@@ -1174,5 +1220,190 @@ mod tests {
         assert!(!progress_called);
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("cancelled by user"));
+    }
+
+    #[test]
+    fn whisper_turbo_install_state_detects_canonical_and_int8_files() {
+        let tmp = std::env::temp_dir().join("opendictate-test-whisper-turbo");
+        let model_dir = tmp
+            .join("opendictate")
+            .join("models")
+            .join(WHISPER_TURBO_MODEL_ID);
+        std::fs::create_dir_all(&model_dir).unwrap();
+
+        // 1. With turbo-*.int8.onnx and turbo-tokens.txt names
+        std::fs::write(
+            model_dir.join("turbo-encoder.int8.onnx"),
+            vec![0u8; 6_000_000],
+        )
+        .unwrap();
+        std::fs::write(
+            model_dir.join("turbo-decoder.int8.onnx"),
+            vec![0u8; 6_000_000],
+        )
+        .unwrap();
+        std::fs::write(model_dir.join("turbo-tokens.txt"), vec![0u8; 500]).unwrap();
+
+        std::env::set_var("XDG_DATA_HOME", &tmp);
+        assert!(is_model_installed(WHISPER_TURBO_MODEL_ID));
+
+        // 2. Also with canonical names encoder.onnx / decoder.onnx / tokens.txt
+        let _ = std::fs::remove_dir_all(&model_dir);
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("encoder.onnx"), vec![0u8; 6_000_000]).unwrap();
+        std::fs::write(model_dir.join("decoder.onnx"), vec![0u8; 6_000_000]).unwrap();
+        std::fs::write(model_dir.join("tokens.txt"), vec![0u8; 500]).unwrap();
+
+        assert!(is_model_installed(WHISPER_TURBO_MODEL_ID));
+
+        std::env::remove_var("XDG_DATA_HOME");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn whisper_turbo_archive_extraction_and_resolution() {
+        use bzip2::write::BzEncoder;
+        use bzip2::Compression;
+        use tar::Builder;
+
+        let tmp = std::env::temp_dir().join("opendictate-test-whisper-turbo-archive");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let archive_path = tmp.join("whisper-turbo.tar.bz2");
+        let extract_dir = tmp.join(".extract-whisper-turbo");
+
+        // Build a mock tar.bz2 mimicking sherpa-onnx-whisper-turbo layout
+        {
+            let tar_bz2 = File::create(&archive_path).unwrap();
+            let enc = BzEncoder::new(tar_bz2, Compression::fast());
+            let mut builder = Builder::new(enc);
+
+            // 1. Small stub unquantized encoder (< 5MB)
+            let stub = vec![0u8; 700_000];
+            let mut header = tar::Header::new_gnu();
+            header.set_size(stub.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    "sherpa-onnx-whisper-turbo/turbo-encoder.onnx",
+                    &stub[..],
+                )
+                .unwrap();
+
+            // 2. Full int8 encoder (6MB)
+            let enc_int8 = vec![0u8; 6_000_000];
+            let mut header = tar::Header::new_gnu();
+            header.set_size(enc_int8.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    "sherpa-onnx-whisper-turbo/turbo-encoder.int8.onnx",
+                    &enc_int8[..],
+                )
+                .unwrap();
+
+            // 3. Full int8 decoder (6MB)
+            let dec_int8 = vec![0u8; 6_000_000];
+            let mut header = tar::Header::new_gnu();
+            header.set_size(dec_int8.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    "sherpa-onnx-whisper-turbo/turbo-decoder.int8.onnx",
+                    &dec_int8[..],
+                )
+                .unwrap();
+
+            // 4. Tokens (>= 100 bytes)
+            let tokens = vec![b'a'; 200];
+            let mut header = tar::Header::new_gnu();
+            header.set_size(tokens.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(
+                    &mut header,
+                    "sherpa-onnx-whisper-turbo/turbo-tokens.txt",
+                    &tokens[..],
+                )
+                .unwrap();
+
+            builder.finish().unwrap();
+        }
+
+        // Extract using our production extractor (which must create extract_dir if not present)
+        extract_archive(&archive_path, &extract_dir, &|| false).unwrap();
+
+        // Run file collection and resolution
+        let mut files = Vec::new();
+        collect_files(&extract_dir, &mut files);
+
+        let find_part = |needle: &str| {
+            let mut hits: Vec<_> = files
+                .iter()
+                .filter(|p| {
+                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        let lower = n.to_lowercase();
+                        lower.ends_with(".onnx")
+                            && lower.contains(needle)
+                            && valid_file_size(p, WHISPER_PART_MIN_BYTES).is_some()
+                    })
+                })
+                .cloned()
+                .collect();
+            hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
+            hits.first().cloned()
+        };
+
+        let encoder = find_part("encoder").expect("must find int8 encoder");
+        assert!(
+            encoder
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("turbo-encoder.int8.onnx"),
+            "must pick int8 encoder, not small stub"
+        );
+
+        let decoder = find_part("decoder").expect("must find int8 decoder");
+        assert!(decoder
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("turbo-decoder.int8.onnx"));
+
+        let tokens = files
+            .iter()
+            .find(|p| {
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    let lower = n.to_lowercase();
+                    lower.contains("tokens") && lower.ends_with(".txt")
+                })
+            })
+            .cloned()
+            .expect("must find turbo-tokens.txt");
+
+        // Install to target model directory
+        let target_dir = tmp
+            .join("opendictate")
+            .join("models")
+            .join(WHISPER_TURBO_MODEL_ID);
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::copy(&encoder, target_dir.join("encoder.onnx")).unwrap();
+        std::fs::copy(&decoder, target_dir.join("decoder.onnx")).unwrap();
+        std::fs::copy(&tokens, target_dir.join("tokens.txt")).unwrap();
+
+        std::env::set_var("XDG_DATA_HOME", &tmp);
+        assert!(is_model_installed(WHISPER_TURBO_MODEL_ID));
+
+        std::env::remove_var("XDG_DATA_HOME");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
