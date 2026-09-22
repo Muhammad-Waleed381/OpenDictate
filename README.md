@@ -16,7 +16,8 @@
 <p align="center">
   <a href="https://opendictate.vercel.app"><strong>🌐 Website</strong></a> &nbsp;•&nbsp;
   <a href="https://opendictate.vercel.app/docs"><strong>📖 Tutorial & User Guide</strong></a> &nbsp;•&nbsp;
-  <a href="https://github.com/Muhammad-Waleed381/OpenDictate/releases"><strong>⚡ Releases</strong></a>
+  <a href="https://github.com/Muhammad-Waleed381/OpenDictate/releases"><strong>⚡ Releases</strong></a> &nbsp;•&nbsp;
+  <a href="CONTRIBUTING.md"><strong>🤝 Contributing</strong></a>
 </p>
 
 <p align="center">
@@ -202,6 +203,12 @@ OpenDictate is built on strict local-first principles:
 - **Zero Audio Transmission**: Your voice is processed directly on your CPU/GPU and never leaves your device.
 - **Zero Telemetry / Analytics**: No tracking pixels, analytics beacons, or remote logging.
 - **Local Storage**: Dictionary words, snippets, and dictation history are kept in a local SQLite file in your user data directory.
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions from everyone! Whether you are fixing bugs, adding new speech models, improving voice actions, or refining the UI, please check out our [**Contributing Guide (CONTRIBUTING.md)**](CONTRIBUTING.md) to get started with prerequisites, architecture details, and local development.
 
 ---
 
