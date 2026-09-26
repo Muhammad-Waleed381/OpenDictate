@@ -20,6 +20,7 @@ pub fn inject_text(app: &AppHandle, text: &str, mode: &str) -> Result<(), String
 
     #[cfg(not(target_os = "linux"))]
     {
+        std::thread::sleep(std::time::Duration::from_millis(150));
         let res = press_paste();
         log::info!("inject: press_paste result={res:?}");
         res
@@ -539,13 +540,31 @@ fn press_paste() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        // Release lingering modifiers if any physical hotkeys were held
+        let _ = enigo.key(Key::Alt, Direction::Release);
+        let _ = enigo.key(Key::Shift, Direction::Release);
+        let _ = enigo.key(Key::Meta, Direction::Release);
+    }
+
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta;
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
 
+    #[cfg(target_os = "windows")]
+    let v_key = Key::V;
+    #[cfg(not(target_os = "windows"))]
+    let v_key = Key::Unicode('v');
+
     enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Unicode('v'), Direction::Click).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    enigo.key(v_key, Direction::Press).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(35));
+    enigo.key(v_key, Direction::Release).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
     enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
 }
 
@@ -568,13 +587,31 @@ pub fn undo_last_insert() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        // Release lingering modifiers if any physical hotkeys were held
+        let _ = enigo.key(Key::Alt, Direction::Release);
+        let _ = enigo.key(Key::Shift, Direction::Release);
+        let _ = enigo.key(Key::Meta, Direction::Release);
+    }
+
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta;
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
 
+    #[cfg(target_os = "windows")]
+    let z_key = Key::Z;
+    #[cfg(not(target_os = "windows"))]
+    let z_key = Key::Unicode('z');
+
     enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Unicode('z'), Direction::Click).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    enigo.key(z_key, Direction::Press).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(35));
+    enigo.key(z_key, Direction::Release).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
     enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
 }
 
@@ -633,13 +670,33 @@ pub fn press_clear_all() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        // Release lingering modifiers if any physical hotkeys were held
+        let _ = enigo.key(Key::Alt, Direction::Release);
+        let _ = enigo.key(Key::Shift, Direction::Release);
+        let _ = enigo.key(Key::Meta, Direction::Release);
+    }
+
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta;
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
+
+    #[cfg(target_os = "windows")]
+    let a_key = Key::A;
+    #[cfg(not(target_os = "windows"))]
+    let a_key = Key::Unicode('a');
+
     enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Unicode('a'), Direction::Click).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    enigo.key(a_key, Direction::Press).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(35));
+    enigo.key(a_key, Direction::Release).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
     enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
     enigo.key(Key::Backspace, Direction::Click).map_err(|e| e.to_string())
 }
 
@@ -656,8 +713,26 @@ pub fn press_interrupt() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        // Release lingering modifiers if any physical hotkeys were held
+        let _ = enigo.key(Key::Alt, Direction::Release);
+        let _ = enigo.key(Key::Shift, Direction::Release);
+        let _ = enigo.key(Key::Meta, Direction::Release);
+    }
+
+    #[cfg(target_os = "windows")]
+    let c_key = Key::C;
+    #[cfg(not(target_os = "windows"))]
+    let c_key = Key::Unicode('c');
+
     enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Unicode('c'), Direction::Click).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    enigo.key(c_key, Direction::Press).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(35));
+    enigo.key(c_key, Direction::Release).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
     enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())
 }
 
@@ -692,12 +767,31 @@ pub fn press_new_tab() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        // Release lingering modifiers if any physical hotkeys were held
+        let _ = enigo.key(Key::Alt, Direction::Release);
+        let _ = enigo.key(Key::Shift, Direction::Release);
+        let _ = enigo.key(Key::Meta, Direction::Release);
+    }
+
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta;
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
+
+    #[cfg(target_os = "windows")]
+    let t_key = Key::T;
+    #[cfg(not(target_os = "windows"))]
+    let t_key = Key::Unicode('t');
+
     enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Unicode('t'), Direction::Click).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    enigo.key(t_key, Direction::Press).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(35));
+    enigo.key(t_key, Direction::Release).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
     enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
 }
 
@@ -706,12 +800,31 @@ pub fn press_close_tab() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        // Release lingering modifiers if any physical hotkeys were held
+        let _ = enigo.key(Key::Alt, Direction::Release);
+        let _ = enigo.key(Key::Shift, Direction::Release);
+        let _ = enigo.key(Key::Meta, Direction::Release);
+    }
+
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta;
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
+
+    #[cfg(target_os = "windows")]
+    let w_key = Key::W;
+    #[cfg(not(target_os = "windows"))]
+    let w_key = Key::Unicode('w');
+
     enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Unicode('w'), Direction::Click).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    enigo.key(w_key, Direction::Press).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(35));
+    enigo.key(w_key, Direction::Release).map_err(|e| e.to_string())?;
+    std::thread::sleep(std::time::Duration::from_millis(25));
     enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
 }
 
