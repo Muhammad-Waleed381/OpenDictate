@@ -516,18 +516,25 @@ pub fn download_to_with_progress_cancel(
         return Err(CoreError::Download("download cancelled by user".to_string()));
     }
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(CoreError::Io)?;
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(CoreError::Io)?;
+        }
     }
 
     let agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(std::time::Duration::from_secs(15)))
+        .timeout_connect(Some(std::time::Duration::from_secs(30)))
         .build()
         .new_agent();
 
     let response = agent
         .get(url)
+        .header("User-Agent", "OpenDictate/0.3.0 (Desktop; Tauri)")
         .call()
         .map_err(|e| CoreError::Download(format!("failed to fetch {url}: {e}")))?;
+
+    if is_cancelled() {
+        return Err(CoreError::Download("download cancelled by user".to_string()));
+    }
 
     let total = response
         .headers()
@@ -536,59 +543,93 @@ pub fn download_to_with_progress_cancel(
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0);
 
-    let mut body = response.into_body().into_reader();
+    // Immediately emit initial progress so the UI progress bar appears right away.
+    on_progress(0, total);
 
-    let mut file = File::create(dest)?;
+    if is_cancelled() {
+        return Err(CoreError::Download("download cancelled by user".to_string()));
+    }
+
+    let part_name = match dest.file_name() {
+        Some(name) => format!("{}.part", name.to_string_lossy()),
+        None => "download.part".to_string(),
+    };
+    let part_path = dest.with_file_name(part_name);
+
+    let mut body = response.into_body().into_reader();
+    let mut file = File::create(&part_path)?;
     let mut received = 0u64;
     let mut chunk = [0u8; 64 * 1024];
     let mut last_progress_emit = std::time::Instant::now();
     let mut last_emitted_bytes = 0u64;
-    loop {
-        if is_cancelled() {
-            drop(file);
-            let _ = std::fs::remove_file(dest);
-            return Err(CoreError::Download("download cancelled by user".to_string()));
-        }
-        let n = match std::io::Read::read(&mut body, &mut chunk) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => {
-                drop(file);
-                let _ = std::fs::remove_file(dest);
-                if is_cancelled() {
-                    return Err(CoreError::Download("download cancelled by user".to_string()));
-                }
-                return Err(CoreError::Io(e));
+
+    let download_result = (|| -> Result<()> {
+        loop {
+            if is_cancelled() {
+                return Err(CoreError::Download("download cancelled by user".to_string()));
             }
-        };
-        if is_cancelled() {
-            drop(file);
-            let _ = std::fs::remove_file(dest);
-            return Err(CoreError::Download("download cancelled by user".to_string()));
-        }
-        file.write_all(&chunk[..n])?;
-        received += n as u64;
+            let n = match std::io::Read::read(&mut body, &mut chunk) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => {
+                    if is_cancelled() {
+                        return Err(CoreError::Download("download cancelled by user".to_string()));
+                    }
+                    return Err(CoreError::Io(e));
+                }
+            };
+            if is_cancelled() {
+                return Err(CoreError::Download("download cancelled by user".to_string()));
+            }
+            file.write_all(&chunk[..n])?;
+            received += n as u64;
 
-        let elapsed = last_progress_emit.elapsed();
-        if elapsed.as_millis() >= 50
-            || received - last_emitted_bytes >= 256 * 1024
-            || (total > 0 && received >= total)
-        {
-            on_progress(received, total);
-            last_progress_emit = std::time::Instant::now();
-            last_emitted_bytes = received;
-        }
+            let elapsed = last_progress_emit.elapsed();
+            if elapsed.as_millis() >= 50
+                || received - last_emitted_bytes >= 256 * 1024
+                || (total > 0 && received >= total)
+            {
+                on_progress(received, total);
+                last_progress_emit = std::time::Instant::now();
+                last_emitted_bytes = received;
+            }
 
-        if received.is_multiple_of(4 * 1024 * 1024) {
-            log::info!("downloaded {received} bytes -> {}", dest.display());
+            if received.is_multiple_of(4 * 1024 * 1024) {
+                log::info!("downloaded {received} bytes -> {}", dest.display());
+            }
         }
+        file.flush()?;
+        Ok(())
+    })();
+
+    drop(file);
+    drop(body);
+
+    if let Err(err) = download_result {
+        let _ = std::fs::remove_file(&part_path);
+        return Err(err);
     }
-    on_progress(received, total);
+
     if is_cancelled() {
-        drop(file);
-        let _ = std::fs::remove_file(dest);
+        let _ = std::fs::remove_file(&part_path);
         return Err(CoreError::Download("download cancelled by user".to_string()));
     }
+
+    on_progress(received, total);
+
+    if let Err(e) = std::fs::rename(&part_path, dest) {
+        log::warn!(
+            "rename {} to {} failed ({e}), falling back to copy",
+            part_path.display(),
+            dest.display()
+        );
+        if let Err(copy_err) = std::fs::copy(&part_path, dest) {
+            let _ = std::fs::remove_file(&part_path);
+            return Err(CoreError::Io(copy_err));
+        }
+        let _ = std::fs::remove_file(&part_path);
+    }
+
     log::info!("downloaded {received} bytes -> {}", dest.display());
     Ok(())
 }
@@ -1404,6 +1445,151 @@ mod tests {
         assert!(is_model_installed(WHISPER_TURBO_MODEL_ID));
 
         std::env::remove_var("XDG_DATA_HOME");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_emits_initial_zero_progress_and_user_agent() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server_thread = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut req_buf = [0u8; 2048];
+            let n = std::io::Read::read(&mut stream, &mut req_buf).unwrap();
+            let req_str = String::from_utf8_lossy(&req_buf[..n]);
+            assert!(
+                req_str.contains("User-Agent: OpenDictate/0.3.0 (Desktop; Tauri)")
+                    || req_str.contains("user-agent: OpenDictate/0.3.0 (Desktop; Tauri)"),
+                "Request missing User-Agent header: {req_str}"
+            );
+
+            let body = b"hello open dictate test payload";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                std::str::from_utf8(body).unwrap()
+            );
+            std::io::Write::write_all(&mut stream, response.as_bytes()).unwrap();
+            std::io::Write::flush(&mut stream).unwrap();
+        });
+
+        let tmp = std::env::temp_dir().join("opendictate-test-dl-progress");
+        let dest = tmp.join("model.bin");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let mut progress_events = Vec::new();
+        let url = format!("http://127.0.0.1:{port}/model.bin");
+        let result = download_to_with_progress_cancel(
+            &url,
+            &dest,
+            &mut |received, total| progress_events.push((received, total)),
+            &|| false,
+        );
+
+        server_thread.join().unwrap();
+        assert!(result.is_ok(), "download failed: {:?}", result.err());
+
+        // Verify initial 0 progress was emitted right away
+        assert!(!progress_events.is_empty());
+        assert_eq!(progress_events[0], (0, 31));
+        assert_eq!(*progress_events.last().unwrap(), (31, 31));
+
+        // Verify destination file exists and temp part file is gone
+        assert!(dest.exists());
+        let part_file = tmp.join("model.bin.part");
+        assert!(!part_file.exists());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"hello open dictate test payload");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_cleans_up_part_file_on_cancel() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server_thread = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut req_buf = [0u8; 2048];
+            let _ = std::io::Read::read(&mut stream, &mut req_buf);
+
+            let body = vec![b'x'; 256 * 1024]; // 256KB payload
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = std::io::Write::write_all(&mut stream, header.as_bytes());
+            let _ = std::io::Write::write_all(&mut stream, &body);
+        });
+
+        let tmp = std::env::temp_dir().join("opendictate-test-dl-cancel");
+        let dest = tmp.join("model.bin");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let url = format!("http://127.0.0.1:{port}/model.bin");
+        let result = download_to_with_progress_cancel(
+            &url,
+            &dest,
+            &mut |received, _| {
+                // Cancel once initial 0 progress is emitted
+                if received == 0 {
+                    cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            },
+            &|| cancelled.load(std::sync::atomic::Ordering::SeqCst),
+        );
+
+        let _ = server_thread.join();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cancelled by user"));
+
+        // Neither dest nor part file should exist
+        assert!(!dest.exists(), "dest should not exist on cancel");
+        let part_file = tmp.join("model.bin.part");
+        assert!(!part_file.exists(), "part file should be cleaned up on cancel");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_cleans_up_part_file_on_io_error() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server_thread = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut req_buf = [0u8; 2048];
+            let _ = std::io::Read::read(&mut stream, &mut req_buf);
+
+            let header = "HTTP/1.1 200 OK\r\nContent-Length: 50000\r\nConnection: close\r\n\r\n";
+            let _ = std::io::Write::write_all(&mut stream, header.as_bytes());
+            let _ = std::io::Write::write_all(&mut stream, b"incomplete");
+            // Abruptly close socket by shutting down and dropping stream
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        });
+
+        let tmp = std::env::temp_dir().join("opendictate-test-dl-error");
+        let dest = tmp.join("model.bin");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let url = format!("http://127.0.0.1:{port}/model.bin");
+        let result = download_to_with_progress_cancel(
+            &url,
+            &dest,
+            &mut |_, _| {},
+            &|| false,
+        );
+
+        let _ = server_thread.join();
+        assert!(result.is_err());
+
+        // Neither dest nor part file should exist
+        assert!(!dest.exists(), "dest should not exist on error");
+        let part_file = tmp.join("model.bin.part");
+        assert!(!part_file.exists(), "part file should be cleaned up on error");
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
