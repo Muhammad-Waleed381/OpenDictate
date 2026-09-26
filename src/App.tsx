@@ -50,6 +50,11 @@ function useOpenDictateEvents() {
         store.removeModelProgress(payload.file);
         store.refreshCatalog().catch(() => {});
       }),
+      api.onModelError((payload) => {
+        store.removeModelProgress(payload.file);
+        store.removeModelProgress("silero_vad");
+        store.refreshCatalog().catch(() => {});
+      }),
       api.onModelsReady(() => store.refreshModels()),
       api.onHistoryUpdated(() =>
         api.getHistory().then((history) => useStore.setState({ history })),

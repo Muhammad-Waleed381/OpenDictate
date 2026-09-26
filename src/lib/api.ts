@@ -359,6 +359,14 @@ export function onModelCancelled(
   return listen<{ file: string }>("model-cancelled", (event) => cb(event.payload));
 }
 
+export function onModelError(
+  cb: (payload: { file: string; error: string }) => void
+): Promise<UnlistenFn> {
+  return listen<{ file: string; error: string }>("model-error", (event) =>
+    cb(event.payload)
+  );
+}
+
 export function onTranscript(
   cb: (payload: TranscriptPayload) => void
 ): Promise<UnlistenFn> {

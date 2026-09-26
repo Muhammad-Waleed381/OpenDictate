@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { Loader2 } from "lucide-react";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
@@ -93,6 +94,32 @@ export function ModelCard() {
       return changed ? next : prev;
     });
   }, [modelProgress, startingDownloads]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    api.onModelError((payload) => {
+      setStartingDownloads((prev) => {
+        const next = new Set(prev);
+        next.delete(payload.file);
+        return next;
+      });
+      setError(payload.error);
+      toast.error(`Model download failed: ${payload.error}`);
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   const handleDownload = async (id: string) => {
     setStartingDownloads((prev) => new Set(prev).add(id));
@@ -427,7 +454,7 @@ export function ModelCard() {
                         )
                       )}
                     </div>
-                    {progress && (
+                    {progress ? (
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
                           <span>
@@ -451,7 +478,19 @@ export function ModelCard() {
                           className="w-full"
                         />
                       </div>
-                    )}
+                    ) : busy ? (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider">
+                          <span className="flex items-center gap-1.5">
+                            <Loader2 className="size-3 animate-spin" />
+                            {cancelling ? "Cancelling…" : "Connecting…"}
+                          </span>
+                        </div>
+                        <div className="h-4 w-full border-2 border-border bg-background overflow-hidden">
+                          <div className="h-full w-full bg-primary/20 animate-od-shimmer" />
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}
@@ -521,7 +560,7 @@ export function ModelCard() {
               </span>
             )}
           </div>
-          {captionProgress && (
+          {captionProgress ? (
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
                 <span>
@@ -545,7 +584,19 @@ export function ModelCard() {
                 className="w-full"
               />
             </div>
-          )}
+          ) : captionBusy ? (
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider">
+                <span className="flex items-center gap-1.5">
+                  <Loader2 className="size-3 animate-spin" />
+                  {captionCancelling ? "Cancelling…" : "Connecting…"}
+                </span>
+              </div>
+              <div className="h-4 w-full border-2 border-border bg-background overflow-hidden">
+                <div className="h-full w-full bg-primary/20 animate-od-shimmer" />
+              </div>
+            </div>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             Powers live captions during dictation — works with every model. Auto-fetched in the
             background; safe to delete (it re-downloads on demand).

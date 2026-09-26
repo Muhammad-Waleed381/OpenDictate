@@ -44,6 +44,7 @@ interface OpenDictateStore {
   setModelProgress: (modelProgress: ModelProgress[]) => void;
   addModelProgress: (progress: ModelProgress) => void;
   removeModelProgress: (file: string) => void;
+  clearModelProgress: (file?: string) => void;
   setPartial: (text: string) => void;
   refreshStats: () => Promise<void>;
 
@@ -87,6 +88,12 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
   removeModelProgress: (file) =>
     set((state) => ({
       modelProgress: state.modelProgress.filter((p) => p.file !== file),
+    })),
+  clearModelProgress: (file) =>
+    set((state) => ({
+      modelProgress: file
+        ? state.modelProgress.filter((p) => p.file !== file)
+        : [],
     })),
   addModelProgress: (progress) =>
     set((state) => {

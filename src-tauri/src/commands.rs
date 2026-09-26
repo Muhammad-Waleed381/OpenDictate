@@ -141,6 +141,10 @@ pub fn ensure_model(id: String, app: AppHandle, state: State<AppState>) -> Resul
                     let _ = app_clone.emit("model-cancelled", serde_json::json!({ "file": id_clone }));
                 } else {
                     let _ = app_clone.emit(
+                        "model-error",
+                        serde_json::json!({ "file": id_clone, "error": format!("{e}") }),
+                    );
+                    let _ = app_clone.emit(
                         "overlay-state",
                         serde_json::json!({ "state": "error", "message": format!("model download failed: {e}") }),
                     );
