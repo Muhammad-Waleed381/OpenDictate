@@ -12,7 +12,7 @@ pub fn inject_text(app: &AppHandle, text: &str, mode: &str) -> Result<(), String
     #[cfg(target_os = "linux")]
     {
         // Settle delay to ensure Wayland compositor and target window receive clipboard update
-        std::thread::sleep(std::time::Duration::from_millis(80));
+        std::thread::sleep(std::time::Duration::from_millis(150));
         let res = press_paste();
         log::info!("inject: press_paste result={res:?}");
         res
@@ -344,7 +344,7 @@ mod uinput {
             emit(EV_KEY, key, 1);
         }
         emit(EV_SYN, SYN_REPORT, 0);
-        std::thread::sleep(Duration::from_millis(40));
+        std::thread::sleep(Duration::from_millis(45));
 
         // Release keys in reverse sequence
         for &key in keys.iter().rev() {
@@ -357,15 +357,24 @@ mod uinput {
     }
 }
 
-/// Sends the paste shortcut to the focused window.
 #[cfg(target_os = "linux")]
 fn press_paste() -> Result<(), String> {
+    log::info!("inject: attempting press_paste via uinput / fallbacks");
     uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_V])
-        .or_else(|_| run("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"]))
+        .or_else(|e| {
+            log::warn!("inject: uinput paste failed ({e}), falling back to ydotool");
+            run("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"])
+        })
         .or_else(|_| run("ydotool", &["key", "29+47"]))
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-k", "v", "-m", "ctrl"]))
+        .or_else(|e| {
+            log::warn!("inject: ydotool failed ({e}), falling back to wtype");
+            run("wtype", &["-M", "ctrl", "-k", "v", "-m", "ctrl"])
+        })
         .or_else(|_| run("wtype", &["-M", "ctrl", "-m", "v"]))
-        .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+v"]))
+        .or_else(|e| {
+            log::warn!("inject: wtype failed ({e}), falling back to xdotool");
+            run("xdotool", &["key", "--clearmodifiers", "ctrl+v"])
+        })
 }
 
 #[cfg(target_os = "linux")]
