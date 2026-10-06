@@ -526,9 +526,10 @@ pub fn download_to_with_progress_cancel(
         .build()
         .new_agent();
 
+    let user_agent = concat!("OpenDictate/", env!("CARGO_PKG_VERSION"), " (Desktop; Tauri)");
     let response = agent
         .get(url)
-        .header("User-Agent", "OpenDictate/0.3.0 (Desktop; Tauri)")
+        .header("User-Agent", user_agent)
         .call()
         .map_err(|e| CoreError::Download(format!("failed to fetch {url}: {e}")))?;
 
@@ -1458,9 +1459,10 @@ mod tests {
             let mut req_buf = [0u8; 2048];
             let n = std::io::Read::read(&mut stream, &mut req_buf).unwrap();
             let req_str = String::from_utf8_lossy(&req_buf[..n]);
+            let expected_ua = format!("OpenDictate/{} (Desktop; Tauri)", env!("CARGO_PKG_VERSION"));
             assert!(
-                req_str.contains("User-Agent: OpenDictate/0.3.0 (Desktop; Tauri)")
-                    || req_str.contains("user-agent: OpenDictate/0.3.0 (Desktop; Tauri)"),
+                req_str.contains(&format!("User-Agent: {expected_ua}"))
+                    || req_str.contains(&format!("user-agent: {expected_ua}")),
                 "Request missing User-Agent header: {req_str}"
             );
 

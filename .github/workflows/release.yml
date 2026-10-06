@@ -78,8 +78,23 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "OpenDictate ${{ github.ref_name }}"
           releaseBody: |
-            OpenDictate — local-first voice dictation.
+            OpenDictate ${{ github.ref_name }} brings critical Windows dock and overlay visibility fixes, clipboard paste reliability improvements, model downloading robustness, and Linux AppImage sandbox compatibility.
 
+            ### Windows Dock & Overlay Enhancements
+            - Taskbar Occlusion Fix: Screen positioning now respects monitor work areas rather than full screen bounds, keeping the floating mic overlay 16px above the Windows taskbar across all display scales (100% to 200% DPI).
+            - Multi-Monitor Positioning: Corrected global coordinate offsets so the dock accurately positions on secondary and negative-offset monitors.
+            - Corner Anchor Stability: Fixed idle button alignment so the mic pill stays securely anchored to the selected corner without shifting or jumping when speech detection starts or stops.
+            - Window Restore on Minimize: System tray activation and second-instance launches now properly unminimize windows on Windows.
+            - NVIDIA GPU Detection: Enhanced GPU provider discovery on Windows to check executable file extensions in PATH.
+
+            ### Cross-Platform Injection & Model Reliability
+            - Clipboard & Paste Injection: Fixed keyboard accelerator dispatch for Windows (avoiding virtual key code 0) and optimized clipboard settle timings.
+            - Network & Download Robustness: Increased connect timeouts to 30s with atomic partial file downloads and immediate progress feedback.
+
+            ### Linux AppImage Hardening
+            - Sandbox Permissions: Enforced 0755 permissions on AppRun within packaged AppImages for compatibility with unprivileged sandboxes (e.g. Firejail).
+
+            ### Installers
             - Windows: `.msi` / `.exe` (NSIS) installers
             - macOS: universal `.dmg` (Apple Silicon + Intel)
             - Linux: `.deb` and `.AppImage`
