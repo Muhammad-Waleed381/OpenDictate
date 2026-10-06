@@ -444,6 +444,7 @@ pub fn set_settings(
     drop(current);
 
     if dock_changed {
+        let _ = app.emit("dock-position", settings.dock_position.clone());
         crate::dock::reposition(&app);
     }
 

@@ -393,3 +393,12 @@ export function onRecordingChanged(
     cb(event.payload)
   );
 }
+
+export function onDockPosition(
+  cb: (pos: Settings["dock_position"]) => void
+): Promise<UnlistenFn> {
+  return listen<Settings["dock_position"]>("dock-position", (event) =>
+    cb(event.payload)
+  );
+}
+

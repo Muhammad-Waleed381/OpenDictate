@@ -64,6 +64,12 @@ function useOpenDictateEvents() {
       api.onRecordingChanged((payload) =>
         useStore.setState({ recording: payload.recording })
       ),
+      api.onDockPosition((pos) => {
+        const cur = useStore.getState().settings;
+        if (cur) {
+          useStore.getState().setSettings({ ...cur, dock_position: pos });
+        }
+      }),
     ];
     let cancelled = false;
     subs.forEach((sub) => {
@@ -235,6 +241,10 @@ export function MainApp() {
 
 export function DockApp() {
   useOpenDictateEvents();
+
+  useEffect(() => {
+    api.getSettings().then((s) => useStore.getState().setSettings(s)).catch(() => {});
+  }, []);
 
   return (
     <div className="fixed inset-x-0 bottom-0 h-[29px] w-full overflow-hidden">

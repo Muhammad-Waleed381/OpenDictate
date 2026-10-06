@@ -98,7 +98,23 @@ impl Provider {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(target_os = "windows")]
+fn which(bin: &str) -> bool {
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    let extensions: Vec<String> = pathext.split(';').map(|s| s.to_ascii_lowercase()).collect();
+    std::env::var_os("PATH")
+        .map(|p| {
+            std::env::split_paths(&p).any(|dir| {
+                if dir.join(bin).is_file() {
+                    return true;
+                }
+                extensions.iter().any(|ext| dir.join(format!("{bin}{ext}")).is_file())
+            })
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(all(target_os = "linux", not(target_os = "windows")))]
 fn which(bin: &str) -> bool {
     std::env::var_os("PATH")
         .map(|p| {

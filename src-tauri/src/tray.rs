@@ -48,6 +48,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 pub fn show_main(app: &AppHandle) {
     crate::dock::ensure(app);
     if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
         let _ = win.show();
         let _ = win.set_focus();
     }

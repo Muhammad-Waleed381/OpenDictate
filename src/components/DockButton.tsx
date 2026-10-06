@@ -133,66 +133,94 @@ export function DockButton() {
     : partial;
   const pillLabel = tailForDisplay(rawLabel, 46);
 
-  return (
-    <div className="flex h-full w-full items-end justify-between gap-2 pr-2 pl-3">
-      {pillLabel && (
+  const settings = useStore((s) => s.settings);
+  const dockPosition = settings?.dock_position ?? "bottom_right";
+  const isRightAligned = dockPosition === "bottom_right" || dockPosition === "top_right";
+  const isLeftAligned = dockPosition === "bottom_left" || dockPosition === "top_left";
+
+  const buttonElement = (
+    <div className="relative flex size-6 shrink-0 items-center justify-center">
+      {(isRecording || isProcessing) && (
         <span
-          className={`flex min-w-0 items-center gap-2 rounded-full px-3 py-1.5 text-[11px] leading-none font-bold tracking-wider text-white shadow-lg ring-1 ${
-            isRecording
-              ? "bg-black/90 ring-rose-500/80"
-              : isListening
-                ? "bg-black/90 ring-sky-400/80"
-                : isProcessing
-                  ? "bg-black/90 ring-amber-400/80"
-                  : "bg-black/85 ring-white/10"
+          key={`${state}-${recording}`}
+          className={`pointer-events-none absolute inset-0 animate-od-ping rounded-full ${
+            isProcessing ? "bg-amber-400/40" : "bg-rose-500/50"
           }`}
-        >
-          {(isRecording || isListening || isProcessing) && (
+        />
+      )}
+      <button
+        type="button"
+        onClick={toggle}
+        className={`relative z-10 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 ${live ? "bg-black/90" : "bg-white/90"} ${tint}`}
+        aria-label={canStop ? "Stop recording" : "Start recording"}
+        title={canStop ? "Stop recording (Ctrl+K)" : "Start recording (Ctrl+K)"}
+      >
+        {content}
+      </button>
+    </div>
+  );
+
+  const pillElement = pillLabel ? (
+    <span
+      className={`flex min-w-0 items-center gap-2 rounded-full px-3 py-1.5 text-[11px] leading-none font-bold tracking-wider text-white shadow-lg ring-1 ${
+        isRecording
+          ? "bg-black/90 ring-rose-500/80"
+          : isListening
+            ? "bg-black/90 ring-sky-400/80"
+            : isProcessing
+              ? "bg-black/90 ring-amber-400/80"
+              : "bg-black/85 ring-white/10"
+      }`}
+    >
+      {(isRecording || isListening || isProcessing) && (
+        <span
+          className={`size-2 shrink-0 animate-pulse rounded-full ${
+            isRecording ? "bg-rose-500" : isListening ? "bg-sky-400" : "bg-amber-400"
+          }`}
+        />
+      )}
+      <span className="min-w-0 truncate">{pillLabel}</span>
+      {(isRecording || isProcessing) && (
+        <span className="flex h-3 shrink-0 items-end gap-[1.5px]">
+          {[0, 1, 2].map((i) => (
             <span
-              className={`size-2 shrink-0 animate-pulse rounded-full ${
-                isRecording ? "bg-rose-500" : isListening ? "bg-sky-400" : "bg-amber-400"
+              key={i}
+              className={`w-[2px] animate-od-eq origin-bottom ${
+                isRecording ? "bg-rose-400" : "bg-amber-400"
               }`}
+              style={{
+                height: 10,
+                animationDelay: `${i * 0.15}s`,
+                animationDuration: "0.7s",
+              }}
             />
-          )}
-          <span className="min-w-0 truncate">{pillLabel}</span>
-          {(isRecording || isProcessing) && (
-            <span className="flex h-3 shrink-0 items-end gap-[1.5px]">
-              {[0, 1, 2].map((i) => (
-                <span
-                  key={i}
-                  className={`w-[2px] animate-od-eq origin-bottom ${
-                    isRecording ? "bg-rose-400" : "bg-amber-400"
-                  }`}
-                  style={{
-                    height: 10,
-                    animationDelay: `${i * 0.15}s`,
-                    animationDuration: "0.7s",
-                  }}
-                />
-              ))}
-            </span>
-          )}
+          ))}
         </span>
       )}
-      <div className="relative flex size-6 shrink-0 items-center justify-center">
-        {(isRecording || isProcessing) && (
-          <span
-            key={`${state}-${recording}`}
-            className={`pointer-events-none absolute inset-0 animate-od-ping rounded-full ${
-              isProcessing ? "bg-amber-400/40" : "bg-rose-500/50"
-            }`}
-          />
-        )}
-        <button
-          type="button"
-          onClick={toggle}
-          className={`relative z-10 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 ${live ? "bg-black/90" : "bg-white/90"} ${tint}`}
-          aria-label={canStop ? "Stop recording" : "Start recording"}
-          title={canStop ? "Stop recording (Ctrl+K)" : "Start recording (Ctrl+K)"}
-        >
-          {content}
-        </button>
-      </div>
+    </span>
+  ) : null;
+
+  return (
+    <div
+      className={`flex h-full w-full items-end gap-2 ${
+        isLeftAligned
+          ? "justify-start pl-2 pr-3"
+          : isRightAligned
+            ? "justify-end pl-3 pr-2"
+            : "justify-center px-2"
+      }`}
+    >
+      {isLeftAligned ? (
+        <>
+          {buttonElement}
+          {pillElement}
+        </>
+      ) : (
+        <>
+          {pillElement}
+          {buttonElement}
+        </>
+      )}
     </div>
   );
 }

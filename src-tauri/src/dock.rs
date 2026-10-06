@@ -23,34 +23,62 @@ fn current_width() -> u32 {
     }
 }
 
-fn calculate_position(win: &WebviewWindow, width: u32, height: u32, position: &str) -> PhysicalPosition<i32> {
-    let default = PhysicalPosition { x: 100, y: 16 };
-    let Some(monitor) = win.current_monitor().ok().flatten() else {
-        return default;
-    };
-    let size = monitor.size();
-    let (x, y) = match position {
+pub(crate) fn compute_coordinates(
+    ox: i32,
+    oy: i32,
+    w: u32,
+    h: u32,
+    win_w: u32,
+    win_h: u32,
+    margin: f64,
+    position: &str,
+) -> (i32, i32) {
+    match position {
         "bottom_center" => (
-            ((size.width.saturating_sub(width) as f64) / 2.0).max(0.0) as i32,
-            (size.height.saturating_sub(height) as f64 - MARGIN).max(0.0) as i32,
+            ox + ((w.saturating_sub(win_w) as f64) / 2.0).max(0.0) as i32,
+            oy + (h.saturating_sub(win_h) as f64 - margin).max(0.0) as i32,
         ),
         "bottom_left" => (
-            MARGIN.max(0.0) as i32,
-            (size.height.saturating_sub(height) as f64 - MARGIN).max(0.0) as i32,
+            ox + margin.max(0.0) as i32,
+            oy + (h.saturating_sub(win_h) as f64 - margin).max(0.0) as i32,
         ),
         "top_right" => (
-            (size.width.saturating_sub(width) as f64 - MARGIN).max(0.0) as i32,
-            MARGIN.max(0.0) as i32,
+            ox + (w.saturating_sub(win_w) as f64 - margin).max(0.0) as i32,
+            oy + margin.max(0.0) as i32,
         ),
         "top_left" => (
-            MARGIN.max(0.0) as i32,
-            MARGIN.max(0.0) as i32,
+            ox + margin.max(0.0) as i32,
+            oy + margin.max(0.0) as i32,
         ),
         _ => (
-            (size.width.saturating_sub(width) as f64 - MARGIN).max(0.0) as i32,
-            (size.height.saturating_sub(height) as f64 - MARGIN).max(0.0) as i32,
+            ox + (w.saturating_sub(win_w) as f64 - margin).max(0.0) as i32,
+            oy + (h.saturating_sub(win_h) as f64 - margin).max(0.0) as i32,
         ),
+    }
+}
+
+fn calculate_position(win: &WebviewWindow, width: u32, height: u32, position: &str) -> PhysicalPosition<i32> {
+    let default = PhysicalPosition { x: 100, y: 16 };
+    let Some(monitor) = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten()) else {
+        return default;
     };
+    let scale = monitor.scale_factor();
+    let margin = (MARGIN * scale).round();
+    let (ox, oy, w, h) = {
+        let wa = monitor.work_area();
+        if wa.size.width > 0 && wa.size.height > 0 {
+            (wa.position.x, wa.position.y, wa.size.width, wa.size.height)
+        } else {
+            let s = monitor.size();
+            let p = monitor.position();
+            (p.x, p.y, s.width, s.height)
+        }
+    };
+    let (x, y) = compute_coordinates(ox, oy, w, h, width, height, margin, position);
     PhysicalPosition { x, y }
 }
 
@@ -123,6 +151,7 @@ fn apply_dock_size(app: &AppHandle) {
     if let Some(win) = window(app) {
         let width = current_width();
         let _ = win.set_always_on_top(true);
+        let _ = win.show();
         let size = win.outer_size().ok().unwrap_or(PhysicalSize {
             width,
             height: DOCK_SIZE as u32,
@@ -266,3 +295,94 @@ pub fn set_state(app: &AppHandle, status: &str, message: Option<&str>) {
     );
     crate::tray::apply_state_icon(app, status);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bottom_right_standard_1080p_with_taskbar() {
+        // 1920x1080 monitor, but work_area is 1920x1032 due to 48px Windows bottom taskbar
+        let (ox, oy, w, h) = (0, 0, 1920, 1032);
+        let (win_w, win_h) = (210, 29);
+        let margin = 16.0;
+
+        let (x, y) = compute_coordinates(ox, oy, w, h, win_w, win_h, margin, "bottom_right");
+        assert_eq!(x, 1920 - 210 - 16);
+        assert_eq!(y, 1032 - 29 - 16); // 987, well above 1032 taskbar
+    }
+
+    #[test]
+    fn test_bottom_left_with_taskbar() {
+        let (ox, oy, w, h) = (0, 0, 1920, 1032);
+        let (win_w, win_h) = (210, 29);
+        let margin = 16.0;
+
+        let (x, y) = compute_coordinates(ox, oy, w, h, win_w, win_h, margin, "bottom_left");
+        assert_eq!(x, 16);
+        assert_eq!(y, 987);
+    }
+
+    #[test]
+    fn test_bottom_center_with_taskbar() {
+        let (ox, oy, w, h) = (0, 0, 1920, 1032);
+        let (win_w, win_h) = (210, 29);
+        let margin = 16.0;
+
+        let (x, y) = compute_coordinates(ox, oy, w, h, win_w, win_h, margin, "bottom_center");
+        assert_eq!(x, ((1920 - 210) as f64 / 2.0) as i32);
+        assert_eq!(y, 987);
+    }
+
+    #[test]
+    fn test_top_right_and_top_left() {
+        let (ox, oy, w, h) = (0, 0, 1920, 1032);
+        let (win_w, win_h) = (210, 29);
+        let margin = 16.0;
+
+        let (tr_x, tr_y) = compute_coordinates(ox, oy, w, h, win_w, win_h, margin, "top_right");
+        assert_eq!(tr_x, 1920 - 210 - 16);
+        assert_eq!(tr_y, 16);
+
+        let (tl_x, tl_y) = compute_coordinates(ox, oy, w, h, win_w, win_h, margin, "top_left");
+        assert_eq!(tl_x, 16);
+        assert_eq!(tl_y, 16);
+    }
+
+    #[test]
+    fn test_secondary_monitor_offset() {
+        // Secondary monitor placed to the right at ox=1920, oy=0
+        let (ox, oy, w, h) = (1920, 0, 1920, 1032);
+        let (win_w, win_h) = (210, 29);
+        let margin = 16.0;
+
+        let (x, y) = compute_coordinates(ox, oy, w, h, win_w, win_h, margin, "bottom_right");
+        assert_eq!(x, 1920 + (1920 - 210 - 16));
+        assert_eq!(y, 987);
+
+        // Secondary monitor placed to the left at ox=-1920, oy=0
+        let (ox_l, oy_l, w_l, h_l) = (-1920, 0, 1920, 1032);
+        let (xl, yl) = compute_coordinates(ox_l, oy_l, w_l, h_l, win_w, win_h, margin, "bottom_right");
+        assert_eq!(xl, -1920 + (1920 - 210 - 16));
+        assert_eq!(yl, 987);
+    }
+
+    #[test]
+    fn test_top_and_left_taskbar_offsets() {
+        // Taskbar at top of screen: oy=48, h=1032
+        let (ox, oy, w, h) = (0, 48, 1920, 1032);
+        let (win_w, win_h) = (210, 29);
+        let margin = 16.0;
+
+        let (x, y) = compute_coordinates(ox, oy, w, h, win_w, win_h, margin, "top_left");
+        assert_eq!(x, 16);
+        assert_eq!(y, 48 + 16);
+
+        // Taskbar at left of screen: ox=60, w=1860
+        let (ox2, oy2, w2, h2) = (60, 0, 1860, 1080);
+        let (x2, y2) = compute_coordinates(ox2, oy2, w2, h2, win_w, win_h, margin, "bottom_left");
+        assert_eq!(x2, 60 + 16);
+        assert_eq!(y2, 1080 - 29 - 16);
+    }
+}
+
