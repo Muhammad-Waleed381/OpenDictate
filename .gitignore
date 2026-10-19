@@ -40,3 +40,7 @@ stream-app-main.png
 .superpowers
 docs/superpowers
 .agent-logs
+
+# Python packaging-test artifacts
+__pycache__/
+*.pyc

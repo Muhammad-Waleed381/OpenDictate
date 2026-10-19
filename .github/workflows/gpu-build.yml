@@ -9,7 +9,7 @@ name: GPU build (experimental)
 # You must supply `libs_url`: a tar.bz2 (or tar.gz/zip) of a sherpa-onnx
 # shared-library build compiled WITH `-DSHERPA_ONNX_ENABLE_CUDA=ON`,
 # matching the version pinned in crates/opendictate-core/Cargo.toml
-# (static `.a` preferred — SHERPA_ONNX_LIB_DIR overrides the static path).
+# (shared `.so` libraries are required).
 # k2-fsa publishes such archives alongside their releases (names like
 # `sherpa-onnx-v<ver>-linux-x64-shared-cuda-lib.tar.bz2`). The extracted
 # directory must contain `libsherpa-onnx-c-api.so` / `libonnxruntime.so`.
@@ -41,27 +41,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Download GPU libraries
+        env:
+          GPU_LIBS_URL: ${{ inputs.libs_url }}
         run: |
           mkdir -p "$HOME/gpu-libs"
-          curl -fL "${{ inputs.libs_url }}" -o /tmp/libs.archive
-          case /tmp/libs.archive in
-            *.zip) unzip /tmp/libs.archive -d "$HOME/gpu-libs" ;;
-            *) tar -xf /tmp/libs.archive -C "$HOME/gpu-libs" ;;
-          esac
-          find "$HOME/gpu-libs" -name "*.so" | head -20
+          curl -fL --connect-timeout 30 --max-time 1800 "$GPU_LIBS_URL" -o /tmp/libs.archive
+          python3 scripts/extract-gpu-libs.py /tmp/libs.archive "$HOME/gpu-libs"
+          find "$HOME/gpu-libs" -name "*.so" | sed -n '1,20p'
 
       - name: Build with CUDA libraries
         run: |
-          LIBDIR=$(find "$HOME/gpu-libs" -type f \( -name 'libsherpa-onnx-c-api.a' -o -name 'libsherpa-onnx-c-api.so' \) | head -1 | xargs dirname)
-          echo "link dir: $LIBDIR"
-          export SHERPA_ONNX_LIB_DIR="$LIBDIR"
+          GPU_API_LIB=$(find "$HOME/gpu-libs" -name 'libsherpa-onnx-c-api.so' -print -quit)
+          test -n "$GPU_API_LIB" || { echo "shared sherpa-onnx C API library missing" >&2; exit 1; }
+          export SHERPA_ONNX_LIB_DIR="$(dirname "$GPU_API_LIB")"
+          export OPENDICTATE_LINUX_RPATH=/usr/lib/opendictate
+          # RUNPATH on the app only resolves direct dependencies. Each bundled
+          # library must also find its own adjacent runtime dependencies.
+          while IFS= read -r -d '' GPU_LIBRARY; do
+            patchelf --set-rpath '$ORIGIN' "$GPU_LIBRARY"
+          done < <(find "$SHERPA_ONNX_LIB_DIR" -maxdepth 1 -type f -name '*.so*' -print0)
+          python3 scripts/inject-linux-libs.py
           npm ci
-          npm run tauri build -- --bundles deb
+          npm run tauri -- build --bundles deb --features gpu-shared -- --no-default-features
         shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: opendictate-linux-cuda
+          if-no-files-found: error
           path: |
-            src-tauri/target/release/bundle/deb/*.deb
+            target/release/bundle/deb/*.deb

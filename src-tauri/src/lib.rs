@@ -1,14 +1,15 @@
-mod commands;
 mod audio;
 mod autostart;
+mod commands;
 mod db;
 mod dictation;
+mod dock;
 #[cfg(target_os = "macos")]
 mod doubletap;
-mod dock;
 mod hotkey;
 mod inject;
 mod notify;
+mod session;
 mod state;
 mod tray;
 pub mod tray_icon;
@@ -20,11 +21,9 @@ use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    )
-    .format_timestamp_secs()
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_secs()
+        .init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -62,6 +61,7 @@ pub fn run() {
             commands::import_snippets,
             commands::export_snippets,
             commands::paste_clipboard,
+            commands::test_snippet,
             commands::copy_text,
             commands::undo_last_insert,
             commands::warmup_model,
@@ -75,16 +75,17 @@ pub fn run() {
         // anything else runs. Unix keeps its socket-based guard too (it
         // doubles as the GNOME toggle transport); this closes the gap on
         // Windows, which previously allowed any number of instances.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|arg| arg == "--toggle") {
+                crate::hotkey::toggle_dictation(app);
+                return;
+            }
             crate::tray::show_main(app);
         }))
         .setup(|app| {
             notify::init(&app.config().identifier);
 
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("app data dir must exist");
+            let data_dir = app.path().app_data_dir().expect("app data dir must exist");
             std::fs::create_dir_all(&data_dir)?;
 
             let socket_path = data_dir.join("toggle.sock");
@@ -98,6 +99,9 @@ pub fn run() {
             let settings = db::load_settings(&conn);
 
             let state = AppState {
+                sessions: Arc::new(session::SessionControl::default()),
+                recording_token: Arc::new(Mutex::new(None)),
+                continuous_queue: Arc::new(Mutex::new(None)),
                 recorder: Arc::new(opendictate_core::audio::capture::AudioRecorder::new()),
                 test_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 db: Arc::new(Mutex::new(conn)),
@@ -125,7 +129,9 @@ pub fn run() {
 
             let handle = app.handle();
             tray::build(handle)?;
-            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
+            if let Ok(icon) =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png"))
+            {
                 for window in app.webview_windows().values() {
                     let _ = window.set_icon(icon.clone());
                 }
@@ -133,7 +139,8 @@ pub fn run() {
             // A failed registration must not be silent: the most common
             // cause is a hotkey conflict, and the user needs to know the
             // app is running hotkey-less so they can pick another combo.
-            if let Err(e) = hotkey::register(handle, &handle.state::<AppState>(), &settings.hotkey) {
+            if let Err(e) = hotkey::register(handle, &handle.state::<AppState>(), &settings.hotkey)
+            {
                 log::error!("hotkey registration failed: {e}");
                 crate::notify::notify(
                     "Hotkey could not be registered",
@@ -148,7 +155,28 @@ pub fn run() {
             dock::init(handle);
 
             if settings.handsfree_mode {
-                let _ = dictation::start_handsfree(handle, &handle.state::<AppState>());
+                let state = handle.state::<AppState>();
+                if let Err(error) = dictation::start_handsfree(handle, &state) {
+                    log::error!("handsfree startup failed: {error}");
+                    notify::notify("Handsfree could not start", &error);
+                    if let Ok(mut settings) = state.settings.lock() {
+                        settings.handsfree_mode = false;
+                        if let Ok(conn) = state.db.lock() {
+                            if let Err(save_error) = db::save_settings(&conn, &settings) {
+                                log::error!(
+                                    "failed to persist handsfree startup rollback: {save_error}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            if std::env::args().any(|arg| arg == "--toggle") {
+                if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+                hotkey::toggle_dictation(handle);
             }
 
             // Background maintenance: fetch the small caption engine if it is
@@ -182,29 +210,27 @@ pub fn run() {
             });
             Ok(())
         })
-        .on_window_event(|window, event| {
-            match window.label() {
-                "main" => {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = window.hide();
-                        let app = window.app_handle();
-                        dock::ensure_on_main(app);
-                    }
+        .on_window_event(|window, event| match window.label() {
+            "main" => {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    let app = window.app_handle();
+                    dock::ensure_on_main(app);
                 }
-                "dock" => match event {
-                    WindowEvent::CloseRequested { api, .. } => api.prevent_close(),
-                    WindowEvent::Moved(_)
-                    | WindowEvent::Resized(_)
-                    | WindowEvent::ScaleFactorChanged { .. }
-                    | WindowEvent::Focused(_) => {
-                        let app = window.app_handle();
-                        dock::ensure_on_main(app);
-                    }
-                    _ => {}
-                },
-                _ => {}
             }
+            "dock" => match event {
+                WindowEvent::CloseRequested { api, .. } => api.prevent_close(),
+                WindowEvent::Moved(_)
+                | WindowEvent::Resized(_)
+                | WindowEvent::ScaleFactorChanged { .. }
+                | WindowEvent::Focused(_) => {
+                    let app = window.app_handle();
+                    dock::ensure_on_main(app);
+                }
+                _ => {}
+            },
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -222,6 +222,11 @@ fn model_def(id: &str) -> Option<&'static ModelDef> {
 /// discernible home falls back to the temp dir rather than aborting a
 /// command/background thread mid-flight.
 pub fn models_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(root) = TEST_MODEL_ROOT.with(|root| root.borrow().clone()) {
+        return root;
+    }
+
     // XDG override first (Linux convention, also used by tests).
     if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
         if !xdg.is_empty() {
@@ -273,7 +278,10 @@ pub fn models_dir() -> PathBuf {
     // installs already have models there and must not be orphaned.
     if let Ok(home) = std::env::var("HOME") {
         if !home.is_empty() {
-            return PathBuf::from(home).join(".local/share").join("opendictate").join("models");
+            return PathBuf::from(home)
+                .join(".local/share")
+                .join("opendictate")
+                .join("models");
         }
     }
 
@@ -328,15 +336,12 @@ pub fn is_streaming_model(id: &str) -> bool {
 }
 
 pub fn is_transducer_model(id: &str) -> bool {
-    matches!(
-        id,
-        PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID
-    )
+    matches!(id, PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID)
 }
 
 fn valid_file_size(path: &Path, min_bytes: u64) -> Option<u64> {
-    let size = std::fs::metadata(path).ok()?.len();
-    (size >= min_bytes).then_some(size)
+    let metadata = std::fs::metadata(path).ok()?;
+    (metadata.is_file() && metadata.len() >= min_bytes).then_some(metadata.len())
 }
 
 fn is_nemo_ctc_ready(id: &str) -> bool {
@@ -398,28 +403,41 @@ pub fn kws_model_dir() -> PathBuf {
     models_dir().join(KWS_MODEL_ID)
 }
 
+pub(crate) fn kws_model_file(dir: &Path, needle: &str) -> Option<PathBuf> {
+    let mut candidates: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    let name = name.to_lowercase();
+                    name.ends_with(".onnx")
+                        && name.contains(needle)
+                        && valid_file_size(path, STREAMING_PART_MIN_BYTES).is_some()
+                })
+        })
+        .collect();
+    candidates.sort_by_key(|path| {
+        (
+            !path.to_string_lossy().to_lowercase().contains(".int8."),
+            path.clone(),
+        )
+    });
+    candidates.into_iter().next()
+}
+
+pub(crate) fn valid_tokens_file(path: &Path) -> bool {
+    valid_file_size(path, TOKENS_MIN_BYTES).is_some()
+}
+
 pub fn is_kws_ready() -> bool {
     let dir = kws_model_dir();
-    if !dir.exists() {
-        return false;
-    }
-    let find = |needle: &str| -> bool {
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            entries.flatten().any(|e| {
-                let n = e.file_name().to_string_lossy().to_lowercase();
-                n.ends_with(".onnx") && n.contains(needle)
-            })
-        } else {
-            false
-        }
-    };
-    valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
-        && (valid_file_size(&dir.join("encoder.onnx"), STREAMING_PART_MIN_BYTES).is_some()
-            || find("encoder"))
-        && (valid_file_size(&dir.join("decoder.onnx"), STREAMING_PART_MIN_BYTES).is_some()
-            || find("decoder"))
-        && (valid_file_size(&dir.join("joiner.onnx"), STREAMING_PART_MIN_BYTES).is_some()
-            || find("joiner"))
+    valid_tokens_file(&dir.join("tokens.txt"))
+        && ["encoder", "decoder", "joiner"]
+            .iter()
+            .all(|part| kws_model_file(&dir, part).is_some())
 }
 
 pub fn is_vad_ready() -> bool {
@@ -427,7 +445,9 @@ pub fn is_vad_ready() -> bool {
 }
 
 pub fn is_stt_model_ready() -> bool {
-    MODELS.iter().any(|m| m.kind == "stt" && is_model_installed(m.id))
+    MODELS
+        .iter()
+        .any(|m| m.kind == "stt" && is_model_installed(m.id))
 }
 
 pub fn is_model_installed(id: &str) -> bool {
@@ -461,6 +481,9 @@ fn dir_size(path: &Path, out: &mut u64) {
 }
 
 pub fn model_disk_bytes(id: &str) -> u64 {
+    if model_def(id).is_none() {
+        return 0;
+    }
     let path = if id == VAD_MODEL_ID {
         vad_model_path()
     } else {
@@ -512,8 +535,26 @@ pub fn download_to_with_progress_cancel(
     on_progress: &mut dyn FnMut(u64, u64),
     is_cancelled: &dyn Fn() -> bool,
 ) -> Result<()> {
+    download_with_timeout(
+        url,
+        dest,
+        on_progress,
+        is_cancelled,
+        std::time::Duration::from_secs(5),
+    )
+}
+
+fn download_with_timeout(
+    url: &str,
+    dest: &Path,
+    on_progress: &mut dyn FnMut(u64, u64),
+    is_cancelled: &dyn Fn() -> bool,
+    inactivity: std::time::Duration,
+) -> Result<()> {
     if is_cancelled() {
-        return Err(CoreError::Download("download cancelled by user".to_string()));
+        return Err(CoreError::Download(
+            "download cancelled by user".to_string(),
+        ));
     }
     if let Some(parent) = dest.parent() {
         if !parent.as_os_str().is_empty() {
@@ -521,20 +562,30 @@ pub fn download_to_with_progress_cancel(
         }
     }
 
-    let agent = ureq::Agent::config_builder()
-        .timeout_connect(Some(std::time::Duration::from_secs(30)))
-        .build()
-        .new_agent();
+    let (agent, body_started) = super::download::agent_with_inactivity_timeout(inactivity);
 
-    let user_agent = concat!("OpenDictate/", env!("CARGO_PKG_VERSION"), " (Desktop; Tauri)");
+    let user_agent = concat!(
+        "OpenDictate/",
+        env!("CARGO_PKG_VERSION"),
+        " (Desktop; Tauri)"
+    );
     let response = agent
         .get(url)
         .header("User-Agent", user_agent)
         .call()
-        .map_err(|e| CoreError::Download(format!("failed to fetch {url}: {e}")))?;
+        .map_err(|e| {
+            if is_cancelled() {
+                CoreError::Download("download cancelled by user".into())
+            } else {
+                CoreError::Download(format!("failed to fetch {url}: {e}"))
+            }
+        })?;
+    body_started.store(true, std::sync::atomic::Ordering::Relaxed);
 
     if is_cancelled() {
-        return Err(CoreError::Download("download cancelled by user".to_string()));
+        return Err(CoreError::Download(
+            "download cancelled by user".to_string(),
+        ));
     }
 
     let total = response
@@ -548,7 +599,9 @@ pub fn download_to_with_progress_cancel(
     on_progress(0, total);
 
     if is_cancelled() {
-        return Err(CoreError::Download("download cancelled by user".to_string()));
+        return Err(CoreError::Download(
+            "download cancelled by user".to_string(),
+        ));
     }
 
     let part_name = match dest.file_name() {
@@ -567,20 +620,26 @@ pub fn download_to_with_progress_cancel(
     let download_result = (|| -> Result<()> {
         loop {
             if is_cancelled() {
-                return Err(CoreError::Download("download cancelled by user".to_string()));
+                return Err(CoreError::Download(
+                    "download cancelled by user".to_string(),
+                ));
             }
             let n = match std::io::Read::read(&mut body, &mut chunk) {
                 Ok(0) => break,
                 Ok(n) => n,
                 Err(e) => {
                     if is_cancelled() {
-                        return Err(CoreError::Download("download cancelled by user".to_string()));
+                        return Err(CoreError::Download(
+                            "download cancelled by user".to_string(),
+                        ));
                     }
                     return Err(CoreError::Io(e));
                 }
             };
             if is_cancelled() {
-                return Err(CoreError::Download("download cancelled by user".to_string()));
+                return Err(CoreError::Download(
+                    "download cancelled by user".to_string(),
+                ));
             }
             file.write_all(&chunk[..n])?;
             received += n as u64;
@@ -613,7 +672,9 @@ pub fn download_to_with_progress_cancel(
 
     if is_cancelled() {
         let _ = std::fs::remove_file(&part_path);
-        return Err(CoreError::Download("download cancelled by user".to_string()));
+        return Err(CoreError::Download(
+            "download cancelled by user".to_string(),
+        ));
     }
 
     on_progress(received, total);
@@ -654,17 +715,24 @@ fn extract_archive(
     is_cancelled: &dyn Fn() -> bool,
 ) -> Result<()> {
     if is_cancelled() {
-        return Err(CoreError::Download("download cancelled by user".to_string()));
+        return Err(CoreError::Download(
+            "download cancelled by user".to_string(),
+        ));
     }
     std::fs::create_dir_all(dest).map_err(CoreError::Io)?;
     let file = File::open(archive_path).map_err(CoreError::Io)?;
     let mut archive = Archive::new(BzDecoder::new(file));
     let entries = archive.entries().map_err(|e| {
-        CoreError::Download(format!("failed to read archive entries {}: {e}", archive_path.display()))
+        CoreError::Download(format!(
+            "failed to read archive entries {}: {e}",
+            archive_path.display()
+        ))
     })?;
     for entry in entries {
         if is_cancelled() {
-            return Err(CoreError::Download("download cancelled by user".to_string()));
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
         }
         let mut entry = entry.map_err(|e| {
             CoreError::Download(format!("corrupt entry in {}: {e}", archive_path.display()))
@@ -674,7 +742,9 @@ fn extract_archive(
         })?;
     }
     if is_cancelled() {
-        return Err(CoreError::Download("download cancelled by user".to_string()));
+        return Err(CoreError::Download(
+            "download cancelled by user".to_string(),
+        ));
     }
     Ok(())
 }
@@ -696,7 +766,9 @@ fn install_stt_model(
     let res = (|| -> Result<bool> {
         for url in [PARAKEET_INT8_ARCHIVE, PARAKEET_ARCHIVE] {
             if is_cancelled() {
-                return Err(CoreError::Download("download cancelled by user".to_string()));
+                return Err(CoreError::Download(
+                    "download cancelled by user".to_string(),
+                ));
             }
             log::info!("downloading {url} -> {}", archive_path.display());
             if download_to_with_progress_cancel(
@@ -708,7 +780,9 @@ fn install_stt_model(
             .is_err()
             {
                 if is_cancelled() {
-                    return Err(CoreError::Download("download cancelled by user".to_string()));
+                    return Err(CoreError::Download(
+                        "download cancelled by user".to_string(),
+                    ));
                 }
                 log::warn!("download failed for {url}, trying next archive");
                 continue;
@@ -718,7 +792,9 @@ fn install_stt_model(
             }
             if let Err(e) = extract_archive(&archive_path, &extract_dir, is_cancelled) {
                 if is_cancelled() {
-                    return Err(CoreError::Download("download cancelled by user".to_string()));
+                    return Err(CoreError::Download(
+                        "download cancelled by user".to_string(),
+                    ));
                 }
                 log::warn!("extraction failed: {e}");
                 continue;
@@ -740,7 +816,9 @@ fn install_stt_model(
 
             if let (Some(model), Some(tokens)) = (model_file, tokens_file) {
                 if is_cancelled() {
-                    return Err(CoreError::Download("download cancelled by user".to_string()));
+                    return Err(CoreError::Download(
+                        "download cancelled by user".to_string(),
+                    ));
                 }
                 let model_dir = stt_model_dir();
                 std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
@@ -761,7 +839,7 @@ fn install_stt_model(
 
     clean_after(&archive_path, &extract_dir);
     if res.is_err() && is_cancelled() {
-        let _ = remove_model(STT_MODEL_ID);
+        let _ = remove_model_unlocked(STT_MODEL_ID);
     }
     res
 }
@@ -786,14 +864,18 @@ fn install_whisper_model(
             is_cancelled,
         )?;
         if is_cancelled() {
-            return Err(CoreError::Download("download cancelled by user".to_string()));
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
         }
         if extract_dir.exists() {
             std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
         }
         extract_archive(&archive_path, &extract_dir, is_cancelled)?;
         if is_cancelled() {
-            return Err(CoreError::Download("download cancelled by user".to_string()));
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
         }
 
         let mut files = Vec::new();
@@ -834,7 +916,9 @@ fn install_whisper_model(
         };
 
         if is_cancelled() {
-            return Err(CoreError::Download("download cancelled by user".to_string()));
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
         }
 
         let model_dir = model_dir_for(id);
@@ -854,7 +938,7 @@ fn install_whisper_model(
 
     clean_after(&archive_path, &extract_dir);
     if res.is_err() {
-        let _ = remove_model(id);
+        let _ = remove_model_unlocked(id);
     }
     res
 }
@@ -879,14 +963,18 @@ fn install_transducer_model(
             is_cancelled,
         )?;
         if is_cancelled() {
-            return Err(CoreError::Download("download cancelled by user".to_string()));
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
         }
         if extract_dir.exists() {
             std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
         }
         extract_archive(&archive_path, &extract_dir, is_cancelled)?;
         if is_cancelled() {
-            return Err(CoreError::Download("download cancelled by user".to_string()));
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
         }
 
         let mut files = Vec::new();
@@ -895,9 +983,9 @@ fn install_transducer_model(
             let mut hits: Vec<_> = files
                 .iter()
                 .filter(|p| {
-                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                        n.ends_with(".onnx") && n.contains(needle)
-                    })
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.ends_with(".onnx") && n.contains(needle))
                 })
                 .cloned()
                 .collect();
@@ -919,7 +1007,9 @@ fn install_transducer_model(
         };
 
         if is_cancelled() {
-            return Err(CoreError::Download("download cancelled by user".to_string()));
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
         }
 
         let model_dir = model_dir_for(id);
@@ -928,13 +1018,19 @@ fn install_transducer_model(
         std::fs::copy(decoder, model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
         std::fs::copy(joiner, model_dir.join("joiner.onnx")).map_err(CoreError::Io)?;
         std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+        if let Some(vocab) = files
+            .iter()
+            .find(|p| p.file_name().is_some_and(|name| name == "bpe.vocab"))
+        {
+            std::fs::copy(vocab, model_dir.join("bpe.vocab")).map_err(CoreError::Io)?;
+        }
         log::info!("installed {id} -> {}", model_dir.display());
         Ok(())
     })();
 
     clean_after(&archive_path, &extract_dir);
     if res.is_err() && is_cancelled() {
-        let _ = remove_model(id);
+        let _ = remove_model_unlocked(id);
     }
     res
 }
@@ -959,14 +1055,18 @@ fn install_nemo_ctc_model(
             is_cancelled,
         )?;
         if is_cancelled() {
-            return Err(CoreError::Download("download cancelled by user".to_string()));
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
         }
         if extract_dir.exists() {
             std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
         }
         extract_archive(&archive_path, &extract_dir, is_cancelled)?;
         if is_cancelled() {
-            return Err(CoreError::Download("download cancelled by user".to_string()));
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
         }
 
         let mut files = Vec::new();
@@ -994,7 +1094,9 @@ fn install_nemo_ctc_model(
         };
 
         if is_cancelled() {
-            return Err(CoreError::Download("download cancelled by user".to_string()));
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
         }
 
         let model_dir = model_dir_for(id);
@@ -1008,7 +1110,7 @@ fn install_nemo_ctc_model(
 
     clean_after(&archive_path, &extract_dir);
     if res.is_err() && is_cancelled() {
-        let _ = remove_model(id);
+        let _ = remove_model_unlocked(id);
     }
     res
 }
@@ -1022,11 +1124,131 @@ pub fn ensure_model_with_cancel(
     on_progress: &mut dyn FnMut(&str, u64, u64),
     is_cancelled: &dyn Fn() -> bool,
 ) -> Result<()> {
-    if is_model_installed(id) {
-        return Ok(());
+    ensure_with_install(id, is_cancelled, || {
+        ensure_model_unlocked(id, on_progress, is_cancelled)
+    })
+}
+
+fn ensure_with_install(
+    id: &str,
+    is_cancelled: &dyn Fn() -> bool,
+    install: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    with_model_operation(id, is_cancelled, || {
+        if is_model_installed(id) {
+            return Ok(());
+        }
+        install()
+    })
+}
+
+#[derive(Default)]
+struct ModelOperations {
+    active: std::sync::Mutex<std::collections::HashSet<PathBuf>>,
+    changed: std::sync::Condvar,
+}
+static MODEL_OPERATIONS: std::sync::OnceLock<ModelOperations> = std::sync::OnceLock::new();
+struct ModelLease {
+    path: PathBuf,
+    ownership: &'static ModelOperations,
+}
+impl Drop for ModelLease {
+    fn drop(&mut self) {
+        self.ownership
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.path);
+        self.ownership.changed.notify_all();
     }
+}
+
+fn checked_model_path(id: &str) -> Result<PathBuf> {
+    model_def(id).ok_or_else(|| CoreError::Download(format!("unknown model '{id}'")))?;
+    let base = models_dir();
+    let path = if id == VAD_MODEL_ID {
+        vad_model_path()
+    } else {
+        model_dir_for(id)
+    };
+    if path.parent() != Some(base.as_path()) {
+        return Err(CoreError::Download(
+            "model path is outside model storage".into(),
+        ));
+    }
+    // Do not follow user-created replacement links during install or removal.
+    let mut artifacts = vec![path.clone()];
+    if id == VAD_MODEL_ID {
+        artifacts.push(base.join(format!("{VAD_FILENAME}.part")));
+    } else if id == STT_MODEL_ID {
+        artifacts.extend([
+            base.join("parakeet-tdt-ctc-110m.tar.bz2"),
+            base.join("parakeet-tdt-ctc-110m.tar.bz2.part"),
+            base.join(".extract"),
+        ]);
+    } else {
+        artifacts.extend([
+            base.join(format!("{id}.tar.bz2")),
+            base.join(format!("{id}.tar.bz2.part")),
+            base.join(format!(".extract-{id}")),
+        ]);
+    }
+    for artifact in artifacts {
+        if std::fs::symlink_metadata(&artifact).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(CoreError::Download(format!(
+                "model path is a symbolic link: {}",
+                artifact.display()
+            )));
+        }
+    }
+    if path.exists() {
+        let root = std::fs::canonicalize(&base)?;
+        if !std::fs::canonicalize(&path)?.starts_with(root) {
+            return Err(CoreError::Download(
+                "model path resolves outside model storage".into(),
+            ));
+        }
+    }
+    Ok(path)
+}
+
+fn with_model_operation<T>(
+    id: &str,
+    is_cancelled: &dyn Fn() -> bool,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let path = checked_model_path(id)?;
+    let ownership = MODEL_OPERATIONS.get_or_init(Default::default);
+    let mut active = ownership.active.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        if is_cancelled() {
+            return Err(CoreError::Download("download cancelled by user".into()));
+        }
+        if active.insert(path.clone()) {
+            break;
+        }
+        active = ownership
+            .changed
+            .wait_timeout(active, std::time::Duration::from_millis(50))
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
+    }
+    drop(active);
+    let _lease = ModelLease { path, ownership };
+    // Another operation may have replaced the path while we waited.
+    checked_model_path(id)?;
+    operation()
+}
+
+fn ensure_model_unlocked(
+    id: &str,
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
     if is_cancelled() {
-        return Err(CoreError::Download("download cancelled by user".to_string()));
+        return Err(CoreError::Download(
+            "download cancelled by user".to_string(),
+        ));
     }
     match id {
         STT_MODEL_ID => {
@@ -1056,7 +1278,9 @@ pub fn ensure_model_with_cancel(
             )?;
             if is_cancelled() {
                 let _ = std::fs::remove_file(vad_model_path());
-                return Err(CoreError::Download("download cancelled by user".to_string()));
+                return Err(CoreError::Download(
+                    "download cancelled by user".to_string(),
+                ));
             }
             if !is_vad_ready() {
                 return Err(CoreError::Download(format!(
@@ -1070,19 +1294,17 @@ pub fn ensure_model_with_cancel(
         | WHISPER_BASE_MODEL_ID
         | WHISPER_SMALL_MODEL_ID
         | WHISPER_TURBO_MODEL_ID
-        | WHISPER_MEDIUM_MODEL_ID => {
-            install_whisper_model(id, on_progress, is_cancelled)
-        }
+        | WHISPER_MEDIUM_MODEL_ID => install_whisper_model(id, on_progress, is_cancelled),
         other => Err(CoreError::Download(format!("unknown model '{other}'"))),
     }
 }
 
 pub fn remove_model(id: &str) -> Result<()> {
-    let path = if id == VAD_MODEL_ID {
-        vad_model_path()
-    } else {
-        model_dir_for(id)
-    };
+    with_model_operation(id, &|| false, || remove_model_unlocked(id))
+}
+
+fn remove_model_unlocked(id: &str) -> Result<()> {
+    let path = checked_model_path(id)?;
     if !path.exists() {
         return Ok(());
     }
@@ -1106,15 +1328,346 @@ pub fn ensure_models_with_progress(on_progress: &mut dyn FnMut(&str, u64, u64)) 
 }
 
 #[cfg(test)]
+thread_local! {
+    static TEST_MODEL_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+struct TestModelRoot(Option<PathBuf>);
+#[cfg(test)]
+impl TestModelRoot {
+    fn new(data_home: &Path) -> Self {
+        Self(TEST_MODEL_ROOT.with(|root| root.replace(Some(data_home.join("opendictate/models")))))
+    }
+}
+#[cfg(test)]
+impl Drop for TestModelRoot {
+    fn drop(&mut self) {
+        TEST_MODEL_ROOT.with(|root| root.replace(self.0.take()));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    static TEST_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    fn fixture(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "opendictate-{name}-{}-{}",
+            std::process::id(),
+            TEST_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ))
+    }
+
+    fn accept_fixture(listener: std::net::TcpListener) -> std::net::TcpStream {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                        .unwrap();
+                    stream
+                        .set_write_timeout(Some(std::time::Duration::from_secs(2)))
+                        .unwrap();
+                    return stream;
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(5))
+                }
+                Err(error) => panic!("HTTP fixture accept failed: {error}"),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn catalog_paths_cannot_follow_replacement_symlinks() {
+        let tmp = fixture("model-symlink");
+        let _root = TestModelRoot::new(&tmp);
+        std::fs::create_dir_all(models_dir()).unwrap();
+        let outside = tmp.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep"), "original").unwrap();
+        std::os::unix::fs::symlink(&outside, model_dir_for(STT_MODEL_ID)).unwrap();
+        assert!(remove_model(STT_MODEL_ID).is_err());
+        assert!(ensure_model(STT_MODEL_ID, &mut |_, _, _| panic!(
+            "must not download through a link"
+        ))
+        .is_err());
+        assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"original");
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn failed_download_cleanup_cannot_remove_waiting_replacement() {
+        let tmp = fixture("failed-install-retry");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut stream = accept_fixture(listener);
+            let _ = std::io::Read::read(&mut stream, &mut [0; 2048]);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 99\r\n\r\npartial");
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        });
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let owner_tmp = tmp.clone();
+        let owner = std::thread::spawn(move || {
+            let _root = TestModelRoot::new(&owner_tmp);
+            let result = with_model_operation(VAD_MODEL_ID, &|| false, || {
+                let result = download_with_timeout(
+                    &url,
+                    &vad_model_path(),
+                    &mut |_, _| {
+                        let _ = started_tx.send(());
+                    },
+                    &|| false,
+                    std::time::Duration::from_millis(100),
+                );
+                if result.is_err() {
+                    remove_model_unlocked(VAD_MODEL_ID)?;
+                }
+                result
+            });
+            assert!(result.is_err());
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let retry_tmp = tmp.clone();
+        let retry = std::thread::spawn(move || {
+            let _root = TestModelRoot::new(&retry_tmp);
+            with_model_operation(VAD_MODEL_ID, &|| false, || {
+                std::fs::create_dir_all(models_dir())?;
+                File::create(vad_model_path())?.set_len(VAD_MIN_BYTES)?;
+                Ok(())
+            })
+            .unwrap();
+        });
+        owner.join().unwrap();
+        retry.join().unwrap();
+        server.join().unwrap();
+        let _root = TestModelRoot::new(&tmp);
+        assert!(
+            is_vad_ready(),
+            "old failure cleanup must not remove the replacement"
+        );
+        assert!(!models_dir().join(format!("{VAD_FILENAME}.part")).exists());
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn waiting_ensure_rechecks_readiness_after_install_finishes() {
+        let tmp = fixture("ensure-recheck");
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let owner_tmp = tmp.clone();
+        let owner = std::thread::spawn(move || {
+            let _root = TestModelRoot::new(&owner_tmp);
+            with_model_operation(VAD_MODEL_ID, &|| false, || {
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap();
+                std::fs::create_dir_all(models_dir())?;
+                File::create(vad_model_path())?.set_len(VAD_MIN_BYTES)?;
+                Ok(())
+            })
+            .unwrap();
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let (waiting_tx, waiting_rx) = std::sync::mpsc::channel();
+        let waiter_tmp = tmp.clone();
+        let waiter = std::thread::spawn(move || {
+            let _root = TestModelRoot::new(&waiter_tmp);
+            ensure_with_install(
+                VAD_MODEL_ID,
+                &|| {
+                    let _ = waiting_tx.send(());
+                    false
+                },
+                || panic!("already-installed model must not be downloaded again"),
+            )
+            .unwrap();
+        });
+        waiting_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        release_tx.send(()).unwrap();
+        owner.join().unwrap();
+        waiter.join().unwrap();
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn progressing_download_can_outlast_inactivity_timeout() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut stream = accept_fixture(listener);
+            let _ = std::io::Read::read(&mut stream, &mut [0; 2048]);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\n")
+                .unwrap();
+            for _ in 0..8 {
+                stream.write_all(b"x").unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+        });
+        let tmp = fixture("slow-success");
+        let dest = tmp.join("model");
+        download_with_timeout(
+            &url,
+            &dest,
+            &mut |_, _| {},
+            &|| false,
+            std::time::Duration::from_millis(150),
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(std::fs::read(dest).unwrap(), b"xxxxxxxx");
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn concurrent_fixture_roots_are_independent_and_restore() {
+        let original = models_dir();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let tmp = fixture("parallel-root");
+                    let _root = TestModelRoot::new(&tmp);
+                    barrier.wait();
+                    assert_eq!(models_dir(), tmp.join("opendictate/models"));
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(models_dir(), original);
+    }
+
+    #[test]
+    fn core_removal_waits_for_inflight_install_ownership() {
+        let tmp = fixture("install-lock");
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let owner_tmp = tmp.clone();
+        let owner = std::thread::spawn(move || {
+            let _root = TestModelRoot::new(&owner_tmp);
+            with_model_operation(VAD_MODEL_ID, &|| false, || {
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let remover = std::thread::spawn(move || {
+            let _root = TestModelRoot::new(&tmp);
+            done_tx.send(remove_model(VAD_MODEL_ID)).unwrap();
+        });
+        let early = done_rx
+            .recv_timeout(std::time::Duration::from_millis(80))
+            .is_ok();
+        release_tx.send(()).unwrap();
+        owner.join().unwrap();
+        remover.join().unwrap();
+        assert!(
+            !early,
+            "removal must not enter an active installation's directory"
+        );
+    }
+
+    #[test]
+    fn stalled_download_headers_and_body_have_bounded_waits() {
+        for headers in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/model", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let mut stream = accept_fixture(listener);
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(1)))
+                    .unwrap();
+                let _ = std::io::Read::read(&mut stream, &mut [0; 2048]);
+                if headers {
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 99\r\n\r\n");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(700));
+            });
+            let tmp = fixture("stall-download");
+            let dest = tmp.join("model");
+            let start = std::time::Instant::now();
+            let result = download_with_timeout(
+                &url,
+                &dest,
+                &mut |_, _| {},
+                &|| false,
+                std::time::Duration::from_millis(100),
+            );
+            let elapsed = start.elapsed();
+            server.join().unwrap();
+            let _ = std::fs::remove_dir_all(tmp);
+            assert!(result.is_err());
+            assert!(
+                elapsed < std::time::Duration::from_millis(500),
+                "headers={headers}, elapsed={elapsed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_removal_outside_catalog_before_touching_files() {
+        let outside = fixture("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep"), "untouched").unwrap();
+        let result = remove_model(outside.to_str().unwrap());
+        let preserved = outside.join("keep").exists();
+        let _ = std::fs::remove_dir_all(&outside);
+        assert!(
+            result.is_err(),
+            "non-catalog absolute paths must be rejected"
+        );
+        assert!(preserved, "external fixture must remain intact");
+        assert!(remove_model("../outside").is_err());
+        assert!(remove_model("").is_err());
+    }
+
+    #[test]
+    fn kws_rejects_empty_versioned_and_canonical_candidates() {
+        let tmp = fixture("kws-empty");
+        let dir = tmp.join("opendictate/models").join(KWS_MODEL_ID);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tokens.txt"), vec![b'a'; 200]).unwrap();
+        for name in ["encoder.onnx", "decoder.int8.onnx", "joiner-epoch-12.onnx"] {
+            std::fs::write(dir.join(name), []).unwrap();
+        }
+        let _root = TestModelRoot::new(&tmp);
+        let ready = is_kws_ready();
+        let _ = std::fs::remove_dir_all(tmp);
+        assert!(!ready, "zero-byte candidates must not report installed");
+    }
+
     #[test]
     fn model_ready_requires_files() {
-        let tmp = std::env::temp_dir().join("opendictate-test-ready");
-        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let tmp = fixture("ready");
+        let _root = TestModelRoot::new(&tmp);
         let result = is_stt_model_ready();
-        std::env::remove_var("XDG_DATA_HOME");
         let _ = std::fs::remove_dir_all(&tmp);
         assert!(!result);
     }
@@ -1146,12 +1699,10 @@ mod tests {
             Some("parakeet")
         );
         assert!(catalog.iter().all(|m| m.size_bytes > 0));
-        assert!(
-            catalog
-                .iter()
-                .filter(|m| m.streaming)
-                .all(|m| is_streaming_model(&m.id))
-        );
+        assert!(catalog
+            .iter()
+            .filter(|m| m.streaming)
+            .all(|m| is_streaming_model(&m.id)));
     }
 
     #[test]
@@ -1191,16 +1742,22 @@ mod tests {
 
     #[test]
     fn transducer_install_state_detects_files() {
-        let tmp = std::env::temp_dir().join("opendictate-test-transducer");
-        let model_dir = tmp.join("opendictate").join("models").join(PARAKEET_TDT_06B_MODEL_ID);
+        let tmp = fixture("transducer");
+        let model_dir = tmp
+            .join("opendictate")
+            .join("models")
+            .join(PARAKEET_TDT_06B_MODEL_ID);
         std::fs::create_dir_all(&model_dir).unwrap();
         std::fs::write(model_dir.join("encoder.onnx"), vec![0u8; 2_000_000]).unwrap();
         std::fs::write(model_dir.join("decoder.onnx"), vec![0u8; 2_000_000]).unwrap();
         std::fs::write(model_dir.join("joiner.onnx"), vec![0u8; 2_000_000]).unwrap();
         std::fs::write(model_dir.join("tokens.txt"), vec![0u8; 200]).unwrap();
-        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let _root = TestModelRoot::new(&tmp);
         let catalog = catalog();
-        let tdt = catalog.iter().find(|m| m.id == PARAKEET_TDT_06B_MODEL_ID).unwrap();
+        let tdt = catalog
+            .iter()
+            .find(|m| m.id == PARAKEET_TDT_06B_MODEL_ID)
+            .unwrap();
         assert!(tdt.installed);
         assert_eq!(tdt.disk_bytes, 6_000_200);
         let unified = catalog
@@ -1208,7 +1765,6 @@ mod tests {
             .find(|m| m.id == PARAKEET_UNIFIED_EN_MODEL_ID)
             .unwrap();
         assert!(!unified.installed);
-        std::env::remove_var("XDG_DATA_HOME");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1225,12 +1781,12 @@ mod tests {
 
     #[test]
     fn installed_state_matches_disk() {
-        let tmp = std::env::temp_dir().join("opendictate-test-installed");
+        let tmp = fixture("installed");
         let model_dir = tmp.join("opendictate").join("models").join(DEFAULT_MODEL);
         std::fs::create_dir_all(&model_dir).unwrap();
         std::fs::write(model_dir.join("model.int8.onnx"), vec![0u8; 2_000_000]).unwrap();
         std::fs::write(model_dir.join("tokens.txt"), vec![0u8; 200]).unwrap();
-        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let _root = TestModelRoot::new(&tmp);
         let catalog = catalog();
         let parakeet = catalog.iter().find(|m| m.id == STT_MODEL_ID).unwrap();
         assert!(parakeet.installed);
@@ -1241,14 +1797,13 @@ mod tests {
             .unwrap();
         assert!(!whisper.installed);
         assert_eq!(whisper.disk_bytes, 0);
-        std::env::remove_var("XDG_DATA_HOME");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn cancellation_aborts_immediately_and_cleans_up() {
-        let tmp = std::env::temp_dir().join("opendictate-test-cancel");
-        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let tmp = fixture("cancel");
+        let _root = TestModelRoot::new(&tmp);
         let is_cancelled = || true;
         let mut progress_called = false;
         let result = ensure_model_with_cancel(
@@ -1256,7 +1811,6 @@ mod tests {
             &mut |_, _, _| progress_called = true,
             &is_cancelled,
         );
-        std::env::remove_var("XDG_DATA_HOME");
         let _ = std::fs::remove_dir_all(&tmp);
         assert!(result.is_err());
         assert!(!progress_called);
@@ -1266,7 +1820,7 @@ mod tests {
 
     #[test]
     fn whisper_turbo_install_state_detects_canonical_and_int8_files() {
-        let tmp = std::env::temp_dir().join("opendictate-test-whisper-turbo");
+        let tmp = fixture("whisper-turbo");
         let model_dir = tmp
             .join("opendictate")
             .join("models")
@@ -1286,7 +1840,7 @@ mod tests {
         .unwrap();
         std::fs::write(model_dir.join("turbo-tokens.txt"), vec![0u8; 500]).unwrap();
 
-        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let _root = TestModelRoot::new(&tmp);
         assert!(is_model_installed(WHISPER_TURBO_MODEL_ID));
 
         // 2. Also with canonical names encoder.onnx / decoder.onnx / tokens.txt
@@ -1298,7 +1852,6 @@ mod tests {
 
         assert!(is_model_installed(WHISPER_TURBO_MODEL_ID));
 
-        std::env::remove_var("XDG_DATA_HOME");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1308,7 +1861,7 @@ mod tests {
         use bzip2::Compression;
         use tar::Builder;
 
-        let tmp = std::env::temp_dir().join("opendictate-test-whisper-turbo-archive");
+        let tmp = fixture("whisper-turbo-archive");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
@@ -1364,7 +1917,7 @@ mod tests {
                 .unwrap();
 
             // 4. Tokens (>= 100 bytes)
-            let tokens = vec![b'a'; 200];
+            let tokens = [b'a'; 200];
             let mut header = tar::Header::new_gnu();
             header.set_size(tokens.len() as u64);
             header.set_mode(0o644);
@@ -1442,10 +1995,9 @@ mod tests {
         std::fs::copy(&decoder, target_dir.join("decoder.onnx")).unwrap();
         std::fs::copy(&tokens, target_dir.join("tokens.txt")).unwrap();
 
-        std::env::set_var("XDG_DATA_HOME", &tmp);
+        let _root = TestModelRoot::new(&tmp);
         assert!(is_model_installed(WHISPER_TURBO_MODEL_ID));
 
-        std::env::remove_var("XDG_DATA_HOME");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1455,7 +2007,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
 
         let server_thread = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_fixture(listener);
             let mut req_buf = [0u8; 2048];
             let n = std::io::Read::read(&mut stream, &mut req_buf).unwrap();
             let req_str = String::from_utf8_lossy(&req_buf[..n]);
@@ -1476,7 +2028,7 @@ mod tests {
             std::io::Write::flush(&mut stream).unwrap();
         });
 
-        let tmp = std::env::temp_dir().join("opendictate-test-dl-progress");
+        let tmp = fixture("dl-progress");
         let dest = tmp.join("model.bin");
         let _ = std::fs::remove_dir_all(&tmp);
 
@@ -1501,7 +2053,10 @@ mod tests {
         assert!(dest.exists());
         let part_file = tmp.join("model.bin.part");
         assert!(!part_file.exists());
-        assert_eq!(std::fs::read(&dest).unwrap(), b"hello open dictate test payload");
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            b"hello open dictate test payload"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1512,7 +2067,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
 
         let server_thread = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_fixture(listener);
             let mut req_buf = [0u8; 2048];
             let _ = std::io::Read::read(&mut stream, &mut req_buf);
 
@@ -1525,7 +2080,7 @@ mod tests {
             let _ = std::io::Write::write_all(&mut stream, &body);
         });
 
-        let tmp = std::env::temp_dir().join("opendictate-test-dl-cancel");
+        let tmp = fixture("dl-cancel");
         let dest = tmp.join("model.bin");
         let _ = std::fs::remove_dir_all(&tmp);
 
@@ -1545,12 +2100,18 @@ mod tests {
 
         let _ = server_thread.join();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("cancelled by user"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled by user"));
 
         // Neither dest nor part file should exist
         assert!(!dest.exists(), "dest should not exist on cancel");
         let part_file = tmp.join("model.bin.part");
-        assert!(!part_file.exists(), "part file should be cleaned up on cancel");
+        assert!(
+            !part_file.exists(),
+            "part file should be cleaned up on cancel"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1561,7 +2122,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
 
         let server_thread = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
+            let mut stream = accept_fixture(listener);
             let mut req_buf = [0u8; 2048];
             let _ = std::io::Read::read(&mut stream, &mut req_buf);
 
@@ -1572,17 +2133,12 @@ mod tests {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         });
 
-        let tmp = std::env::temp_dir().join("opendictate-test-dl-error");
+        let tmp = fixture("dl-error");
         let dest = tmp.join("model.bin");
         let _ = std::fs::remove_dir_all(&tmp);
 
         let url = format!("http://127.0.0.1:{port}/model.bin");
-        let result = download_to_with_progress_cancel(
-            &url,
-            &dest,
-            &mut |_, _| {},
-            &|| false,
-        );
+        let result = download_to_with_progress_cancel(&url, &dest, &mut |_, _| {}, &|| false);
 
         let _ = server_thread.join();
         assert!(result.is_err());
@@ -1590,7 +2146,10 @@ mod tests {
         // Neither dest nor part file should exist
         assert!(!dest.exists(), "dest should not exist on error");
         let part_file = tmp.join("model.bin.part");
-        assert!(!part_file.exists(), "part file should be cleaned up on error");
+        assert!(
+            !part_file.exists(),
+            "part file should be cleaned up on error"
+        );
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

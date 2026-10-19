@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::state::{DictEntry, HistoryEntry, Settings, SnippetEntry};
 
@@ -47,29 +47,66 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
             |r| r.get::<_, i64>(0),
         )
         .is_ok();
-    let backfilled: i64 = conn.query_row("SELECT COUNT(*) FROM daily_stats", [], |r| r.get(0))?;
-    if backfilled == 0 && !stats_cleared {
-        conn.execute_batch(
-            "INSERT INTO daily_stats (day, words, sessions)
-             SELECT date(created_at, 'unixepoch', 'localtime'),
-                    COALESCE(SUM(
-                        CASE WHEN length(text) = 0 THEN 0
-                             ELSE length(text) - length(replace(text, ' ', '')) + 1
-                        END
-                    ), 0),
-                    COUNT(*)
-             FROM history GROUP BY date(created_at, 'unixepoch', 'localtime');",
+    // Old releases recorded that a reset happened, but not which history
+    // rows belonged to it. Preserve their totals and conservatively exclude
+    // existing rows from subsequent adjustments; new inserts are tracked.
+    if stats_cleared {
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value)
+             SELECT 'stats_reset_history_id', CAST(COALESCE(MAX(id), 0) AS TEXT) FROM history",
+            [],
         )?;
     }
+    let backfilled: i64 = conn.query_row("SELECT COUNT(*) FROM daily_stats", [], |r| r.get(0))?;
+    let word_count_migrated = conn
+        .query_row(
+            "SELECT 1 FROM settings WHERE key = 'whitespace_word_counts'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+        .is_some();
+    if !stats_cleared && (backfilled == 0 || !word_count_migrated) {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM daily_stats", [])?;
+        {
+            let mut stmt =
+                tx.prepare("SELECT text, date(created_at, 'unixepoch', 'localtime') FROM history")?;
+            let rows =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            for row in rows {
+                let (text, day) = row?;
+                tx.execute(
+                    "INSERT INTO daily_stats (day, words, sessions) VALUES (?1, ?2, 1)
+                     ON CONFLICT(day) DO UPDATE SET words = words + excluded.words, sessions = sessions + 1",
+                    rusqlite::params![day, count_words(&text)],
+                )?;
+            }
+        }
+        tx.commit()?;
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('whitespace_word_counts', '1')",
+        [],
+    )?;
     Ok(conn)
 }
 
 pub fn load_settings(conn: &Connection) -> Settings {
     let row: Option<String> = conn
-        .query_row("SELECT value FROM settings WHERE key = 'app'", [], |r| r.get(0))
+        .query_row("SELECT value FROM settings WHERE key = 'app'", [], |r| {
+            r.get(0)
+        })
         .ok();
-    row.and_then(|json| serde_json::from_str(&json).ok())
-        .unwrap_or_default()
+    let mut settings: Settings = row
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
+    // Earlier versions allowed this placeholder. Normalize its saved value
+    // without opting anyone into cloud processing or blocking unrelated edits.
+    if settings.polish_provider == "local_slm" {
+        settings.polish_provider = "off".into();
+    }
+    settings
 }
 
 pub fn save_settings(conn: &Connection, settings: &Settings) -> rusqlite::Result<()> {
@@ -95,23 +132,32 @@ pub fn insert_history(conn: &Connection, entry: &HistoryEntry) -> rusqlite::Resu
     )?;
     tx.execute(
         "INSERT INTO daily_stats (day, words, sessions)
-         VALUES (date(?1, 'unixepoch', 'localtime'),
-                 CASE WHEN length(?2) = 0 THEN 0
-                      ELSE length(?2) - length(replace(?2, ' ', '')) + 1
-                 END,
-                 1)
+         VALUES (date(?1, 'unixepoch', 'localtime'), ?2, 1)
          ON CONFLICT(day) DO UPDATE SET
              words = words + excluded.words,
              sessions = sessions + excluded.sessions",
-        rusqlite::params![entry.created_at, entry.text],
+        rusqlite::params![entry.created_at, count_words(&entry.text)],
     )?;
     tx.commit()
 }
 
 pub fn get_history(conn: &Connection) -> rusqlite::Result<Vec<HistoryEntry>> {
-    let mut stmt = conn.prepare(
+    history_query(
+        conn,
         "SELECT id, text, created_at, duration_ms, source FROM history ORDER BY id DESC LIMIT 500",
-    )?;
+    )
+}
+
+/// Export is intentionally independent of the recent-history UI limit.
+pub fn get_all_history(conn: &Connection) -> rusqlite::Result<Vec<HistoryEntry>> {
+    history_query(
+        conn,
+        "SELECT id, text, created_at, duration_ms, source FROM history ORDER BY id DESC",
+    )
+}
+
+fn history_query(conn: &Connection, query: &str) -> rusqlite::Result<Vec<HistoryEntry>> {
+    let mut stmt = conn.prepare(query)?;
     let rows = stmt.query_map([], |r| {
         Ok(HistoryEntry {
             id: r.get(0)?,
@@ -124,15 +170,20 @@ pub fn get_history(conn: &Connection) -> rusqlite::Result<Vec<HistoryEntry>> {
     rows.collect()
 }
 
-/// Word count for `daily_stats` aggregation, matching the SQL heuristic
-/// `length(text) - length(replace(text, ' ', '')) + 1` (with 0 for empty
-/// text) so Rust-side adjustments stay consistent with SQL-side inserts.
 fn count_words(text: &str) -> i64 {
-    if text.is_empty() {
-        0
-    } else {
-        text.split(' ').count() as i64
-    }
+    text.split_whitespace().count() as i64
+}
+
+fn contributes_to_stats(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
+    let cutoff = conn
+        .query_row(
+            "SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'stats_reset_history_id'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    Ok(id > cutoff)
 }
 
 pub fn delete_history(conn: &Connection, id: i64) -> rusqlite::Result<()> {
@@ -146,14 +197,16 @@ pub fn delete_history(conn: &Connection, id: i64) -> rusqlite::Result<()> {
         .ok();
     if let Some((text, created_at)) = row {
         tx.execute("DELETE FROM history WHERE id = ?1", [id])?;
-        // Keep the daily aggregate in sync with the history list.
-        tx.execute(
-            "UPDATE daily_stats SET
+        // Rows before the latest reset no longer contribute to these totals.
+        if contributes_to_stats(&tx, id)? {
+            tx.execute(
+                "UPDATE daily_stats SET
                  words = MAX(words - ?2, 0),
                  sessions = MAX(sessions - 1, 0)
              WHERE day = date(?1, 'unixepoch', 'localtime')",
-            rusqlite::params![created_at, count_words(&text)],
-        )?;
+                rusqlite::params![created_at, count_words(&text)],
+            )?;
+        }
     }
     tx.commit()
 }
@@ -174,7 +227,7 @@ pub fn update_history(conn: &Connection, id: i64, text: &str) -> rusqlite::Resul
             rusqlite::params![trimmed, id],
         )?;
         let delta = count_words(trimmed) - count_words(&old_text);
-        if delta != 0 {
+        if delta != 0 && contributes_to_stats(&tx, id)? {
             tx.execute(
                 "UPDATE daily_stats SET words = MAX(words + ?2, 0)
                  WHERE day = date(?1, 'unixepoch', 'localtime')",
@@ -193,9 +246,8 @@ pub fn clear_history(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 pub fn get_dictionary(conn: &Connection) -> rusqlite::Result<Vec<DictEntry>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, word, created_at FROM dictionary ORDER BY word COLLATE NOCASE",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, word, created_at FROM dictionary ORDER BY word COLLATE NOCASE")?;
     let rows = stmt.query_map([], |r| {
         Ok(DictEntry {
             id: r.get(0)?,
@@ -296,6 +348,13 @@ pub fn reset_word_stats(conn: &Connection) -> rusqlite::Result<()> {
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [],
     )?;
+    tx.execute(
+        "INSERT INTO settings (key, value)
+         SELECT 'stats_reset_history_id', CAST(COALESCE(MAX(id), 0) AS TEXT) FROM history
+         WHERE true
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [],
+    )?;
     tx.commit()
 }
 
@@ -339,12 +398,40 @@ mod tests {
     }
 
     #[test]
-    fn count_words_matches_sql_heuristic() {
+    fn count_words_uses_whitespace_separated_words() {
         assert_eq!(count_words(""), 0);
         assert_eq!(count_words("hello"), 1);
         assert_eq!(count_words("hello world"), 2);
-        // Double spaces count like the SQL length-diff heuristic does.
-        assert_eq!(count_words("a  b"), 3);
+        assert_eq!(count_words("a  b"), 2);
+        assert_eq!(count_words("  a\tb\nc\u{2003}d  "), 4);
+        assert_eq!(count_words(" \t\n"), 0);
+    }
+
+    #[test]
+    fn editing_or_deleting_pre_reset_history_preserves_new_stats() {
+        let conn = Connection::open_in_memory().unwrap();
+        stats_tables(&conn);
+        let mut entry = HistoryEntry {
+            id: 0,
+            text: "old words counted before reset".into(),
+            created_at: "83".into(),
+            duration_ms: 1000,
+            source: "dictate".into(),
+        };
+        insert_history(&conn, &entry).unwrap();
+        reset_word_stats(&conn).unwrap();
+        entry.text = "new\twords\nonly".into();
+        insert_history(&conn, &entry).unwrap();
+        let day = word_stats(&conn).unwrap()[0].0.clone();
+        assert_eq!(day_words(&conn, &day), (3, 1));
+        update_history(&conn, 1, "old").unwrap();
+        assert_eq!(day_words(&conn, &day), (3, 1));
+        delete_history(&conn, 1).unwrap();
+        assert_eq!(day_words(&conn, &day), (3, 1));
+        update_history(&conn, 2, "new words").unwrap();
+        assert_eq!(day_words(&conn, &day), (2, 1));
+        delete_history(&conn, 2).unwrap();
+        assert_eq!(day_words(&conn, &day), (0, 0));
     }
 
     #[test]
@@ -363,9 +450,11 @@ mod tests {
         // The backfill heuristic in open() skips when this marker is present;
         // without it the reset was undone on the next launch.
         let backfill_would_run = conn
-            .query_row("SELECT 1 FROM settings WHERE key = 'stats_cleared'", [], |r| {
-                r.get::<_, i64>(0)
-            })
+            .query_row(
+                "SELECT 1 FROM settings WHERE key = 'stats_cleared'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
             .is_err();
         assert!(!backfill_would_run);
     }
@@ -383,24 +472,47 @@ mod tests {
             source: "dictate".into(),
         };
         insert_history(&conn, &entry).unwrap();
-        assert_eq!(day_words(&conn, "1970-01-01"), (3, 1));
+        let day = word_stats(&conn).unwrap()[0].0.clone();
+        assert_eq!(day_words(&conn, &day), (3, 1));
 
         // Editing the text adjusts the word count.
         update_history(&conn, 1, "one two three four five").unwrap();
-        assert_eq!(day_words(&conn, "1970-01-01"), (5, 1));
+        assert_eq!(day_words(&conn, &day), (5, 1));
 
         // Deleting the entry zeroes the day out (floored, no negatives).
         delete_history(&conn, 1).unwrap();
-        assert_eq!(day_words(&conn, "1970-01-01"), (0, 0));
+        assert_eq!(day_words(&conn, &day), (0, 0));
+    }
+
+    #[test]
+    fn export_includes_entries_older_than_recent_history_limit() {
+        let conn = Connection::open_in_memory().unwrap();
+        stats_tables(&conn);
+        for n in 0..503 {
+            insert_history(
+                &conn,
+                &HistoryEntry {
+                    id: 0,
+                    text: format!("entry {n}"),
+                    created_at: "83".into(),
+                    duration_ms: 10,
+                    source: "dictate".into(),
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(get_history(&conn).unwrap().len(), 500);
+        let exported = get_all_history(&conn).unwrap();
+        assert_eq!(exported.len(), 503);
+        assert_eq!(exported.first().unwrap().text, "entry 502");
+        assert_eq!(exported.last().unwrap().text, "entry 0");
     }
 
     #[test]
     fn settings_roundtrip_and_camelcase_migration() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-        )
-        .unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
         conn.execute(
             "INSERT INTO settings (key, value) VALUES ('app', ?1)",
             [r#"{"hotkey":"ctrl+k","mic":"default","engine":"parakeet","language":"auto","onboarded":true,"sttModel":"parakeet-tdt-ctc-110m-int8"}"#],
@@ -417,7 +529,9 @@ mod tests {
 
         save_settings(&conn, &s).unwrap();
         let raw: String = conn
-            .query_row("SELECT value FROM settings WHERE key='app'", [], |r| r.get(0))
+            .query_row("SELECT value FROM settings WHERE key='app'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert!(raw.contains("\"stt_model\""));
         assert!(!raw.contains("sttModel"));
@@ -435,16 +549,35 @@ mod tests {
     }
 
     #[test]
+    fn legacy_unavailable_polish_does_not_block_future_settings_changes() {
+        let conn = Connection::open_in_memory().unwrap();
+        stats_tables(&conn);
+        let legacy = Settings {
+            polish_provider: "local_slm".into(),
+            hotkey: "ctrl+k".into(),
+            ..Default::default()
+        };
+        save_settings(&conn, &legacy).unwrap();
+        let mut loaded = load_settings(&conn);
+        assert_eq!(loaded.polish_provider, "off");
+        assert_eq!(loaded.hotkey, "ctrl+k");
+        loaded.audio_feedback = true;
+        save_settings(&conn, &loaded).unwrap();
+        let reloaded = load_settings(&conn);
+        assert!(reloaded.audio_feedback);
+        assert_eq!(reloaded.polish_provider, "off");
+    }
+
+    #[test]
     fn settings_backwards_compatible_dock_position_default() {
-        let json_without_dock = r#"{"hotkey":"ctrl+space","engine":"parakeet","language":"auto","onboarded":true}"#;
+        let json_without_dock =
+            r#"{"hotkey":"ctrl+space","engine":"parakeet","language":"auto","onboarded":true}"#;
         let s: Settings = serde_json::from_str(json_without_dock).unwrap();
         assert_eq!(s.dock_position, "bottom_right");
 
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-        )
-        .unwrap();
+        conn.execute_batch("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
         conn.execute(
             "INSERT INTO settings (key, value) VALUES ('app', ?1)",
             [json_without_dock],
@@ -488,7 +621,10 @@ mod tests {
         .unwrap();
 
         assert!(add_snippet(&conn, "Signature", "Best regards").unwrap());
-        assert!(!add_snippet(&conn, "signature", "Other").unwrap(), "duplicate trigger rejected");
+        assert!(
+            !add_snippet(&conn, "signature", "Other").unwrap(),
+            "duplicate trigger rejected"
+        );
         assert!(add_snippet(&conn, "Meeting notes", "Notes").unwrap());
 
         let mut list = list_snippets(&conn).unwrap();
@@ -502,7 +638,10 @@ mod tests {
             .find(|s| s.trigger.eq_ignore_ascii_case("signature"))
             .unwrap();
         assert!(update_snippet(&conn, sig.id, "Signature", "Best, Waleed").unwrap());
-        assert!(!update_snippet(&conn, sig.id, "meeting notes", "collides").unwrap(), "collision rejected");
+        assert!(
+            !update_snippet(&conn, sig.id, "meeting notes", "collides").unwrap(),
+            "collision rejected"
+        );
         assert!(remove_snippet(&conn, sig.id).unwrap());
         assert_eq!(list_snippets(&conn).unwrap().len(), 1);
     }

@@ -15,8 +15,14 @@ export function Onboarding() {
   const [done, setDone] = useState(false);
   const settings = useStore((s) => s.settings);
   const models = useStore((s) => s.models);
+  const catalog = useStore((s) => s.catalog);
+  const modelDownloads = useStore((s) => s.modelDownloads);
+  const modelProgress = useStore((s) => s.modelProgress);
 
-  const sttReady = models?.stt_ready ?? false;
+  const selectedModel = catalog.find((model) => model.kind === "stt" && model.id === settings?.stt_model);
+  const sttReady = !!(selectedModel?.installed && selectedModel.engine_key === settings?.engine &&
+    models?.vad_ready && !modelDownloads.includes(selectedModel.id) &&
+    !modelProgress.some((progress) => progress.file === selectedModel.id));
 
   // Only the step body scrolls now; each step should open at its top, not
   // wherever the previous step was scrolled to.
@@ -26,9 +32,7 @@ export function Onboarding() {
 
   useEffect(() => {
     const unlistenPromise = api.onModelsReady(() => {
-      useStore.getState().refreshModels();
-      useStore.getState().refreshCatalog();
-      setStep((s) => (s === 2 ? 3 : s));
+      useStore.getState().refreshModelState().catch(() => {});
     });
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});

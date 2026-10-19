@@ -7,14 +7,9 @@ use crate::dictation;
 use crate::state::AppState;
 
 pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), String> {
-    let current = state
-        .hotkey
-        .lock()
-        .map(|h| h.clone())
-        .unwrap_or(None);
+    let current = state.hotkey.lock().map(|h| h.clone()).unwrap_or(None);
     if current.as_deref() == Some(key) {
-        sync_gnome_keybinding(key);
-        return Ok(());
+        return sync_gnome_keybinding(key);
     }
 
     // Double-tap gestures bypass the OS hotkey API entirely — see doubletap.rs
@@ -33,9 +28,6 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
         log::info!("hotkey registered: {key} (double-tap gesture)");
         return Ok(());
     }
-    #[cfg(target_os = "macos")]
-    crate::doubletap::disarm();
-
     // On GNOME (X11 or Wayland) the settings-daemon custom keybinding is the
     // single global path: the X11 grab would double-fire alongside it and
     // toggle start+stop in one press. Elsewhere (bare X11, other DEs) fall
@@ -44,6 +36,7 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
         .map(|d| d.to_lowercase().contains("gnome"))
         .unwrap_or(false);
     if is_gnome {
+        sync_gnome_keybinding(key)?;
         log::info!("GNOME session: relying on settings-daemon keybinding (no X11 grab)");
     } else {
         app.global_shortcut()
@@ -64,6 +57,10 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
             })
             .map_err(|e| format!("failed to register hotkey '{key}': {e}"))?;
 
+        // Keep the old gesture armed until the new registration succeeds.
+        #[cfg(target_os = "macos")]
+        crate::doubletap::disarm();
+
         if let Some(old) = current {
             #[cfg(target_os = "macos")]
             let stale_chord = crate::doubletap::parse(&old).is_none();
@@ -79,7 +76,6 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
         *current = Some(key.to_string());
     }
     log::info!("hotkey registered: {key}");
-    sync_gnome_keybinding(key);
     if is_gnome {
         // The settings-daemon custom keybinding runs a toggle script: the
         // shell consumes the key and only a toggle action reaches the app.
@@ -101,122 +97,82 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
     Ok(())
 }
 
-/// Serializes all dictation start/stop entry points (hold-to-talk press and
-/// release, hotkey toggle). Without this, a quick press→release could run the
-/// start and stop checks concurrently: the stop thread would read
-/// `user_dictation_active` before the start thread sets it, drop the stop,
-/// and leave dictation wedged on. With the lock, the release path waits for
-/// the press path to finish and then re-checks the state.
-static DICTATION_SERIALIZER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// A single receiver preserves callback order. A mutex acquired by freshly
+/// spawned threads does not: release can acquire it before press.
+fn ordered_worker<T: Send + 'static>(
+    mut consume: impl FnMut(T) + Send + 'static,
+) -> Result<std::sync::mpsc::Sender<T>, String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("opendictate-hotkeys".into())
+        .spawn(move || {
+            for request in receiver {
+                consume(request);
+            }
+        })
+        .map_err(|e| format!("could not start hotkey worker: {e}"))?;
+    Ok(sender)
+}
 
-fn dictation_guard() -> std::sync::MutexGuard<'static, ()> {
-    DICTATION_SERIALIZER
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+#[derive(Clone, Copy)]
+enum DictationRequest {
+    Start,
+    Stop,
+    Toggle,
+}
+
+type RequestSender = std::sync::mpsc::Sender<(AppHandle, DictationRequest)>;
+static DICTATION_QUEUE: std::sync::OnceLock<Result<RequestSender, String>> =
+    std::sync::OnceLock::new();
+
+fn enqueue(app: &AppHandle, request: DictationRequest) {
+    let queue = DICTATION_QUEUE
+        .get_or_init(|| ordered_worker(|(app, request)| handle_request(&app, request)));
+    let result = match queue {
+        Ok(sender) => sender
+            .send((app.clone(), request))
+            .map_err(|e| e.to_string()),
+        Err(error) => Err(error.clone()),
+    };
+    if let Err(error) = result {
+        report_error(app, &error);
+    }
 }
 
 pub fn start_dictation(app: &AppHandle) {
-    let app = app.clone();
-    std::thread::spawn(move || {
-        let Some(state) = app.try_state::<AppState>() else { return };
-        let _serial = dictation_guard();
-        // When handsfree is active it holds the recorder open, so
-        // is_recording() is always true. Only skip start if the user already
-        // has an active dictation session (user_dictation_active = true).
-        let user_session_open = state.user_dictation_active.load(std::sync::atomic::Ordering::SeqCst);
-        if !state.recorder.is_recording() || !user_session_open {
-            log::info!("hold-to-talk: starting dictation");
-            if let Err(e) = dictation::start(&app, &state, false) {
-                log::error!("hold-to-talk start failed: {e}");
-            }
-        }
-    });
+    enqueue(app, DictationRequest::Start);
 }
-
 pub fn stop_dictation(app: &AppHandle) {
-    let app = app.clone();
-    std::thread::spawn(move || {
-        let Some(state) = app.try_state::<AppState>() else { return };
-        // Wait for any in-flight start/stop to complete, then re-check the
-        // session state — see DICTATION_SERIALIZER.
-        let _serial = dictation_guard();
-        // Only stop when a user session is genuinely open. Handsfree holds
-        // the recorder open on its own — stopping it without a user session
-        // would submit handsfree's ambient audio as a dictation result.
-        let user_session_open = state.user_dictation_active.load(std::sync::atomic::Ordering::SeqCst);
-        if state.recorder.is_recording() && user_session_open {
-            log::info!("hold-to-talk: stopping dictation");
-            if let Err(e) = dictation::stop(&app, &state) {
-                log::error!("hold-to-talk stop failed: {e}");
-            }
-        }
-    });
+    enqueue(app, DictationRequest::Stop);
 }
-
-
-/// Serializes hotkey toggles. The global-shortcut handler runs on the MAIN
-/// thread on macOS (global-hotkey delivers via NSEvent monitor), and
-/// dictation::start/stop perform CoreAudio setup, notification calls and
-/// first-use engine loads that can block for seconds — running them inline
-/// froze the whole app. The work now happens on a worker thread; while one
-/// toggle is in flight, further presses are ignored (same net effect as the
-/// old main-thread serialization, minus the freeze).
-static TOGGLE_INFLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 pub fn toggle_dictation(app: &AppHandle) {
-    use std::sync::atomic::Ordering;
-    if TOGGLE_INFLIGHT.swap(true, Ordering::SeqCst) {
-        log::info!("toggle already in flight; ignoring");
-        return;
-    }
-    let app = app.clone();
-    let fallback = app.clone();
-    let spawned = std::thread::Builder::new()
-        .name("opendictate-toggle".to_string())
-        .spawn(move || {
-            toggle_dictation_sync(&app);
-            TOGGLE_INFLIGHT.store(false, Ordering::SeqCst);
-        });
-    if spawned.is_err() {
-        // Worker unavailable: run inline so the hotkey never goes dead.
-        toggle_dictation_sync(&fallback);
-        TOGGLE_INFLIGHT.store(false, Ordering::SeqCst);
-    }
+    enqueue(app, DictationRequest::Toggle);
 }
 
-fn toggle_dictation_sync(app: &AppHandle) {
+fn handle_request(app: &AppHandle, request: DictationRequest) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
-
-    // Share the hold-to-talk serializer so a hotkey toggle cannot interleave
-    // with a hold-to-talk press/release mid-flight.
-    let _serial = dictation_guard();
-    let user_session_open = state.user_dictation_active.load(std::sync::atomic::Ordering::SeqCst);
-
-    if user_session_open {
-        log::info!("toggle: stopping dictation");
-        if let Err(e) = dictation::stop(app, &state) {
-            log::error!("toggle: stop failed: {e}");
-            crate::notify::notify("Dictation error", &format!("Stop failed: {e}"));
-            let _ = app.emit(
-                "dictation-error",
-                serde_json::json!({ "message": format!("stop failed: {e}") }),
-            );
-        }
-    } else {
-        log::info!("toggle: starting dictation");
-        if let Err(e) = dictation::start(app, &state, false) {
-            log::error!("toggle: start failed: {e}");
-            crate::notify::notify("Dictation error", &format!("Start failed: {e}"));
-            let _ = app.emit(
-                "dictation-error",
-                serde_json::json!({ "message": format!("start failed: {e}") }),
-            );
-        }
+    let active = state
+        .user_dictation_active
+        .load(std::sync::atomic::Ordering::SeqCst);
+    let result = match request {
+        DictationRequest::Start if !active => dictation::start(app, &state, false),
+        DictationRequest::Stop if active => dictation::stop(app, &state).map(|_| ()),
+        DictationRequest::Toggle if active => dictation::stop(app, &state).map(|_| ()),
+        DictationRequest::Toggle => dictation::start(app, &state, false),
+        _ => Ok(()),
+    };
+    if let Err(error) = result {
+        report_error(app, &error);
     }
 }
 
+fn report_error(app: &AppHandle, error: &str) {
+    log::error!("hotkey dictation failed: {error}");
+    crate::notify::notify("Dictation error", error);
+    let _ = app.emit("dictation-error", serde_json::json!({"message": error}));
+}
 
 // ---------------------------------------------------------------------------
 // GNOME fallback: on Wayland the X11 grab never sees keys while a native
@@ -229,76 +185,90 @@ const KEYBINDING_PATH: &str =
     "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/opendictate/";
 
 #[cfg(target_os = "linux")]
-pub fn sync_gnome_keybinding(key: &str) {
+pub fn sync_gnome_keybinding(key: &str) -> Result<(), String> {
     let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
         .map(|d| d.to_lowercase().contains("gnome"))
         .unwrap_or(false);
     if !is_gnome {
-        return;
+        return Ok(());
     }
-    let Some(toggle_script) = toggle_script_path() else {
-        log::warn!("gnome keybinding: could not resolve toggle script path");
-        return;
-    };
-    let Some(binding) = gnome_accelerator(key) else {
-        log::warn!("gnome keybinding: could not parse hotkey '{key}'");
-        return;
-    };
-
+    let executable = crate::autostart::launcher_executable()?;
+    let command = format!(
+        "'{}' --toggle",
+        executable.to_string_lossy().replace('\'', "'\\''")
+    );
+    let binding =
+        gnome_accelerator(key).ok_or_else(|| format!("could not parse hotkey '{key}'"))?;
     let schema = "org.gnome.settings-daemon.plugins.media-keys";
-    let Some(existing) = gsettings_get(schema, "custom-keybindings") else {
-        log::debug!("gnome keybinding: schema unavailable, skipping");
-        return;
-    };
-
-    let mut slots: Vec<String> = existing
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .split(',')
-        .filter_map(|s| {
-            let s = s.trim().trim_matches('\'');
-            if s.is_empty() {
-                None
-            } else {
-                Some(normalize_slot(s))
-            }
-        })
-        .collect();
+    let existing = gsettings_get(schema, "custom-keybindings")?;
+    let mut slots = parse_binding_slots(&existing)?;
     let ours = normalize_slot(KEYBINDING_PATH);
-    if !slots.iter().any(|s| s == &ours) {
+    if !slots.contains(&ours) {
         slots.push(ours);
     }
     let slot_list = format!(
         "[{}]",
         slots
             .iter()
-            .map(|s| format!("'{s}'"))
+            .map(|s| variant_string(s))
             .collect::<Vec<_>>()
             .join(", ")
     );
-    gsettings_set(schema, "custom-keybindings", &slot_list);
     let slot_schema = format!("{schema}.custom-keybinding:{KEYBINDING_PATH}");
-    gsettings_set(&slot_schema, "name", "OpenDictate: Toggle dictation");
-    gsettings_set(&slot_schema, "command", &toggle_script);
-    gsettings_set(&slot_schema, "binding", &binding);
-    log::info!("gnome keybinding synced: {binding} -> {toggle_script}");
+    gsettings_set(
+        &slot_schema,
+        "name",
+        &variant_string("OpenDictate: Toggle dictation"),
+    )?;
+    gsettings_set(&slot_schema, "command", &variant_string(&command))?;
+    gsettings_set(&slot_schema, "binding", &variant_string(&binding))?;
+    gsettings_set(schema, "custom-keybindings", &slot_list)?;
+    log::info!("gnome keybinding synced: {binding} -> {command}");
+    Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn sync_gnome_keybinding(_key: &str) {}
+pub fn sync_gnome_keybinding(_key: &str) -> Result<(), String> {
+    Ok(())
+}
 
 #[cfg(target_os = "linux")]
-fn toggle_script_path() -> Option<String> {
-    let exe = std::env::current_exe().ok()?;
-    let mut dir = exe.parent();
-    for _ in 0..6 {
-        let candidate = dir?.join("scripts").join("opendictate-toggle.sh");
-        if candidate.exists() {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-        dir = dir?.parent();
+fn variant_string(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_binding_slots(value: &str) -> Result<Vec<String>, String> {
+    let value = value
+        .trim()
+        .strip_prefix("@as")
+        .unwrap_or(value.trim())
+        .trim();
+    let body = value
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or("invalid GNOME custom-keybindings list")?;
+    if body.trim().is_empty() {
+        return Ok(Vec::new());
     }
-    None
+    body.split(',')
+        .map(|item| {
+            let item = item.trim();
+            let path = item
+                .strip_prefix('\'')
+                .and_then(|s| s.strip_suffix('\''))
+                .or_else(|| item.strip_prefix('"').and_then(|s| s.strip_suffix('"')))
+                .ok_or("invalid GNOME keybinding path")?;
+            if !path.starts_with('/')
+                || !path
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-'))
+            {
+                return Err("invalid GNOME keybinding path".into());
+            }
+            Ok(normalize_slot(path))
+        })
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -309,7 +279,7 @@ fn gnome_accelerator(key: &str) -> Option<String> {
     let mut accel = String::new();
     let mut key_part: Option<String> = None;
     for part in key.split('+') {
-        match part {
+        match part.trim().to_ascii_lowercase().as_str() {
             "ctrl" | "control" => accel.push_str("<Control>"),
             "alt" => accel.push_str("<Alt>"),
             "shift" => accel.push_str("<Shift>"),
@@ -318,11 +288,9 @@ fn gnome_accelerator(key: &str) -> Option<String> {
             other => {
                 let lower = other.to_lowercase();
                 key_part = Some(match lower.as_str() {
-                    "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9"
-                    | "f10" | "f11" | "f12" => other.to_uppercase(),
-                    "up" | "down" | "left" | "right" => {
-                        other[..1].to_uppercase() + &other[1..]
-                    }
+                    "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10"
+                    | "f11" | "f12" => other.to_uppercase(),
+                    "up" | "down" | "left" | "right" => other[..1].to_uppercase() + &other[1..],
                     _ => lower,
                 });
             }
@@ -332,9 +300,17 @@ fn gnome_accelerator(key: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn gsettings_get(schema: &str, key: &str) -> Option<String> {
-    let out = Command::new("gsettings").args(["get", schema, key]).output().ok()?;
-    String::from_utf8(out.stdout).ok().map(|s| s.trim().to_string())
+fn gsettings_get(schema: &str, key: &str) -> Result<String, String> {
+    let out = Command::new("gsettings")
+        .args(["get", schema, key])
+        .output()
+        .map_err(|e| format!("gsettings unavailable: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
+    }
+    String::from_utf8(out.stdout)
+        .map(|s| s.trim().to_owned())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "linux")]
@@ -343,17 +319,18 @@ fn normalize_slot(path: &str) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn gsettings_set(schema: &str, key: &str, value: &str) {
+fn gsettings_set(schema: &str, key: &str, value: &str) -> Result<(), String> {
     let out = Command::new("gsettings")
         .args(["set", schema, key, value])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => log::warn!(
-            "gsettings set {schema} {key} failed: {}",
-            String::from_utf8_lossy(&o.stderr).trim()
-        ),
-        Err(e) => log::warn!("gsettings set {schema} {key} failed: {e}"),
+        .output()
+        .map_err(|e| format!("gsettings set {key} failed: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "gsettings set {key} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
     }
 }
 
@@ -389,7 +366,12 @@ pub fn install_socket_toggle(app: AppHandle, path: std::path::PathBuf) {
 pub fn is_another_instance(path: &std::path::Path) -> bool {
     use std::io::Write;
     if let Ok(mut conn) = std::os::unix::net::UnixStream::connect(path) {
-        let _ = conn.write_all(b"show");
+        let message: &[u8] = if std::env::args().any(|arg| arg == "--toggle") {
+            b"toggle"
+        } else {
+            b"show"
+        };
+        let _ = conn.write_all(message);
         true
     } else {
         false
@@ -399,4 +381,39 @@ pub fn is_another_instance(path: &std::path::Path) -> bool {
 #[cfg(not(unix))]
 pub fn is_another_instance(_path: &std::path::Path) -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quick_press_release_requests_stay_in_callback_order() {
+        let (completed, received) = std::sync::mpsc::channel();
+        let worker = ordered_worker(move |value| {
+            if value == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            completed.send(value).unwrap();
+        })
+        .unwrap();
+        for n in 0..100 {
+            worker.send(n).unwrap();
+        }
+        drop(worker);
+        let events: Vec<_> = received.iter().collect();
+        assert_eq!(events, (0..100).collect::<Vec<_>>());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnome_empty_typed_array_does_not_create_a_bogus_slot() {
+        assert!(parse_binding_slots("@as []").unwrap().is_empty());
+        assert!(parse_binding_slots("[]").unwrap().is_empty());
+        assert_eq!(
+            parse_binding_slots("['/org/other/binding/', '/org/another/']").unwrap(),
+            ["/org/other/binding/", "/org/another/"]
+        );
+        assert!(parse_binding_slots("[not-a-path]").is_err());
+    }
 }

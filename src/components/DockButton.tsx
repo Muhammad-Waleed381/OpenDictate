@@ -1,19 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Mic, X } from "lucide-react";
 import { useStore } from "@/lib/store";
-import * as api from "@/lib/api";
 import { tailForDisplay } from "@/lib/utils";
 
 export function DockButton() {
   const overlayState = useStore((s) => s.overlayState);
   const recording = useStore((s) => s.recording);
+  const busy = useStore((s) => s.recordingBusy || s.recordingMode === "test");
   const partial = useStore((s) => s.partial);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<"inserted" | "error" | null>(null);
   const flashTimer = useRef<number | null>(null);
 
   const state = overlayState?.state ?? "hidden";
-  const busyRef = useRef(false);
 
   const scheduleFlashClear = (ms: number) => {
     if (flashTimer.current) window.clearTimeout(flashTimer.current);
@@ -30,6 +29,9 @@ export function DockButton() {
     } else if (state === "error") {
       setFlash("error");
       scheduleFlashClear(2400);
+    } else {
+      setFlash(null);
+      setError(null);
     }
     return () => {
       if (flashTimer.current) window.clearTimeout(flashTimer.current);
@@ -38,39 +40,23 @@ export function DockButton() {
   }, [state]);
 
   const toggle = async () => {
-    if (busyRef.current) return;
-    busyRef.current = true;
+    const store = useStore.getState();
+    if (store.recordingBusy || store.recordingMode === "test" || isProcessing) return;
     try {
       setError(null);
-      if (canStop) {
-        try {
-          const result = await api.stopRecording();
-          if (result?.text) {
-            useStore.setState({ lastResult: result });
-          }
-        } catch (e) {
-          setError(String(e));
-          setFlash("error");
-          scheduleFlashClear(2400);
-        }
-      } else if (!active) {
-        try {
-          await api.startRecording("dictate");
-        } catch (e) {
-          setError(String(e));
-          setFlash("error");
-          scheduleFlashClear(2400);
-        }
-      }
-    } finally {
-      busyRef.current = false;
+      if (store.recording) await store.stopRecording();
+      else if (!active) await store.startRecording("dictate");
+    } catch (e) {
+      setError(String(e));
+      setFlash("error");
+      scheduleFlashClear(2400);
     }
   };
 
   const isRecording = state === "recording" || (recording && state !== "transcribing");
   const isListening = state === "listening" && !recording;
   const isProcessing = state === "transcribing";
-  const isInserted = flash === "inserted" || state === "inserted";
+  const isInserted = flash === "inserted";
   const isError = flash === "error" || error != null;
 
   const active = isRecording || isListening;
@@ -151,6 +137,7 @@ export function DockButton() {
       <button
         type="button"
         onClick={toggle}
+        disabled={busy || isProcessing}
         className={`relative z-10 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 ${live ? "bg-black/90" : "bg-white/90"} ${tint}`}
         aria-label={canStop ? "Stop recording" : "Start recording"}
         title={canStop ? "Stop recording (Ctrl+K)" : "Start recording (Ctrl+K)"}

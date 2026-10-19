@@ -23,6 +23,7 @@ pub enum ModelKind {
 pub struct SttEngine {
     recognizer: OfflineRecognizer,
     kind: ModelKind,
+    hotword_tokenizer: Option<super::hotwords::HotwordTokenizer>,
     /// Provider the engine actually came up on (after fallback).
     pub provider: &'static str,
 }
@@ -79,140 +80,151 @@ impl SttEngine {
             .filter(|l| !l.is_empty() && l != "auto")
             .map(|l| l.to_string());
 
-        let config = match kind {
+        let hotword_tokenizer = (kind == ModelKind::NemoTransducer)
+            .then(|| super::hotwords::HotwordTokenizer::load(model_dir))
+            .flatten();
+        let mut config = match kind {
             ModelKind::Whisper => {
-            let find_part = |needle: &str| -> Option<PathBuf> {
-                let direct = model_dir.join(format!("{needle}.onnx"));
-                if direct.exists() {
-                    return Some(direct);
-                }
-                let mut hits: Vec<PathBuf> = std::fs::read_dir(&model_dir)
-                    .ok()?
-                    .flatten()
-                    .map(|e| e.path())
-                    .filter(|p| {
-                        p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                            let lower = n.to_lowercase();
-                            lower.ends_with(".onnx") && lower.contains(needle)
+                let find_part = |needle: &str| -> Option<PathBuf> {
+                    let direct = model_dir.join(format!("{needle}.onnx"));
+                    if direct.exists() {
+                        return Some(direct);
+                    }
+                    let mut hits: Vec<PathBuf> = std::fs::read_dir(&model_dir)
+                        .ok()?
+                        .flatten()
+                        .map(|e| e.path())
+                        .filter(|p| {
+                            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                                let lower = n.to_lowercase();
+                                lower.ends_with(".onnx") && lower.contains(needle)
+                            })
                         })
-                    })
-                    .collect();
-                hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
-                hits.first().cloned()
-            };
-            let find_tokens = || -> Option<PathBuf> {
-                let direct = model_dir.join("tokens.txt");
-                if direct.exists() {
-                    return Some(direct);
-                }
-                std::fs::read_dir(&model_dir)
-                    .ok()?
-                    .flatten()
-                    .map(|e| e.path())
-                    .find(|p| {
-                        p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
-                            let lower = n.to_lowercase();
-                            lower.contains("tokens") && lower.ends_with(".txt")
+                        .collect();
+                    hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
+                    hits.first().cloned()
+                };
+                let find_tokens = || -> Option<PathBuf> {
+                    let direct = model_dir.join("tokens.txt");
+                    if direct.exists() {
+                        return Some(direct);
+                    }
+                    std::fs::read_dir(&model_dir)
+                        .ok()?
+                        .flatten()
+                        .map(|e| e.path())
+                        .find(|p| {
+                            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                                let lower = n.to_lowercase();
+                                lower.contains("tokens") && lower.ends_with(".txt")
+                            })
                         })
-                    })
-            };
+                };
 
-            let (Some(encoder), Some(decoder), Some(tokens)) = (
-                find_part("encoder"),
-                find_part("decoder"),
-                find_tokens(),
-            ) else {
-                return Err(CoreError::Transcription(format!(
+                let (Some(encoder), Some(decoder), Some(tokens)) =
+                    (find_part("encoder"), find_part("decoder"), find_tokens())
+                else {
+                    return Err(CoreError::Transcription(format!(
                     "whisper model incomplete in {} (need encoder.onnx, decoder.onnx, tokens.txt)",
                     model_dir.display()
                 )));
-            };
-            OfflineRecognizerConfig {
-                model_config: OfflineModelConfig {
-                    whisper: OfflineWhisperModelConfig {
-                        encoder: Some(encoder.to_string_lossy().to_string()),
-                        decoder: Some(decoder.to_string_lossy().to_string()),
-                        language: whisper_language,
-                        task: Some("transcribe".to_string()),
-                        tail_paddings: 50,
+                };
+                OfflineRecognizerConfig {
+                    model_config: OfflineModelConfig {
+                        whisper: OfflineWhisperModelConfig {
+                            encoder: Some(encoder.to_string_lossy().to_string()),
+                            decoder: Some(decoder.to_string_lossy().to_string()),
+                            language: whisper_language,
+                            task: Some("transcribe".to_string()),
+                            tail_paddings: 50,
+                            ..Default::default()
+                        },
+                        tokens: Some(tokens.to_string_lossy().to_string()),
+                        num_threads: n_threads,
+                        provider: Some(provider.as_str().to_string()),
+                        debug: false,
                         ..Default::default()
                     },
-                    tokens: Some(tokens.to_string_lossy().to_string()),
-                    num_threads: n_threads,
-                    provider: Some(provider.as_str().to_string()),
-                    debug: false,
+                    decoding_method: Some("greedy_search".to_string()),
                     ..Default::default()
-                },
-                decoding_method: Some("greedy_search".to_string()),
-                ..Default::default()
+                }
             }
-        }
-        ModelKind::NemoTransducer => {
-            let encoder = model_dir.join("encoder.onnx");
-            let decoder = model_dir.join("decoder.onnx");
-            let joiner = model_dir.join("joiner.onnx");
-            let tokens = model_dir.join("tokens.txt");
-            if !encoder.exists() || !decoder.exists() || !joiner.exists() || !tokens.exists() {
-                return Err(CoreError::Transcription(format!(
+            ModelKind::NemoTransducer => {
+                let encoder = model_dir.join("encoder.onnx");
+                let decoder = model_dir.join("decoder.onnx");
+                let joiner = model_dir.join("joiner.onnx");
+                let tokens = model_dir.join("tokens.txt");
+                if !encoder.exists() || !decoder.exists() || !joiner.exists() || !tokens.exists() {
+                    return Err(CoreError::Transcription(format!(
                     "transducer model incomplete in {} (need encoder.onnx, decoder.onnx, joiner.onnx, tokens.txt)",
                     model_dir.display()
                 )));
-            }
-            OfflineRecognizerConfig {
-                model_config: OfflineModelConfig {
-                    transducer: OfflineTransducerModelConfig {
-                        encoder: Some(encoder.to_string_lossy().to_string()),
-                        decoder: Some(decoder.to_string_lossy().to_string()),
-                        joiner: Some(joiner.to_string_lossy().to_string()),
+                }
+                OfflineRecognizerConfig {
+                    model_config: OfflineModelConfig {
+                        transducer: OfflineTransducerModelConfig {
+                            encoder: Some(encoder.to_string_lossy().to_string()),
+                            decoder: Some(decoder.to_string_lossy().to_string()),
+                            joiner: Some(joiner.to_string_lossy().to_string()),
+                        },
+                        tokens: Some(tokens.to_string_lossy().to_string()),
+                        num_threads: n_threads,
+                        provider: Some(provider.as_str().to_string()),
+                        model_type: Some("nemo_transducer".to_string()),
+                        debug: false,
+                        ..Default::default()
                     },
-                    tokens: Some(tokens.to_string_lossy().to_string()),
-                    num_threads: n_threads,
-                    provider: Some(provider.as_str().to_string()),
-                    model_type: Some("nemo_transducer".to_string()),
-                    debug: false,
+                    decoding_method: Some("greedy_search".to_string()),
                     ..Default::default()
-                },
-                decoding_method: Some("greedy_search".to_string()),
-                ..Default::default()
+                }
             }
-        }
-        ModelKind::NemoCtc => {
-            let model_file = if model_dir.join("model.int8.onnx").exists() {
-                model_dir.join("model.int8.onnx")
-            } else if model_dir.join("model.onnx").exists() {
-                model_dir.join("model.onnx")
-            } else {
-                return Err(CoreError::Transcription(format!(
-                    "no ONNX model file found in {}",
-                    model_dir.display()
-                )));
-            };
+            ModelKind::NemoCtc => {
+                let model_file = if model_dir.join("model.int8.onnx").exists() {
+                    model_dir.join("model.int8.onnx")
+                } else if model_dir.join("model.onnx").exists() {
+                    model_dir.join("model.onnx")
+                } else {
+                    return Err(CoreError::Transcription(format!(
+                        "no ONNX model file found in {}",
+                        model_dir.display()
+                    )));
+                };
 
-            let tokens_file = model_dir.join("tokens.txt");
-            if !tokens_file.exists() {
-                return Err(CoreError::Transcription(format!(
-                    "tokens.txt not found in {}",
-                    model_dir.display()
-                )));
-            }
+                let tokens_file = model_dir.join("tokens.txt");
+                if !tokens_file.exists() {
+                    return Err(CoreError::Transcription(format!(
+                        "tokens.txt not found in {}",
+                        model_dir.display()
+                    )));
+                }
 
-            OfflineRecognizerConfig {
-                model_config: OfflineModelConfig {
-                    nemo_ctc: OfflineNemoEncDecCtcModelConfig {
-                        model: Some(model_file.to_string_lossy().to_string()),
+                OfflineRecognizerConfig {
+                    model_config: OfflineModelConfig {
+                        nemo_ctc: OfflineNemoEncDecCtcModelConfig {
+                            model: Some(model_file.to_string_lossy().to_string()),
+                        },
+                        tokens: Some(tokens_file.to_string_lossy().to_string()),
+                        num_threads: n_threads,
+                        provider: Some(provider.as_str().to_string()),
+                        debug: false,
+                        ..Default::default()
                     },
-                    tokens: Some(tokens_file.to_string_lossy().to_string()),
-                    num_threads: n_threads,
-                    provider: Some(provider.as_str().to_string()),
-                    debug: false,
+                    decoding_method: Some("greedy_search".to_string()),
+                    blank_penalty: 1.2,
                     ..Default::default()
-                },
-                decoding_method: Some("greedy_search".to_string()),
-                blank_penalty: 1.2,
-                ..Default::default()
+                }
             }
-        }
         };
+
+        // Only NeMo transducers implement this beam decoder and hotword stream.
+        // CTC/Whisper continue with greedy decoding and dictionary text repair.
+        if let Some(tokenizer) = &hotword_tokenizer {
+            config.decoding_method = Some("modified_beam_search".into());
+            config.model_config.modeling_unit = Some("bpe".into());
+            config.model_config.bpe_vocab = Some(tokenizer.path.to_string_lossy().into_owned());
+            config.hotwords_score = 3.0;
+            config.max_active_paths = 4;
+        }
 
         let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| {
             CoreError::Transcription(format!(
@@ -250,6 +262,7 @@ impl SttEngine {
         Ok(Self {
             recognizer,
             kind,
+            hotword_tokenizer,
             provider: provider.as_str(),
         })
     }
@@ -285,11 +298,13 @@ impl SttEngine {
             return Ok(String::new());
         }
 
-        let stream = match hotwords.filter(|h| !h.trim().is_empty()) {
-            Some(words) if self.kind == ModelKind::NemoTransducer => {
-                self.recognizer.create_stream_with_hotwords(words)
-            }
-            _ => self.recognizer.create_stream(),
+        let native_hotwords = self
+            .hotword_tokenizer
+            .as_ref()
+            .and_then(|tokenizer| hotwords.and_then(|words| tokenizer.prepare(words)));
+        let stream = match native_hotwords.as_deref() {
+            Some(words) => self.recognizer.create_stream_with_hotwords(words),
+            None => self.recognizer.create_stream(),
         };
         stream.accept_waveform(16000, audio);
         self.recognizer.decode(&stream);
@@ -305,6 +320,29 @@ impl SttEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires installed NeMo model assets"]
+    fn installed_offline_nemo_hotwords_are_native_safe() {
+        for id in [
+            crate::stt::models::PARAKEET_TDT_06B_MODEL_ID,
+            crate::stt::models::PARAKEET_UNIFIED_EN_MODEL_ID,
+        ] {
+            let dir = crate::stt::models::model_dir_for(id);
+            if !crate::stt::models::is_model_installed(id) {
+                continue;
+            }
+            let engine = SttEngine::new(&dir, ModelKind::NemoTransducer, None).unwrap();
+            let tokenizer = engine
+                .hotword_tokenizer
+                .as_ref()
+                .expect("installed BPE vocab must enable supported decoder");
+            assert!(tokenizer.prepare("open dictate").is_some());
+            assert!(engine
+                .transcribe(&vec![0.0; 6400], Some("open dictate"))
+                .is_ok());
+        }
+    }
 
     #[test]
     fn engine_requires_existing_model_dir() {

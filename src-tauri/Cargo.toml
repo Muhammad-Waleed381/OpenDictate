@@ -26,7 +26,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 env_logger = "0.11"
 log = "0.4"
 rodio = "0.20"
-opendictate-core = { path = "../crates/opendictate-core" }
+opendictate-core = { path = "../crates/opendictate-core", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = { version = "0.18", features = ["v3_24"] }
@@ -49,6 +49,9 @@ core-graphics = "0.23"
 core-foundation = "0.9"
 
 [features]
+default = ["cpu-static"]
+cpu-static = ["opendictate-core/cpu-static"]
+gpu-shared = ["opendictate-core/gpu-shared"]
 # Added automatically by `tauri build`. Serves the bundled frontend from the
 # embedded assets instead of `devUrl`. It must NOT be enabled on the `tauri`
 # dependency directly — that pins it on for `tauri dev` too, so the dev server

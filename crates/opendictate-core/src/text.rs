@@ -13,7 +13,7 @@ fn tokenize(value: &str) -> Vec<Token> {
     let mut result = Vec::new();
     let mut start = None;
     for (index, character) in value.char_indices() {
-        let part_of_word = character.is_alphanumeric() || character == '\'';
+        let part_of_word = character.is_alphanumeric() || matches!(character, '\'' | '+' | '#');
         match (start, part_of_word) {
             (None, true) => start = Some(index),
             (Some(begin), false) => {
@@ -45,24 +45,23 @@ pub fn correct_dictionary_terms(text: &str, terms: &[String]) -> String {
     struct Term {
         canonical: String,
         tokens: Vec<String>,
+        leading: String,
+        trailing: String,
     }
 
     let dictionary: Vec<Term> = terms
         .iter()
         .filter_map(|term| {
             let canonical = term.trim();
-            let tokens = tokenize(canonical)
-                .into_iter()
-                .map(|token| token.lower)
-                .collect::<Vec<_>>();
-            if canonical.is_empty() || tokens.is_empty() {
-                None
-            } else {
-                Some(Term {
-                    canonical: canonical.to_string(),
-                    tokens,
-                })
-            }
+            let spans = tokenize(canonical);
+            let first = spans.first()?;
+            let last = spans.last()?;
+            Some(Term {
+                canonical: canonical.to_string(),
+                leading: canonical[..first.start].to_string(),
+                trailing: canonical[last.end..].to_string(),
+                tokens: spans.into_iter().map(|token| token.lower).collect(),
+            })
         })
         .collect();
     if dictionary.is_empty() {
@@ -73,22 +72,34 @@ pub fn correct_dictionary_terms(text: &str, terms: &[String]) -> String {
     let mut replacements = Vec::new();
     let mut index = 0;
     while index < tokens.len() {
-        let matched = dictionary.iter().filter_map(|term| {
-            let end = index + term.tokens.len();
-            (end <= tokens.len()
-                && tokens[index..end]
-                    .iter()
-                    .map(|token| token.lower.as_str())
-                    .eq(term.tokens.iter().map(String::as_str)))
+        let matched = dictionary
+            .iter()
+            .filter_map(|term| {
+                let end = index + term.tokens.len();
+                (end <= tokens.len()
+                    && tokens[index..end]
+                        .iter()
+                        .map(|token| token.lower.as_str())
+                        .eq(term.tokens.iter().map(String::as_str)))
                 .then_some((term.tokens.len(), term))
-        }).max_by_key(|(length, _)| *length);
+            })
+            .max_by_key(|(length, _)| *length);
 
         if let Some((length, term)) = matched {
-            replacements.push((
-                tokens[index].start,
-                tokens[index + length - 1].end,
-                term.canonical.clone(),
-            ));
+            let mut start = tokens[index].start;
+            let mut end = tokens[index + length - 1].end;
+            let previous_end = replacements.last().map_or(0, |(_, end, _)| *end);
+            if let Some(prefix_start) = start.checked_sub(term.leading.len()) {
+                if prefix_start >= previous_end
+                    && text.get(prefix_start..start) == Some(term.leading.as_str())
+                {
+                    start = prefix_start;
+                }
+            }
+            if text.get(end..end + term.trailing.len()) == Some(term.trailing.as_str()) {
+                end += term.trailing.len();
+            }
+            replacements.push((start, end, term.canonical.clone()));
             index += length;
         } else {
             index += 1;
@@ -132,7 +143,7 @@ pub fn map_spoken_punctuation(text: &str) -> String {
                         .iter()
                         .map(|token| token.lower.as_str())
                         .eq(phrase.iter().copied()))
-                    .then_some((phrase.len(), *symbol))
+                .then_some((phrase.len(), *symbol))
             })
             .max_by_key(|(length, _)| *length);
 
@@ -142,7 +153,12 @@ pub fn map_spoken_punctuation(text: &str) -> String {
             let prev_taken = index > 0
                 && !replacements.is_empty()
                 && tokens[index - 1].end == replacements.last().unwrap().1;
-            replacements.push((tokens[index].start, tokens[index + length - 1].end, symbol, prev_taken));
+            replacements.push((
+                tokens[index].start,
+                tokens[index + length - 1].end,
+                symbol,
+                prev_taken,
+            ));
             index += length;
         } else {
             index += 1;
@@ -180,48 +196,6 @@ pub fn strip_sound_effects(text: &str) -> String {
         return String::new();
     }
 
-    // If the entire string is enclosed in brackets/parentheses, e.g. "(Gun firing)", "[Music]", "(wind blowing)"
-    if (trimmed.starts_with('(') && trimmed.ends_with(')'))
-        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
-        || (trimmed.starts_with('*') && trimmed.ends_with('*') && trimmed.len() > 2)
-    {
-        let inner = &trimmed[1..trimmed.len() - 1].trim();
-        let inner_lower = inner.to_lowercase();
-        let is_sound_effect = inner_lower.contains("gun")
-            || inner_lower.contains("shot")
-            || inner_lower.contains("firing")
-            || inner_lower.contains("music")
-            || inner_lower.contains("applause")
-            || inner_lower.contains("laughter")
-            || inner_lower.contains("giggle")
-            || inner_lower.contains("chuckle")
-            || inner_lower.contains("sigh")
-            || inner_lower.contains("cough")
-            || inner_lower.contains("throat")
-            || inner_lower.contains("screaming")
-            || inner_lower.contains("shout")
-            || inner_lower.contains("wind")
-            || inner_lower.contains("blowing")
-            || inner_lower.contains("bell")
-            || inner_lower.contains("ding")
-            || inner_lower.contains("beep")
-            || inner_lower.contains("click")
-            || inner_lower.contains("creak")
-            || inner_lower.contains("silence")
-            || inner_lower.contains("snicker")
-            || inner_lower.contains("groan")
-            || inner_lower.contains("gasp")
-            || inner_lower.contains("cheering")
-            || inner_lower.contains("chatter")
-            || inner_lower.contains("noise")
-            || inner_lower.contains("whisper")
-            || trimmed.starts_with('[');
-
-        if is_sound_effect {
-            return String::new();
-        }
-    }
-
     // Strip inline bracketed and parenthesized annotations
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -247,38 +221,58 @@ pub fn strip_sound_effects(text: &str) -> String {
                 out.push(ch);
                 out.push_str(&tag);
             } else {
-                let tag_lower = tag.to_lowercase();
-                let is_sound_effect = tag_lower.contains("gun")
-                    || tag_lower.contains("shot")
-                    || tag_lower.contains("firing")
-                    || tag_lower.contains("music")
-                    || tag_lower.contains("applause")
-                    || tag_lower.contains("laughter")
-                    || tag_lower.contains("giggle")
-                    || tag_lower.contains("chuckle")
-                    || tag_lower.contains("sigh")
-                    || tag_lower.contains("cough")
-                    || tag_lower.contains("throat")
-                    || tag_lower.contains("screaming")
-                    || tag_lower.contains("shout")
-                    || tag_lower.contains("wind")
-                    || tag_lower.contains("blowing")
-                    || tag_lower.contains("bell")
-                    || tag_lower.contains("ding")
-                    || tag_lower.contains("beep")
-                    || tag_lower.contains("click")
-                    || tag_lower.contains("creak")
-                    || tag_lower.contains("silence")
-                    || tag_lower.contains("snicker")
-                    || tag_lower.contains("groan")
-                    || tag_lower.contains("gasp")
-                    || tag_lower.contains("cheering")
-                    || tag_lower.contains("chatter")
-                    || tag_lower.contains("noise")
-                    || tag_lower.contains("whisper")
-                    || ch == '[';
+                // Exact known annotation phrases only. Arbitrary square
+                // brackets and substrings such as "ding" in "coding" are prose.
+                let tag_lower = tag
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase();
+                let is_sound_effect = matches!(
+                    tag_lower.as_str(),
+                    "gun firing"
+                        | "gunshot"
+                        | "gunshots"
+                        | "music"
+                        | "applause"
+                        | "laughter"
+                        | "laughing"
+                        | "giggle"
+                        | "giggles"
+                        | "chuckle"
+                        | "sigh"
+                        | "sighs"
+                        | "cough"
+                        | "coughing"
+                        | "clears throat"
+                        | "screaming"
+                        | "shouting"
+                        | "wind blowing"
+                        | "bell dings"
+                        | "bell ringing"
+                        | "beep"
+                        | "beeping"
+                        | "click"
+                        | "clicking"
+                        | "creak"
+                        | "creaking"
+                        | "silence"
+                        | "snicker"
+                        | "groan"
+                        | "gasp"
+                        | "cheering"
+                        | "chatter"
+                        | "background noise"
+                        | "inaudible"
+                        | "unintelligible"
+                );
 
-                if !is_sound_effect {
+                let is_boundary = |ch: char| {
+                    ch.is_whitespace() || matches!(ch, '.' | ',' | ';' | ':' | '!' | '?')
+                };
+                let standalone = out.chars().next_back().is_none_or(is_boundary)
+                    && chars.peek().copied().is_none_or(is_boundary);
+                if !is_sound_effect || !standalone {
                     out.push(ch);
                     out.push_str(&tag);
                     out.push(close_char);
@@ -370,9 +364,9 @@ fn char_dice(a: &str, b: &str) -> f32 {
         return 0.0;
     }
     let bigrams = |value: &str| {
-        let bytes = value.as_bytes();
-        (0..bytes.len().saturating_sub(1))
-            .map(|i| [bytes[i], bytes[i + 1]])
+        let chars: Vec<char> = value.chars().collect();
+        (0..chars.len().saturating_sub(1))
+            .map(|i| [chars[i], chars[i + 1]])
             .collect::<Vec<_>>()
     };
     let ab = bigrams(a);
@@ -380,7 +374,22 @@ fn char_dice(a: &str, b: &str) -> f32 {
     if ab.is_empty() || bb.is_empty() {
         return 0.0;
     }
-    let overlap = ab.iter().filter(|g| bb.contains(g)).count();
+    let mut available = std::collections::HashMap::new();
+    for gram in &bb {
+        *available.entry(gram).or_insert(0usize) += 1;
+    }
+    let overlap = ab
+        .iter()
+        .filter(|gram| {
+            if let Some(count) = available.get_mut(gram) {
+                if *count > 0 {
+                    *count -= 1;
+                    return true;
+                }
+            }
+            false
+        })
+        .count();
     2.0 * overlap as f32 / (ab.len() + bb.len()) as f32
 }
 
@@ -398,7 +407,11 @@ pub fn is_single_word(value: &str) -> bool {
 /// garbled word (e.g. "signure" vs "signature") still scores highly while
 /// unrelated names score near zero. Returns the best candidate above
 /// `threshold` together with its score.
-pub fn fuzzy_match_trigger(spoken: &str, triggers: &[String], threshold: f32) -> Option<(String, f32)> {
+pub fn fuzzy_match_trigger(
+    spoken: &str,
+    triggers: &[String],
+    threshold: f32,
+) -> Option<(String, f32)> {
     let spoken_tokens = tokenize(spoken)
         .into_iter()
         .map(|token| token.lower)
@@ -421,15 +434,17 @@ pub fn fuzzy_match_trigger(spoken: &str, triggers: &[String], threshold: f32) ->
             continue;
         }
 
+        if spoken_tokens == trigger_tokens && threshold <= 1.0 {
+            return Some((trigger.to_string(), 1.0));
+        }
         let cols = trigger_tokens.len() + 1;
         let mut prev: Vec<f32> = (0..cols).map(|j| j as f32).collect();
         for (i, spoken_token) in spoken_tokens.iter().enumerate() {
             let mut cur = vec![0.0f32; cols];
             cur[0] = (i + 1) as f32;
             for j in 1..cols {
-                let substitute = prev[j - 1]
-                    + 1.0
-                    - char_dice(spoken_token, &trigger_tokens[j - 1]);
+                let substitute =
+                    prev[j - 1] + 1.0 - char_dice(spoken_token, &trigger_tokens[j - 1]);
                 let delete = prev[j] + 1.0;
                 let insert = cur[j - 1] + 1.0;
                 cur[j] = substitute.min(delete).min(insert);
@@ -438,7 +453,7 @@ pub fn fuzzy_match_trigger(spoken: &str, triggers: &[String], threshold: f32) ->
         }
 
         let max_tokens = spoken_tokens.len().max(trigger_tokens.len());
-        let score = 1.0 - prev[cols - 1] / max_tokens as f32;
+        let score = (1.0 - prev[cols - 1] / max_tokens as f32).clamp(0.0, 1.0);
         if score >= threshold && best.as_ref().is_none_or(|(_, s)| score > *s) {
             best = Some((trigger.to_string(), score));
         }
@@ -538,6 +553,44 @@ mod tests {
     }
 
     #[test]
+    fn dictionary_preserves_symbol_bearing_terms() {
+        assert_eq!(
+            correct_dictionary_terms("c++ and c#", &terms(&["C++", "C#"])),
+            "C++ and C#"
+        );
+        assert_eq!(
+            correct_dictionary_terms("C and c++.", &terms(&["C++"])),
+            "C and C++."
+        );
+        assert_eq!(
+            correct_dictionary_terms(".net and acme™", &terms(&[".NET", "Acme™"])),
+            ".NET and Acme™"
+        );
+    }
+
+    #[test]
+    fn annotations_preserve_normal_prose_and_code() {
+        for text in [
+            "array[index]",
+            "array[music]",
+            "[important details]",
+            "(coding)",
+            "(Windows)",
+            "(music theory)",
+        ] {
+            assert_eq!(super::strip_sound_effects(text), text);
+        }
+    }
+
+    #[test]
+    fn exact_trigger_beats_repeated_bigram_candidate() {
+        let (name, score) = fuzzy_match_trigger("aaaaa", &terms(&["aa", "aaaaa"]), 0.0).unwrap();
+        assert_eq!(name, "aaaaa");
+        assert_eq!(score, 1.0);
+        assert!((0.0..=1.0).contains(&super::char_dice("aaaaa", "aa")));
+    }
+
+    #[test]
     fn maps_all_core_punctuation_words() {
         assert_eq!(
             map_spoken_punctuation("period comma question mark exclamation point exclamation mark"),
@@ -555,7 +608,10 @@ mod tests {
 
     #[test]
     fn preserves_point_in_decimals() {
-        assert_eq!(map_spoken_punctuation("three point five"), "three point five");
+        assert_eq!(
+            map_spoken_punctuation("three point five"),
+            "three point five"
+        );
     }
 
     #[test]
@@ -598,30 +654,43 @@ mod tests {
 
     #[test]
     fn fuzzy_matches_exact_trigger() {
-        let (name, score) = fuzzy_match_trigger("email signature", &triggers(&["email signature", "meeting notes"]), 0.6)
-            .expect("exact trigger should match");
+        let (name, score) = fuzzy_match_trigger(
+            "email signature",
+            &triggers(&["email signature", "meeting notes"]),
+            0.6,
+        )
+        .expect("exact trigger should match");
         assert_eq!(name, "email signature");
         assert_eq!(score, 1.0);
     }
 
     #[test]
     fn fuzzy_matches_case_insensitively() {
-        let (name, _) = fuzzy_match_trigger("EMAIL SIGNATURE", &triggers(&["Email Signature"]), 0.6)
-            .expect("case-insensitive match should succeed");
+        let (name, _) =
+            fuzzy_match_trigger("EMAIL SIGNATURE", &triggers(&["Email Signature"]), 0.6)
+                .expect("case-insensitive match should succeed");
         assert_eq!(name, "Email Signature");
     }
 
     #[test]
     fn fuzzy_matches_slight_garbles() {
-        let (name, _) = fuzzy_match_trigger("email signure", &triggers(&["email signature", "meeting notes"]), 0.6)
-            .expect("near-miss should still match");
+        let (name, _) = fuzzy_match_trigger(
+            "email signure",
+            &triggers(&["email signature", "meeting notes"]),
+            0.6,
+        )
+        .expect("near-miss should still match");
         assert_eq!(name, "email signature");
     }
 
     #[test]
     fn fuzzy_matches_best_of_several() {
-        let (name, _) = fuzzy_match_trigger("email signature", &triggers(&["meeting notes", "gmail signature"]), 0.6)
-            .expect("closest candidate should match");
+        let (name, _) = fuzzy_match_trigger(
+            "email signature",
+            &triggers(&["meeting notes", "gmail signature"]),
+            0.6,
+        )
+        .expect("closest candidate should match");
         assert_eq!(name, "gmail signature");
     }
 
@@ -666,9 +735,18 @@ mod tests {
         assert_eq!(strip_sound_effects("[Applause]"), "");
         assert_eq!(strip_sound_effects("(wind blowing)"), "");
         assert_eq!(strip_sound_effects("*music*"), "");
-        assert_eq!(strip_sound_effects("hello (applause) world"), "hello  world");
-        assert_eq!(strip_sound_effects("this is (gun firing) great"), "this is  great");
-        assert_eq!(strip_sound_effects("normal text with (important details)"), "normal text with (important details)");
+        assert_eq!(
+            strip_sound_effects("hello (applause) world"),
+            "hello  world"
+        );
+        assert_eq!(
+            strip_sound_effects("this is (gun firing) great"),
+            "this is  great"
+        );
+        assert_eq!(
+            strip_sound_effects("normal text with (important details)"),
+            "normal text with (important details)"
+        );
     }
 
     #[test]
@@ -789,10 +867,7 @@ mod snippet_template_tests {
             expand_snippet_template("Hello {name}, your code is {code}.", None),
             "Hello {name}, your code is {code}."
         );
-        assert_eq!(
-            expand_snippet_template("{unknown}", None),
-            "{unknown}"
-        );
+        assert_eq!(expand_snippet_template("{unknown}", None), "{unknown}");
     }
 
     #[test]
@@ -851,5 +926,3 @@ mod snippet_template_tests {
         );
     }
 }
-
-

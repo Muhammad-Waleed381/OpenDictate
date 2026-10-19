@@ -1,129 +1,138 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 pub fn inject_text(app: &AppHandle, text: &str, mode: &str) -> Result<(), String> {
     copy_to_system_clipboard(app, text)?;
-
     if mode == "clipboard" {
         return Ok(());
     }
+    let terminal = uses_terminal_shortcuts(app)?;
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    require_external_focus(app)?;
+    press_paste(terminal)
+}
 
-    // mode == "type" or mode == "auto"
-    #[cfg(target_os = "linux")]
-    {
-        // Settle delay to ensure Wayland compositor and target window receive clipboard update
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        let res = press_paste();
-        log::info!("inject: press_paste result={res:?}");
-        res
+fn uses_terminal_shortcuts(app: &AppHandle) -> Result<bool, String> {
+    let state = app.state::<crate::state::AppState>();
+    let settings = state.settings.lock().map_err(|e| e.to_string())?;
+    Ok(settings.input_target == "terminal")
+}
+
+/// UI insertion first hides OpenDictate so the window manager restores the
+/// previous app. Never send editing keys while any OpenDictate window is focused.
+pub fn with_external_focus<T>(
+    app: &AppHandle,
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let mut hidden = Vec::new();
+    for window in app.webview_windows().into_values() {
+        if window.is_focused().map_err(|e| e.to_string())? {
+            window
+                .hide()
+                .map_err(|e| format!("could not return focus to the previous app: {e}"))?;
+            hidden.push(window);
+        }
     }
+    if !hidden.is_empty() {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    let result = require_external_focus(app).and_then(|_| action());
+    if result.is_err() {
+        for window in hidden {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
+    result
+}
 
-    #[cfg(not(target_os = "linux"))]
-    {
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        let res = press_paste();
-        log::info!("inject: press_paste result={res:?}");
-        res
+fn require_external_focus(app: &AppHandle) -> Result<(), String> {
+    for window in app.webview_windows().into_values() {
+        ensure_external_focus(
+            window
+                .is_focused()
+                .map_err(|e| format!("could not verify target focus: {e}"))?,
+        )?;
+    }
+    Ok(())
+}
+
+fn ensure_external_focus(own_window_focused: bool) -> Result<(), String> {
+    if own_window_focused {
+        Err("OpenDictate still has focus. Select the destination app and try again.".into())
+    } else {
+        Ok(())
     }
 }
 
 pub fn copy_to_system_clipboard(app: &AppHandle, text: &str) -> Result<(), String> {
-    // 1. Write via Tauri clipboard manager (GTK / OS native).
-    let clipboard = app.clipboard();
-    let native_result = clipboard.write_text(text.to_string());
+    write_clipboards(app, text)
+}
 
-    // 2. On Linux, also write directly to wl-copy (Wayland), xclip, and xsel (X11 / Xwayland)
+fn clipboard_write_result(any_succeeded: bool) -> Result<(), String> {
+    if any_succeeded {
+        Ok(())
+    } else {
+        Err("failed to write clipboard; no paste was sent".into())
+    }
+}
+
+fn write_clipboards(app: &AppHandle, text: &str) -> Result<(), String> {
+    let native_ok = app.clipboard().write_text(text.to_string()).is_ok();
     #[cfg(target_os = "linux")]
     {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        let mut any_succeeded = native_result.is_ok();
-
-        // Try wl-copy on Wayland (clipboard selection)
-        if let Ok(mut child) = Command::new("wl-copy")
-            .arg("--type")
-            .arg("text/plain;charset=utf-8")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            let mut wrote = false;
-            if let Some(mut stdin) = child.stdin.take() {
-                wrote = stdin.write_all(text.as_bytes()).is_ok();
-            }
-            if let Ok(status) = child.wait() {
-                if wrote && status.success() {
-                    any_succeeded = true;
-                }
-            }
+        // Keep CLIPBOARD synchronized across Wayland and Xwayland. The target
+        // profile chooses an explicit clipboard shortcut, never stale PRIMARY.
+        let mut clipboard_ok = native_ok;
+        for (program, args) in [
+            ("wl-copy", vec!["--type", "text/plain;charset=utf-8"]),
+            ("xclip", vec!["-selection", "clipboard", "-in"]),
+            ("xsel", vec!["--clipboard", "--input"]),
+        ] {
+            clipboard_ok |= write_clipboard_tool(program, &args, text);
         }
-
-        // Also try wl-copy primary selection
-        if let Ok(mut child) = Command::new("wl-copy")
-            .arg("--primary")
-            .arg("--type")
-            .arg("text/plain;charset=utf-8")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-            let _ = child.wait();
-        }
-
-        // Try xclip for X11 / Xwayland (clipboard selection)
-        if let Ok(mut child) = Command::new("xclip")
-            .args(["-selection", "clipboard", "-in"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            let mut wrote = false;
-            if let Some(mut stdin) = child.stdin.take() {
-                wrote = stdin.write_all(text.as_bytes()).is_ok();
-            }
-            if let Ok(status) = child.wait() {
-                if wrote && status.success() {
-                    any_succeeded = true;
-                }
-            }
-        }
-
-        // Try xsel for X11 / Xwayland (clipboard selection)
-        if let Ok(mut child) = Command::new("xsel")
-            .args(["--clipboard", "--input"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            let mut wrote = false;
-            if let Some(mut stdin) = child.stdin.take() {
-                wrote = stdin.write_all(text.as_bytes()).is_ok();
-            }
-            if let Ok(status) = child.wait() {
-                if wrote && status.success() {
-                    any_succeeded = true;
-                }
-            }
-        }
-
-        if any_succeeded || native_result.is_ok() {
-            Ok(())
-        } else {
-            log::warn!("copy_to_system_clipboard: background tools unavailable, proceeding with paste");
-            Ok(())
-        }
+        clipboard_write_result(clipboard_ok)
     }
-
     #[cfg(not(target_os = "linux"))]
-    native_result.map_err(|e| format!("failed to write to clipboard: {e}"))
+    clipboard_write_result(native_ok)
+}
+
+#[cfg(target_os = "linux")]
+fn write_clipboard_tool(program: &str, args: &[&str], text: &str) -> bool {
+    use std::{
+        io::Write,
+        process::{Command, Stdio},
+        time::{Duration, Instant},
+    };
+    let Ok(mut child) = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    // The writer must not block the calling thread if a broken tool stops
+    // reading stdin. Killing it at the deadline closes that pipe as well.
+    let stdin = child.stdin.take();
+    let content = text.to_owned();
+    let writer = std::thread::spawn(move || {
+        stdin.is_some_and(|mut input| input.write_all(content.as_bytes()).is_ok())
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let succeeded = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
+        }
+    };
+    succeeded && writer.join().unwrap_or(false)
 }
 
 pub fn clean_text(text: &str) -> String {
@@ -178,11 +187,92 @@ pub fn clean_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::clean_text;
+    use super::*;
+
+    #[test]
+    fn clipboard_failure_prevents_paste_and_own_focus_is_rejected() {
+        assert!(clipboard_write_result(false).is_err());
+        assert!(clipboard_write_result(true).is_ok());
+        assert!(ensure_external_focus(true).is_err());
+        assert!(ensure_external_focus(false).is_ok());
+    }
+
+    #[test]
+    fn app_names_are_data_not_script_source() {
+        let name = "app\"; $(touch sentinel); #";
+        let mac = mac_app_command(name);
+        assert_eq!(mac.get_args().collect::<Vec<_>>(), vec!["-a", name]);
+        let windows = windows_app_command(name);
+        assert!(!windows
+            .get_args()
+            .any(|arg| arg.to_string_lossy().contains(name)));
+        assert!(windows
+            .get_envs()
+            .any(|(key, value)| key == "OPENDICTATE_TARGET_APP"
+                && value == Some(std::ffi::OsStr::new(name))));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sway_app_names_stay_inside_one_literal_criterion() {
+        let criterion = sway_app_criteria("App[1]\"; exec bad");
+        let encoded = criterion
+            .strip_prefix("[app_id=")
+            .unwrap()
+            .strip_suffix(']')
+            .unwrap();
+        let pattern: String = serde_json::from_str(encoded).unwrap();
+        assert_eq!(pattern, "^App\\[1\\]\"; exec bad$");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wtype_chords_press_keys_and_release_every_modifier() {
+        assert_eq!(
+            wtype_args(&["ctrl"], "z"),
+            ["-M", "ctrl", "-k", "z", "-m", "ctrl"]
+        );
+        assert_eq!(
+            wtype_args(&["ctrl", "shift"], "Tab"),
+            ["-M", "ctrl", "-M", "shift", "-k", "Tab", "-m", "shift", "-m", "ctrl"]
+        );
+        assert_eq!(wtype_args(&[], "Return"), ["-k", "Return"]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn text_fields_and_shells_use_distinct_supported_editing_shortcuts() {
+        let (mods, key) = paste_chord(false);
+        assert_eq!(
+            wtype_args(&mods.iter().map(|m| m.0).collect::<Vec<_>>(), key.0),
+            ["-M", "ctrl", "-k", "v", "-m", "ctrl"]
+        );
+        let (mods, key) = paste_chord(true);
+        assert_eq!(
+            wtype_args(&mods.iter().map(|m| m.0).collect::<Vec<_>>(), key.0),
+            ["-M", "ctrl", "-M", "shift", "-k", "v", "-m", "shift", "-m", "ctrl"]
+        );
+        let text = delete_line_chords(false);
+        assert_eq!(
+            text.iter().map(|(_, key)| key.0).collect::<Vec<_>>(),
+            ["Home", "End", "BackSpace"]
+        );
+        let shell = delete_line_chords(true);
+        assert_eq!(
+            shell.iter().map(|(_, key)| key.0).collect::<Vec<_>>(),
+            ["a", "k"]
+        );
+        assert!(shell
+            .iter()
+            .all(|(mods, _)| mods == &[("ctrl", uinput::KEY_LEFTCTRL)]));
+    }
 
     #[test]
     fn capitalizes_sentences_and_removes_punctuation_spaces() {
-        assert_eq!(clean_text("hello. world! how are you?"), "Hello. World! How are you?");
+        assert_eq!(
+            clean_text("hello. world! how are you?"),
+            "Hello. World! How are you?"
+        );
     }
 }
 
@@ -213,7 +303,9 @@ mod uinput {
     pub const KEY_A: u16 = 30;
     pub const KEY_C: u16 = 46;
     pub const KEY_T: u16 = 20;
-    pub const KEY_U: u16 = 22;
+    pub const KEY_HOME: u16 = 102;
+    pub const KEY_END: u16 = 107;
+    pub const KEY_K: u16 = 37;
     pub const KEY_V: u16 = 47;
     pub const KEY_W: u16 = 17;
     pub const KEY_Z: u16 = 44;
@@ -222,8 +314,22 @@ mod uinput {
     pub const KEY_PAGEDOWN: u16 = 109;
 
     const ALL_KEYS: &[u16] = &[
-        KEY_TAB, KEY_ENTER, KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_A, KEY_C,
-        KEY_T, KEY_U, KEY_V, KEY_W, KEY_Z, KEY_BACKSPACE, KEY_PAGEUP, KEY_PAGEDOWN,
+        KEY_TAB,
+        KEY_ENTER,
+        KEY_LEFTCTRL,
+        KEY_LEFTSHIFT,
+        KEY_A,
+        KEY_C,
+        KEY_T,
+        KEY_HOME,
+        KEY_END,
+        KEY_K,
+        KEY_V,
+        KEY_W,
+        KEY_Z,
+        KEY_BACKSPACE,
+        KEY_PAGEUP,
+        KEY_PAGEDOWN,
     ];
 
     #[repr(C)]
@@ -321,7 +427,7 @@ mod uinput {
         let dev = guard.as_ref().ok_or("no uinput device")?;
         let fd = dev.file.as_raw_fd();
 
-        let emit = |type_: u16, code: u16, value: i32| {
+        let emit = |type_: u16, code: u16, value: i32| -> Result<(), String> {
             let ev = InputEvent {
                 time_sec: 0,
                 time_usec: 0,
@@ -332,160 +438,220 @@ mod uinput {
             unsafe {
                 let ptr = &ev as *const InputEvent as *const libc::c_void;
                 let size = std::mem::size_of::<InputEvent>();
-                libc::write(fd, ptr, size);
+                let written = libc::write(fd, ptr, size);
+                if written != size as isize {
+                    return Err(format!(
+                        "uinput write failed: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
             }
+            Ok(())
         };
 
         // Small pre-delay to allow focus to settle
         std::thread::sleep(Duration::from_millis(30));
 
         // Press keys in sequence
-        for &key in keys {
-            emit(EV_KEY, key, 1);
-        }
-        emit(EV_SYN, SYN_REPORT, 0);
+        let pressed = keys
+            .iter()
+            .try_for_each(|&key| emit(EV_KEY, key, 1))
+            .and_then(|_| emit(EV_SYN, SYN_REPORT, 0));
         std::thread::sleep(Duration::from_millis(45));
 
         // Release keys in reverse sequence
+        let mut released = Ok(());
         for &key in keys.iter().rev() {
-            emit(EV_KEY, key, 0);
+            // Release even after a partial write; do not leave modifiers held.
+            if let Err(e) = emit(EV_KEY, key, 0) {
+                released = Err(e);
+            }
         }
-        emit(EV_SYN, SYN_REPORT, 0);
+        let synced = emit(EV_SYN, SYN_REPORT, 0);
         std::thread::sleep(Duration::from_millis(30));
 
-        Ok(())
+        pressed.and(released).and(synced)
     }
 }
 
 #[cfg(target_os = "linux")]
-fn press_paste() -> Result<(), String> {
-    log::info!("inject: attempting press_paste via uinput / fallbacks");
-    uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_V])
-        .or_else(|e| {
-            log::warn!("inject: uinput paste failed ({e}), falling back to ydotool");
-            run("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"])
+fn wtype_args(modifiers: &[&str], key: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    for modifier in modifiers {
+        args.extend(["-M".into(), (*modifier).into()]);
+    }
+    args.extend(["-k".into(), key.into()]);
+    for modifier in modifiers.iter().rev() {
+        args.extend(["-m".into(), (*modifier).into()]);
+    }
+    args
+}
+
+#[cfg(target_os = "linux")]
+fn linux_key(modifiers: &[(&str, u16)], key: (&str, u16)) -> Result<(), String> {
+    let keys: Vec<u16> = modifiers
+        .iter()
+        .map(|(_, code)| *code)
+        .chain([key.1])
+        .collect();
+    uinput::send_key_combo(&keys)
+        .or_else(|_| {
+            let args: Vec<String> = std::iter::once("key".into())
+                .chain(keys.iter().map(|code| format!("{code}:1")))
+                .chain(keys.iter().rev().map(|code| format!("{code}:0")))
+                .collect();
+            run(
+                "ydotool",
+                &args.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
         })
-        .or_else(|_| run("ydotool", &["key", "29+47"]))
-        .or_else(|e| {
-            log::warn!("inject: ydotool failed ({e}), falling back to wtype");
-            run("wtype", &["-M", "ctrl", "-k", "v", "-m", "ctrl"])
+        .or_else(|_| {
+            let modifiers: Vec<&str> = modifiers.iter().map(|(name, _)| *name).collect();
+            let args = wtype_args(&modifiers, key.0);
+            run(
+                "wtype",
+                &args.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
         })
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-m", "v"]))
-        .or_else(|e| {
-            log::warn!("inject: wtype failed ({e}), falling back to xdotool");
-            run("xdotool", &["key", "--clearmodifiers", "ctrl+v"])
+        .or_else(|_| {
+            let chord = modifiers
+                .iter()
+                .map(|(name, _)| *name)
+                .chain([key.0])
+                .collect::<Vec<_>>()
+                .join("+");
+            run("xdotool", &["key", "--clearmodifiers", &chord])
         })
+}
+
+#[cfg(target_os = "linux")]
+type LinuxKey = (&'static str, u16);
+#[cfg(target_os = "linux")]
+type LinuxChord = (Vec<LinuxKey>, LinuxKey);
+
+#[cfg(target_os = "linux")]
+fn paste_chord(terminal: bool) -> LinuxChord {
+    let mut modifiers = vec![("ctrl", uinput::KEY_LEFTCTRL)];
+    if terminal {
+        modifiers.push(("shift", uinput::KEY_LEFTSHIFT));
+    }
+    (modifiers, ("v", uinput::KEY_V))
+}
+
+#[cfg(target_os = "linux")]
+fn press_paste(terminal: bool) -> Result<(), String> {
+    let (modifiers, key) = paste_chord(terminal);
+    linux_key(&modifiers, key)
 }
 
 #[cfg(target_os = "linux")]
 pub fn undo_last_insert() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_Z])
-        .or_else(|_| run("ydotool", &["key", "29+44"]))
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-m", "z"]))
-        .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+z"]))
+    linux_key(&[("ctrl", uinput::KEY_LEFTCTRL)], ("z", uinput::KEY_Z))
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_new_line() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_ENTER])
-        .or_else(|_| run("ydotool", &["key", "28"]))
-        .or_else(|_| run("wtype", &["-k", "Return"]))
-        .or_else(|_| run("xdotool", &["key", "Return"]))
+    press_enter()
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_new_paragraph() -> Result<(), String> {
-    press_new_line()?;
-    press_new_line()
+    press_enter()?;
+    press_enter()
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_tab() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_TAB])
-        .or_else(|_| run("ydotool", &["key", "15"]))
-        .or_else(|_| run("wtype", &["-k", "Tab"]))
-        .or_else(|_| run("xdotool", &["key", "Tab"]))
+    linux_key(&[], ("Tab", uinput::KEY_TAB))
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_delete_word() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_BACKSPACE])
-        .or_else(|_| run("ydotool", &["key", "29+14"]))
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-k", "BackSpace"]))
-        .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+BackSpace"]))
+    linux_key(
+        &[("ctrl", uinput::KEY_LEFTCTRL)],
+        ("BackSpace", uinput::KEY_BACKSPACE),
+    )
 }
 
 #[cfg(target_os = "linux")]
-pub fn press_delete_line() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_U])
-        .or_else(|_| run("ydotool", &["key", "29+22"]))
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-m", "u"]))
-        .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+u"]))
+fn delete_line_chords(terminal: bool) -> Vec<LinuxChord> {
+    if terminal {
+        // Readline shells (Bash/Zsh): beginning-of-line then kill-to-end,
+        // independent of the cursor's current position.
+        vec![
+            (vec![("ctrl", uinput::KEY_LEFTCTRL)], ("a", uinput::KEY_A)),
+            (vec![("ctrl", uinput::KEY_LEFTCTRL)], ("k", uinput::KEY_K)),
+        ]
+    } else {
+        vec![
+            (vec![], ("Home", uinput::KEY_HOME)),
+            (
+                vec![("shift", uinput::KEY_LEFTSHIFT)],
+                ("End", uinput::KEY_END),
+            ),
+            (vec![], ("BackSpace", uinput::KEY_BACKSPACE)),
+        ]
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn press_delete_line(app: &AppHandle) -> Result<(), String> {
+    for (modifiers, key) in delete_line_chords(uses_terminal_shortcuts(app)?) {
+        linux_key(&modifiers, key)?;
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_clear_all() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_A, uinput::KEY_BACKSPACE])
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-m", "a", "-k", "BackSpace"]))
-        .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+a", "BackSpace"]))
+    linux_key(&[("ctrl", uinput::KEY_LEFTCTRL)], ("a", uinput::KEY_A))?;
+    linux_key(&[], ("BackSpace", uinput::KEY_BACKSPACE))
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_enter() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_ENTER])
-        .or_else(|_| run("ydotool", &["key", "28"]))
-        .or_else(|_| run("wtype", &["-k", "Return"]))
-        .or_else(|_| run("xdotool", &["key", "Return"]))
+    linux_key(&[], ("Return", uinput::KEY_ENTER))
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_interrupt() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_C])
-        .or_else(|_| run("ydotool", &["key", "29+46"]))
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-m", "c"]))
-        .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+c"]))
+    linux_key(&[("ctrl", uinput::KEY_LEFTCTRL)], ("c", uinput::KEY_C))
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_next_tab() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_TAB])
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-k", "Tab"]))
-        .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+Tab"]))
+    linux_key(&[("ctrl", uinput::KEY_LEFTCTRL)], ("Tab", uinput::KEY_TAB))
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_prev_tab() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_LEFTSHIFT, uinput::KEY_TAB])
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-M", "shift", "-k", "Tab"]))
-        .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+shift+Tab"]))
+    linux_key(
+        &[
+            ("ctrl", uinput::KEY_LEFTCTRL),
+            ("shift", uinput::KEY_LEFTSHIFT),
+        ],
+        ("Tab", uinput::KEY_TAB),
+    )
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_new_tab() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_T])
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-m", "t"]))
-        .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+t"]))
+    linux_key(&[("ctrl", uinput::KEY_LEFTCTRL)], ("t", uinput::KEY_T))
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_close_tab() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_LEFTCTRL, uinput::KEY_W])
-        .or_else(|_| run("wtype", &["-M", "ctrl", "-m", "w"]))
-        .or_else(|_| run("xdotool", &["key", "--clearmodifiers", "ctrl+w"]))
+    linux_key(&[("ctrl", uinput::KEY_LEFTCTRL)], ("w", uinput::KEY_W))
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_scroll_down() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_PAGEDOWN])
-        .or_else(|_| run("wtype", &["-k", "Page_Down"]))
-        .or_else(|_| run("xdotool", &["key", "Page_Down"]))
+    linux_key(&[], ("Page_Down", uinput::KEY_PAGEDOWN))
 }
 
 #[cfg(target_os = "linux")]
 pub fn press_scroll_up() -> Result<(), String> {
-    uinput::send_key_combo(&[uinput::KEY_PAGEUP])
-        .or_else(|_| run("wtype", &["-k", "Page_Up"]))
-        .or_else(|_| run("xdotool", &["key", "Page_Up"]))
+    linux_key(&[], ("Page_Up", uinput::KEY_PAGEUP))
 }
 
 #[cfg(target_os = "linux")]
@@ -494,14 +660,24 @@ pub fn switch_to_app(app_name: &str) -> Result<(), String> {
     let candidates: Vec<&str> = match lower.as_str() {
         "cursor" => vec!["cursor", "Cursor"],
         "terminal" | "console" | "bash" | "term" => vec![
-            "ptyxis", "gnome-terminal", "alacritty", "kitty", "konsole", "xterm", "terminal",
+            "ptyxis",
+            "gnome-terminal",
+            "alacritty",
+            "kitty",
+            "konsole",
+            "xterm",
+            "terminal",
         ],
-        "code" | "vscode" | "vs code" | "visual studio code" => vec!["code", "visual-studio-code", "vscodium"],
+        "code" | "vscode" | "vs code" | "visual studio code" => {
+            vec!["code", "visual-studio-code", "vscodium"]
+        }
         "chrome" | "google chrome" => vec!["google-chrome", "google-chrome-stable", "chrome"],
         "browser" | "web" => vec!["google-chrome", "firefox", "brave-browser", "chromium"],
         "slack" => vec!["slack", "Slack"],
         "discord" => vec!["discord", "Discord"],
-        "files" | "file manager" | "nautilus" => vec!["nautilus", "org.gnome.Nautilus", "dolphin", "thunar"],
+        "files" | "file manager" | "nautilus" => {
+            vec!["nautilus", "org.gnome.Nautilus", "dolphin", "thunar"]
+        }
         "spotify" => vec!["spotify", "Spotify"],
         "obsidian" => vec!["obsidian", "Obsidian"],
         _ => vec![lower.as_str()],
@@ -517,7 +693,7 @@ pub fn switch_to_app(app_name: &str) -> Result<(), String> {
             return Ok(());
         }
         // 3. Try swaymsg (Wayland Sway/Hyprland)
-        if run("swaymsg", &[&format!("[app_id=\"{target}\"]"), "focus"]).is_ok() {
+        if run("swaymsg", &[&sway_app_criteria(target), "focus"]).is_ok() {
             return Ok(());
         }
         // 4. Try gtk-launch
@@ -534,6 +710,24 @@ pub fn switch_to_app(app_name: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
+fn sway_app_criteria(target: &str) -> String {
+    // Sway interprets criteria as a quoted regular expression. Quote both
+    // layers so an app name cannot terminate the criteria or add commands.
+    let mut literal = String::from("^");
+    for ch in target.chars() {
+        if ".^$[](){}*+?|\\".contains(ch) {
+            literal.push('\\');
+        }
+        literal.push(ch);
+    }
+    literal.push('$');
+    format!(
+        "[app_id={}]",
+        serde_json::to_string(&literal).expect("string JSON")
+    )
+}
+
+#[cfg(target_os = "linux")]
 fn run(program: &str, args: &[&str]) -> Result<(), String> {
     match std::process::Command::new(program).args(args).status() {
         Ok(status) if status.success() => Ok(()),
@@ -545,7 +739,7 @@ fn run(program: &str, args: &[&str]) -> Result<(), String> {
 // --- Windows / macOS: synthetic input via enigo (SendInput / CGEvent) ------
 
 #[cfg(not(target_os = "linux"))]
-fn press_paste() -> Result<(), String> {
+fn press_paste(_terminal: bool) -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
@@ -568,13 +762,21 @@ fn press_paste() -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     let v_key = Key::Unicode('v');
 
-    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(v_key, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(v_key, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo.key(v_key, Direction::Release).map_err(|e| e.to_string())?;
+    enigo
+        .key(v_key, Direction::Release)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
+    enigo
+        .key(modifier, Direction::Release)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -615,13 +817,21 @@ pub fn undo_last_insert() -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     let z_key = Key::Unicode('z');
 
-    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(z_key, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(z_key, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo.key(z_key, Direction::Release).map_err(|e| e.to_string())?;
+    enigo
+        .key(z_key, Direction::Release)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
+    enigo
+        .key(modifier, Direction::Release)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -629,7 +839,9 @@ pub fn press_new_line() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
-    enigo.key(Key::Return, Direction::Click).map_err(|e| e.to_string())
+    enigo
+        .key(Key::Return, Direction::Click)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -643,7 +855,9 @@ pub fn press_tab() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
-    enigo.key(Key::Tab, Direction::Click).map_err(|e| e.to_string())
+    enigo
+        .key(Key::Tab, Direction::Click)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -655,23 +869,71 @@ pub fn press_delete_word() -> Result<(), String> {
     let modifier = Key::Alt;
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
-    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Backspace, Direction::Click).map_err(|e| e.to_string())?;
-    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Backspace, Direction::Click)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Release)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn press_delete_line() -> Result<(), String> {
+pub fn press_delete_line(app: &AppHandle) -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
+    if uses_terminal_shortcuts(app)? {
+        #[cfg(target_os = "windows")]
+        let shell_keys = [Key::A, Key::K];
+        #[cfg(not(target_os = "windows"))]
+        let shell_keys = [Key::Unicode('a'), Key::Unicode('k')];
+        for key in shell_keys {
+            enigo
+                .key(Key::Control, Direction::Press)
+                .map_err(|e| e.to_string())?;
+            let clicked = enigo.key(key, Direction::Click);
+            let released = enigo.key(Key::Control, Direction::Release);
+            clicked.and(released).map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
     #[cfg(target_os = "macos")]
-    let modifier = Key::Meta;
-    #[cfg(not(target_os = "macos"))]
-    let modifier = Key::Control;
-    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Backspace, Direction::Click).map_err(|e| e.to_string())?;
-    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
+    {
+        enigo
+            .key(Key::Meta, Direction::Press)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::LeftArrow, Direction::Click)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Shift, Direction::Press)
+            .map_err(|e| e.to_string())?;
+        let selected = enigo.key(Key::RightArrow, Direction::Click);
+        let released_shift = enigo.key(Key::Shift, Direction::Release);
+        let released_meta = enigo.key(Key::Meta, Direction::Release);
+        selected
+            .and(released_shift)
+            .and(released_meta)
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        enigo
+            .key(Key::Home, Direction::Click)
+            .map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::Shift, Direction::Press)
+            .map_err(|e| e.to_string())?;
+        let selected = enigo.key(Key::End, Direction::Click);
+        let released = enigo.key(Key::Shift, Direction::Release);
+        selected.and(released).map_err(|e| e.to_string())?;
+    }
+    enigo
+        .key(Key::Backspace, Direction::Click)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -698,15 +960,25 @@ pub fn press_clear_all() -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     let a_key = Key::Unicode('a');
 
-    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(a_key, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(a_key, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo.key(a_key, Direction::Release).map_err(|e| e.to_string())?;
+    enigo
+        .key(a_key, Direction::Release)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Release)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(Key::Backspace, Direction::Click).map_err(|e| e.to_string())
+    enigo
+        .key(Key::Backspace, Direction::Click)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -714,7 +986,9 @@ pub fn press_enter() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
-    enigo.key(Key::Return, Direction::Click).map_err(|e| e.to_string())
+    enigo
+        .key(Key::Return, Direction::Click)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -736,13 +1010,21 @@ pub fn press_interrupt() -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     let c_key = Key::Unicode('c');
 
-    enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Control, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(c_key, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(c_key, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo.key(c_key, Direction::Release).map_err(|e| e.to_string())?;
+    enigo
+        .key(c_key, Direction::Release)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())
+    enigo
+        .key(Key::Control, Direction::Release)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -754,9 +1036,15 @@ pub fn press_next_tab() -> Result<(), String> {
     let modifier = Key::Control;
     #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
-    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Tab, Direction::Click).map_err(|e| e.to_string())?;
-    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Tab, Direction::Click)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Release)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -764,11 +1052,21 @@ pub fn press_prev_tab() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
-    enigo.key(Key::Control, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Shift, Direction::Press).map_err(|e| e.to_string())?;
-    enigo.key(Key::Tab, Direction::Click).map_err(|e| e.to_string())?;
-    enigo.key(Key::Shift, Direction::Release).map_err(|e| e.to_string())?;
-    enigo.key(Key::Control, Direction::Release).map_err(|e| e.to_string())
+    enigo
+        .key(Key::Control, Direction::Press)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Shift, Direction::Press)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Tab, Direction::Click)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Shift, Direction::Release)
+        .map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Control, Direction::Release)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -795,13 +1093,21 @@ pub fn press_new_tab() -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     let t_key = Key::Unicode('t');
 
-    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(t_key, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(t_key, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo.key(t_key, Direction::Release).map_err(|e| e.to_string())?;
+    enigo
+        .key(t_key, Direction::Release)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
+    enigo
+        .key(modifier, Direction::Release)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -828,13 +1134,21 @@ pub fn press_close_tab() -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     let w_key = Key::Unicode('w');
 
-    enigo.key(modifier, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(w_key, Direction::Press).map_err(|e| e.to_string())?;
+    enigo
+        .key(w_key, Direction::Press)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo.key(w_key, Direction::Release).map_err(|e| e.to_string())?;
+    enigo
+        .key(w_key, Direction::Release)
+        .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo.key(modifier, Direction::Release).map_err(|e| e.to_string())
+    enigo
+        .key(modifier, Direction::Release)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -842,7 +1156,9 @@ pub fn press_scroll_down() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
-    enigo.key(Key::PageDown, Direction::Click).map_err(|e| e.to_string())
+    enigo
+        .key(Key::PageDown, Direction::Click)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -850,25 +1166,38 @@ pub fn press_scroll_up() -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| format!("failed to init input backend: {e}"))?;
-    enigo.key(Key::PageUp, Direction::Click).map_err(|e| e.to_string())
+    enigo
+        .key(Key::PageUp, Direction::Click)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn mac_app_command(app_name: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("open");
+    command.args(["-a", app_name]);
+    command
 }
 
 #[cfg(target_os = "macos")]
 pub fn switch_to_app(app_name: &str) -> Result<(), String> {
-    let script = format!("tell application \"{}\" to activate", app_name);
-    match std::process::Command::new("osascript").args(["-e", &script]).status() {
+    match mac_app_command(app_name).status() {
         Ok(status) if status.success() => Ok(()),
-        _ => match std::process::Command::new("open").args(["-a", app_name]).status() {
-            Ok(status) if status.success() => Ok(()),
-            _ => Err(format!("could not switch to application '{app_name}'")),
-        },
+        _ => Err(format!("could not switch to application '{app_name}'")),
     }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_app_command(app_name: &str) -> std::process::Command {
+    let mut command = std::process::Command::new("powershell.exe");
+    command.args(["-NoProfile", "-NonInteractive", "-Command",
+        "if (-not (New-Object -ComObject WScript.Shell).AppActivate($env:OPENDICTATE_TARGET_APP)) { exit 1 }"])
+        .env("OPENDICTATE_TARGET_APP", app_name);
+    command
 }
 
 #[cfg(target_os = "windows")]
 pub fn switch_to_app(app_name: &str) -> Result<(), String> {
-    let script = format!("(New-Object -ComObject WScript.Shell).AppActivate(\"{}\")", app_name);
-    match std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).status() {
+    match windows_app_command(app_name).status() {
         Ok(status) if status.success() => Ok(()),
         _ => Err(format!("could not switch to application '{app_name}'")),
     }
@@ -901,30 +1230,8 @@ pub fn open_browser_url(url: &str) -> Result<(), String> {
         url.to_string()
     };
 
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&target)
-            .spawn()
-            .map_err(|e| format!("failed to open browser with xdg-open: {e}"))?;
-        Ok(())
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&target)
-            .spawn()
-            .map_err(|e| format!("failed to open browser: {e}"))?;
-        Ok(())
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &target])
-            .spawn()
-            .map_err(|e| format!("failed to open browser: {e}"))?;
-        Ok(())
-    }
+    // The pinned opener uses ShellExecute on Windows; no cmd.exe parsing of
+    // URL metacharacters, percent expansion, or quoted PowerShell interpolation.
+    tauri_plugin_opener::open_url(&target, None::<&str>)
+        .map_err(|e| format!("failed to open browser: {e}"))
 }

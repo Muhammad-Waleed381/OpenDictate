@@ -128,27 +128,11 @@ impl Spotter {
         config.num_trailing_blanks = 2;
 
         let find = |needle: &str| -> Result<String> {
-            let mut matches: Vec<_> = std::fs::read_dir(model_dir)
-                .map_err(|e| {
-                    CoreError::Transcription(format!(
-                        "failed to read {}: {e}",
-                        model_dir.display()
-                    ))
-                })?
-                .flatten()
-                .filter(|e| {
-                    let n = e.file_name().to_string_lossy().to_lowercase();
-                    n.ends_with(".onnx") && n.contains(needle)
-                })
-                .map(|e| e.path())
-                .collect();
-            matches.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
-            matches
-                .first()
-                .map(|p| p.to_string_lossy().into_owned())
+            super::models::kws_model_file(model_dir, needle)
+                .map(|path| path.to_string_lossy().into_owned())
                 .ok_or_else(|| {
                     CoreError::Transcription(format!(
-                        "no '{needle}' ONNX file found in {}",
+                        "no valid '{needle}' ONNX file in {}",
                         model_dir.display()
                     ))
                 })
@@ -159,7 +143,7 @@ impl Spotter {
         config.model_config.transducer.joiner = Some(find("joiner")?);
 
         let tokens_path = model_dir.join("tokens.txt");
-        if !tokens_path.exists() {
+        if !super::models::valid_tokens_file(&tokens_path) {
             return Err(CoreError::Transcription(format!(
                 "tokens.txt missing from KWS model directory {}",
                 model_dir.display()
@@ -199,7 +183,9 @@ impl Spotter {
         }
 
         if tokenized_keywords.is_empty() {
-            return Err(CoreError::Transcription("No valid keyword phrases could be tokenized for KWS".into()));
+            return Err(CoreError::Transcription(
+                "No valid keyword phrases could be tokenized for KWS".into(),
+            ));
         }
 
         let keywords_buf = tokenized_keywords.join("\n");
@@ -209,7 +195,10 @@ impl Spotter {
             CoreError::Transcription("failed to instantiate SherpaOnnx KeywordSpotter".into())
         })?;
 
-        Ok(Self { spotter, keyword_map })
+        Ok(Self {
+            spotter,
+            keyword_map,
+        })
     }
 
     /// Creates a fresh streaming detection session.
