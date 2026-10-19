@@ -78,21 +78,27 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "OpenDictate ${{ github.ref_name }}"
           releaseBody: |
-            OpenDictate ${{ github.ref_name }} brings critical Windows dock and overlay visibility fixes, clipboard paste reliability improvements, model downloading robustness, and Linux AppImage sandbox compatibility.
+            OpenDictate ${{ github.ref_name }} is a reliability release from a full repository bug audit: 63 confirmed issues fixed across dictation sessions, audio capture, text processing, model management, and desktop integration.
 
-            ### Windows Dock & Overlay Enhancements
-            - Taskbar Occlusion Fix: Screen positioning now respects monitor work areas rather than full screen bounds, keeping the floating mic overlay 16px above the Windows taskbar across all display scales (100% to 200% DPI).
-            - Multi-Monitor Positioning: Corrected global coordinate offsets so the dock accurately positions on secondary and negative-offset monitors.
-            - Corner Anchor Stability: Fixed idle button alignment so the mic pill stays securely anchored to the selected corner without shifting or jumping when speech detection starts or stops.
-            - Window Restore on Minimize: System tray activation and second-instance launches now properly unminimize windows on Windows.
-            - NVIDIA GPU Detection: Enhanced GPU provider discovery on Windows to check executable file extensions in PATH.
+            ### Dictation & Audio
+            - Microphone tests now only measure audio: no transcription, actions, history entries, or polish calls.
+            - Streaming and offline sessions no longer drop final audio, the start of long recordings, or handsfree onset audio.
+            - Session operations are serialized; cancelling prevents stale results from being committed.
+            - PulseAudio stop/setup can no longer hang the app, and capture failures no longer leave a phantom recording active.
 
-            ### Cross-Platform Injection & Model Reliability
-            - Clipboard & Paste Injection: Fixed keyboard accelerator dispatch for Windows (avoiding virtual key code 0) and optimized clipboard settle timings.
-            - Network & Download Robustness: Increased connect timeouts to 30s with atomic partial file downloads and immediate progress feedback.
+            ### Text Insertion & Processing
+            - Failed insertions never submit existing content, and clipboard failures are reported instead of silently succeeding.
+            - Insert/Undo return focus to the previous application; new **Text fields** and **Shell (Bash, Zsh)** input targets.
+            - Fixed dictionary hotword crashes, punctuation/casing corruption, over-eager annotation filtering, and truncated polish output.
 
-            ### Linux AppImage Hardening
-            - Sandbox Permissions: Enforced 0755 permissions on AppRun within packaged AppImages for compatibility with unprivileged sandboxes (e.g. Firejail).
+            ### Models
+            - Model removal is restricted to the models directory; installs stay busy through extraction and are deduplicated.
+            - Download cancel/retry keeps ownership until cleanup completes and responds promptly.
+
+            ### Desktop & Data
+            - History export includes every row; CSV column order and word statistics are corrected.
+            - AppImage autostart no longer stores a temporary mount path; macOS autostart plist is properly escaped.
+            - GNOME hotkey and macOS shortcut replacement fixes; Local SLM (not yet implemented) can no longer be selected.
 
             ### Installers
             - Windows: `.msi` / `.exe` (NSIS) installers
