@@ -47,10 +47,9 @@ export function ModelCard() {
   const settings = useStore((s) => s.settings);
   const modelProgress = useStore((s) => s.modelProgress);
   const modelsStatus = useStore((s) => s.models);
-  const streamingTooSlow =
-    (modelsStatus?.streaming_rtf_x100 ?? 0) > 150 && (modelsStatus?.streaming_rtf_x100 ?? 0) !== 0;
-  const [startingDownloads, setStartingDownloads] = useState<Set<string>>(new Set());
-  const [cancellingDownloads, setCancellingDownloads] = useState<Set<string>>(new Set());
+  const recording = useStore((s) => s.recording || s.recordingBusy);
+  const startingDownloads = useStore((s) => s.modelDownloads);
+  const cancellingDownloads = useStore((s) => s.cancellingModels);
   const [downloadAllStatus, setDownloadAllStatus] = useState<{
     current: number;
     total: number;
@@ -65,11 +64,11 @@ export function ModelCard() {
   });
 
   const isModelDownloading = (id: string) =>
-    startingDownloads.has(id) || modelProgress.some((p) => p.file === id);
+    startingDownloads.includes(id) || modelProgress.some((p) => p.file === id);
 
-  const isModelCancelling = (id: string) => cancellingDownloads.has(id);
+  const isModelCancelling = (id: string) => cancellingDownloads.includes(id);
 
-  const anyDownloading = modelProgress.length > 0 || startingDownloads.size > 0;
+  const anyDownloading = modelProgress.length > 0 || startingDownloads.length > 0;
 
   // The initial state above runs before the catalog is loaded (it starts as
   // []), so the tab defaulted to "non-streaming" even when the active model
@@ -79,32 +78,11 @@ export function ModelCard() {
     if (active) setView(active.streaming ? "streaming" : "non-streaming");
   }, [catalog, settings?.stt_model]);
 
-  // Once a progress event arrives for a model, clear it from the pending/starting set.
-  useEffect(() => {
-    if (startingDownloads.size === 0) return;
-    setStartingDownloads((prev) => {
-      let changed = false;
-      const next = new Set(prev);
-      for (const id of prev) {
-        if (modelProgress.some((p) => p.file === id)) {
-          next.delete(id);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [modelProgress, startingDownloads]);
-
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
 
     api.onModelError((payload) => {
-      setStartingDownloads((prev) => {
-        const next = new Set(prev);
-        next.delete(payload.file);
-        return next;
-      });
       setError(payload.error);
       toast.error(`Model download failed: ${payload.error}`);
     }).then((fn) => {
@@ -113,7 +91,7 @@ export function ModelCard() {
       } else {
         unlisten = fn;
       }
-    });
+    }).catch(() => {});
 
     return () => {
       cancelled = true;
@@ -122,43 +100,21 @@ export function ModelCard() {
   }, []);
 
   const handleDownload = async (id: string) => {
-    setStartingDownloads((prev) => new Set(prev).add(id));
     setError(null);
     try {
-      await api.ensureModel(id);
+      await useStore.getState().downloadModel(id);
     } catch (e) {
-      setStartingDownloads((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
       setError(String(e));
-      toast.error(`Failed to start download: ${String(e)}`);
+      toast.error(`Model installation failed: ${String(e)}`);
     }
   };
 
   const handleCancelDownload = async (id: string) => {
-    setCancellingDownloads((prev) => new Set(prev).add(id));
+    cancelAllRef.current = true;
     try {
-      await api.cancelModelDownload(id);
-      useStore.getState().removeModelProgress(id);
-      setStartingDownloads((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      cancelAllRef.current = true;
-      setDownloadAllStatus(null);
-      toast.info("Download cancelled");
-      await useStore.getState().refreshCatalog();
+      await useStore.getState().cancelModel(id);
     } catch (e) {
       toast.error(`Could not cancel download: ${String(e)}`);
-    } finally {
-      setCancellingDownloads((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
     }
   };
 
@@ -172,24 +128,7 @@ export function ModelCard() {
       const model = missing[i];
       setDownloadAllStatus({ current: i + 1, total: missing.length, name: model.name });
       try {
-        await handleDownload(model.id);
-        // Wait until the model is installed or cancelled before starting next
-        await new Promise<void>((resolve) => {
-          const check = setInterval(async () => {
-            if (cancelAllRef.current) {
-              clearInterval(check);
-              resolve();
-              return;
-            }
-            const cat = await api.getModelsCatalog().catch(() => []);
-            const m = cat.find((item) => item.id === model.id);
-            const inProgress = useStore.getState().modelProgress.some((p) => p.file === model.id);
-            if (m?.installed || (!inProgress && !startingDownloads.has(model.id))) {
-              clearInterval(check);
-              resolve();
-            }
-          }, 500);
-        });
+        await useStore.getState().downloadModel(model.id);
       } catch (e) {
         if (!cancelAllRef.current) {
           setError(String(e));
@@ -205,17 +144,15 @@ export function ModelCard() {
 
   const handleCancelAll = async () => {
     cancelAllRef.current = true;
-    setDownloadAllStatus(null);
-    const activeFiles = useStore.getState().modelProgress.map((p) => p.file);
+    const store = useStore.getState();
+    const activeFiles = new Set([...store.modelDownloads, ...store.modelProgress.map((p) => p.file)]);
     for (const id of activeFiles) {
-      await handleCancelDownload(id).catch(() => {});
-    }
-    for (const id of startingDownloads) {
       await handleCancelDownload(id).catch(() => {});
     }
   };
 
   const handleUse = async (modelId: string, engineKey: string) => {
+    if (useStore.getState().recording || useStore.getState().recordingBusy || isModelDownloading(modelId)) return;
     try {
       await api.setSettings({ engine: engineKey, stt_model: modelId });
       await useStore.getState().refreshAll();
@@ -226,6 +163,7 @@ export function ModelCard() {
   };
 
   const handleDelete = async (id: string) => {
+    if (useStore.getState().recording || useStore.getState().recordingBusy || isModelDownloading(id)) return;
     const isModelInUse = settings?.stt_model === id;
     const ok = await confirmDialog({
       title: isModelInUse ? "Delete active model in use?" : "Delete model?",
@@ -236,6 +174,7 @@ export function ModelCard() {
       destructive: true,
     });
     if (!ok) return;
+    if (useStore.getState().recording || useStore.getState().recordingBusy || isModelDownloading(id)) return;
     try {
       await api.removeModel(id);
       toast.success(`Deleted ${id}`);
@@ -400,6 +339,7 @@ export function ModelCard() {
                             variant="ghost"
                             className={isActive ? "text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground" : "text-muted-foreground"}
                             onClick={() => handleDelete(model.id)}
+                            disabled={recording || busy}
                           >
                             Delete
                           </Button>
@@ -435,30 +375,31 @@ export function ModelCard() {
                           <span className="ml-auto animate-od-blink border border-primary-foreground px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
                             In use
                           </span>
-                        ) : streamingTooSlow && model.streaming ? (
-                          <span
-                            className="ml-auto border border-destructive px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-destructive"
-                            title={`This model decodes ~${((modelsStatus?.streaming_rtf_x100 ?? 0) / 100).toFixed(1)}x slower than real time on your CPU — dictation results would be delayed. Pick a non-streaming model instead.`}
-                          >
-                            Too slow for this CPU
-                          </span>
                         ) : (
                           <Button
                             size="sm"
                             variant="ghost"
                             className="ml-auto"
                             onClick={() => handleUse(model.id, model.engine_key!)}
+                            disabled={recording || busy || model.engine_key == null}
                           >
                             Use
                           </Button>
                         )
                       )}
                     </div>
+                    {model.id === "parakeet-unified-en-0.6b-int8-streaming-560ms" && !modelsStatus?.gpu_active &&
+                      (modelsStatus?.streaming_rtf_x100 ?? 0) > 150 && (
+                      <p className="text-xs">
+                        The Parakeet CPU benchmark was slower than real time. Live captions may be delayed;
+                        other models and GPU performance have not been measured.
+                      </p>
+                    )}
                     {progress ? (
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
                           <span>
-                            Downloading…
+                            {cancelling ? "Cancelling…" : progress.total > 0 && progress.received >= progress.total ? "Installing…" : "Downloading…"}
                             {progress.speedBytesPerSec && progress.speedBytesPerSec > 0
                               ? ` (${formatBytes(progress.speedBytesPerSec)}/s)`
                               : ""}
@@ -564,7 +505,7 @@ export function ModelCard() {
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
                 <span>
-                  Downloading…
+                  {captionCancelling ? "Cancelling…" : captionProgress.total > 0 && captionProgress.received >= captionProgress.total ? "Installing…" : "Downloading…"}
                   {captionProgress.speedBytesPerSec && captionProgress.speedBytesPerSec > 0
                     ? ` (${formatBytes(captionProgress.speedBytesPerSec)}/s)`
                     : ""}

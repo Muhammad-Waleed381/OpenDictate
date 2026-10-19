@@ -182,6 +182,7 @@ export function SettingsTab() {
   const mic = useStore((s) => s.mic);
   const settings = useStore((s) => s.settings);
   const toggleRequest = useRef(0);
+  const [savingInputTarget, setSavingInputTarget] = useState(false);
   const themePref = useTheme((s) => s.pref);
   const setThemePref = useTheme((s) => s.setPref);
 
@@ -202,6 +203,20 @@ export function SettingsTab() {
       useStore.getState().refreshAll();
     } catch (e) {
       toast.error(`Language change failed: ${String(e)}`);
+    }
+  };
+
+  const handleInputTargetChange = async (target: string | null) => {
+    if (target !== "text" && target !== "terminal") return;
+    setSavingInputTarget(true);
+    try {
+      await api.setSettings({ input_target: target });
+      const current = useStore.getState().settings;
+      if (current) useStore.getState().setSettings({ ...current, input_target: target });
+    } catch (e) {
+      toast.error(`Input target change failed: ${String(e)}`);
+    } finally {
+      setSavingInputTarget(false);
     }
   };
 
@@ -243,7 +258,7 @@ export function SettingsTab() {
     persistToggle("voice_actions_enabled", enabled);
 
   const modelProgress = useStore((s) => s.modelProgress);
-  const [downloadingKws, setDownloadingKws] = useState(false);
+  const downloadingKws = useStore((s) => s.modelDownloads.includes("kws-zipformer-gigaspeech-3.3m-2024-01-01"));
   const [wakeWordsInput, setWakeWordsInput] = useState(settings?.wake_words ?? "hey dictate, computer");
   const [groqKeyInput, setGroqKeyInput] = useState(settings?.groq_api_key ?? "");
   const [testingGroq, setTestingGroq] = useState(false);
@@ -253,16 +268,12 @@ export function SettingsTab() {
   const kwsProgress = modelProgress.find((p) => p.file.includes("kws"));
 
   const handleDownloadKws = async () => {
-    setDownloadingKws(true);
     try {
       toast.info("Downloading Keyword Spotting model (15MB)...");
-      await api.ensureModel("kws-zipformer-gigaspeech-3.3m-2024-01-01");
-      await useStore.getState().refreshCatalog();
+      await useStore.getState().downloadModel("kws-zipformer-gigaspeech-3.3m-2024-01-01");
       toast.success("Keyword spotting model downloaded and ready!");
     } catch (e) {
       toast.error(`KWS model download failed: ${String(e)}`);
-    } finally {
-      setDownloadingKws(false);
     }
   };
 
@@ -299,7 +310,7 @@ export function SettingsTab() {
   };
 
   const handlePolishProviderChange = async (provider: string | null) => {
-    if (!provider) return;
+    if (provider !== "off" && provider !== "groq") return;
     const current = useStore.getState().settings;
     if (!current) return;
     useStore.getState().setSettings({
@@ -706,11 +717,11 @@ export function SettingsTab() {
               <span className="text-sm font-bold uppercase tracking-wider text-foreground">
                 ✨ AI Voice Polish
               </span>
-              <Badge variant={settings?.polish_provider !== "off" ? "default" : "outline"}>
+              <Badge variant={settings?.polish_provider === "groq" ? "default" : "outline"}>
                 {settings?.polish_provider === "groq"
                   ? "Groq Cloud LPU ⚡"
                   : settings?.polish_provider === "local_slm"
-                  ? "Offline SLM"
+                  ? "Unavailable"
                   : "Off"}
               </Badge>
             </div>
@@ -729,12 +740,17 @@ export function SettingsTab() {
             <SelectContent>
               <SelectItem value="off">Off (Raw Voice)</SelectItem>
               <SelectItem value="groq">Groq LPU (Ultra-Fast ⚡)</SelectItem>
-              <SelectItem value="local_slm">Local SLM (100% Offline)</SelectItem>
+              <SelectItem value="local_slm" disabled>Local SLM (Unavailable)</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
-        {settings?.polish_provider !== "off" && (
+        {settings?.polish_provider === "local_slm" && (
+          <p className="text-xs text-muted-foreground">
+            Local SLM is unavailable. Your speech is left unpolished. Choose Off, or opt in to Groq to use cloud polish.
+          </p>
+        )}
+        {settings?.polish_provider === "groq" && (
           <div className="flex flex-col gap-3 border-t-2 border-border/40 pt-3">
             <div className="flex items-center justify-between gap-2">
               <Label htmlFor="polish-mode" className="text-xs font-bold uppercase">
@@ -825,6 +841,26 @@ export function SettingsTab() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-2 sm:col-span-2">
+          <Label htmlFor="input-target">Input target</Label>
+          <Select
+            value={settings?.input_target ?? "text"}
+            onValueChange={handleInputTargetChange}
+            disabled={savingInputTarget}
+          >
+            <SelectTrigger id="input-target" className="w-full">
+              <SelectValue>{settings?.input_target === "terminal" ? "Shell (Bash, Zsh)" : "Text fields"}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="text">Text fields</SelectItem>
+              <SelectItem value="terminal">Shell (Bash, Zsh)</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            Text fields use normal editing shortcuts. The shell profile uses terminal paste and readline
+            line deletion for default Bash/Zsh editing; custom or vi key maps may differ.
+          </p>
+        </div>
         <div className="flex flex-col gap-2">
           <Label htmlFor="mic">Microphone</Label>
           <Select value={mic ?? ""} onValueChange={handleMicChange}>

@@ -47,22 +47,27 @@ function useOpenDictateEvents() {
       api.onAudioLevel((payload) => store.setLevel(payload.rms)),
       api.onModelProgress((payload) => store.addModelProgress(payload)),
       api.onModelCancelled((payload) => {
-        store.removeModelProgress(payload.file);
-        store.refreshCatalog().catch(() => {});
+        store.finishModel(payload.file);
+        store.removeModelProgress("silero_vad");
+        store.refreshModelState().catch(() => {});
       }),
       api.onModelError((payload) => {
-        store.removeModelProgress(payload.file);
+        store.finishModel(payload.file);
         store.removeModelProgress("silero_vad");
-        store.refreshCatalog().catch(() => {});
+        store.refreshModelState().catch(() => {});
       }),
-      api.onModelsReady(() => store.refreshModels()),
+      api.onModelsReady((payload) => {
+        if (payload.file) store.finishModel(payload.file);
+        store.removeModelProgress("silero_vad");
+        store.refreshModelState().catch(() => {});
+      }),
       api.onHistoryUpdated(() =>
         api.getHistory().then((history) => useStore.setState({ history })),
       ),
       api.onHistoryUpdated(() => store.refreshStats()),
       api.onPartial((payload) => store.setPartial(payload.text)),
       api.onRecordingChanged((payload) =>
-        useStore.setState({ recording: payload.recording })
+        store.setRecording(payload.recording)
       ),
       api.onDockPosition((pos) => {
         const cur = useStore.getState().settings;
@@ -72,10 +77,12 @@ function useOpenDictateEvents() {
       }),
     ];
     let cancelled = false;
+    const unlisteners: UnlistenFn[] = [];
     subs.forEach((sub) => {
       sub
         .then((unlisten) => {
           if (cancelled) unlisten();
+          else unlisteners.push(unlisten);
         })
         .catch(() => {
           // Event API unavailable (e.g. window teardown): nothing to clean up.
@@ -83,6 +90,7 @@ function useOpenDictateEvents() {
     });
     return () => {
       cancelled = true;
+      unlisteners.forEach((unlisten) => unlisten());
       window.removeEventListener("opendictate:overlay-state", onDockState);
       window.removeEventListener("opendictate:partial", onDockPartial);
     };
@@ -90,10 +98,10 @@ function useOpenDictateEvents() {
 }
 
 function RecordingButton() {
-  const { recording, toggle } = useRecording();
+  const { recording, busy, toggle } = useRecording();
 
   return (
-    <Button onClick={toggle} variant={recording ? "outline" : "default"} size="sm">
+    <Button onClick={toggle} disabled={busy} variant={recording ? "outline" : "default"} size="sm">
       {recording ? "■ STOP" : "● RECORD"}
     </Button>
   );
@@ -158,7 +166,7 @@ export function MainApp() {
 
   useEffect(() => {
     const unlistenPromise = api.onTranscript((payload) => {
-      useStore.setState({ lastResult: { text: payload.text, duration_ms: 0 } });
+      useStore.setState({ lastResult: { ...payload, duration_ms: 0 } });
     });
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});

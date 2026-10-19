@@ -177,8 +177,8 @@ export function SnippetsTab() {
 
   const handleTestInsert = async (snippetText: string) => {
     try {
-      await api.pasteClipboard(snippetText);
-      toast.success("Inserted snippet into focused app");
+      await api.testSnippet(snippetText);
+      toast.success("Inserted expanded snippet into the previous application");
     } catch (e) {
       toast.error(`Insertion failed: ${String(e)}`);
     }
@@ -247,6 +247,7 @@ export function SnippetsTab() {
           />
           <p className="text-[11px] text-muted-foreground">
             Placeholders like &#123;date&#125;, &#123;time&#125;, &#123;datetime&#125;, and &#123;clipboard&#125; are dynamically replaced when inserted.
+            {" "}Test Insert returns to the previous application. Copy keeps the template text.
           </p>
         </div>
         </CardContent>
@@ -355,7 +356,7 @@ export function SnippetsTab() {
                         <Button
                           size="icon-sm"
                           variant="ghost"
-                          title="Insert into active app"
+                          title="Test Insert — returns to the previous application"
                           onClick={() => handleTestInsert(entry.text)}
                         >
                           <CornerDownLeft />

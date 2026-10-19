@@ -47,23 +47,32 @@ function ReadyStrip() {
   const mic = useStore((s) => s.mic);
   const level = useStore((s) => s.level);
   const recording = useStore((s) => s.recording);
+  const recordingBusy = useStore((s) => s.recordingBusy);
+  const recordingMode = useStore((s) => s.recordingMode);
   const settings = useStore((s) => s.settings);
   const catalog = useStore((s) => s.catalog);
   const modelProgress = useStore((s) => s.modelProgress);
-  const [downloading, setDownloading] = useState(false);
+  const modelDownloads = useStore((s) => s.modelDownloads);
+  const cancellingModels = useStore((s) => s.cancellingModels);
   const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    if (recordingMode !== "test" && !recordingBusy) setTesting(false);
+  }, [recordingMode, recordingBusy]);
 
   const testingRef = useRef(false);
   testingRef.current = testing;
   useEffect(() => {
     return () => {
-      if (testingRef.current) {
-        api.cancelRecording().catch(() => {});
+      if (testingRef.current && useStore.getState().recordingMode === "test") {
+        useStore.getState().cancelRecording().catch(() => {});
       }
     };
   }, []);
 
   const activeModel = catalog.find((m) => m.id === settings?.stt_model);
+  const downloading = !!activeModel && modelDownloads.includes(activeModel.id);
+  const cancelling = !!activeModel && cancellingModels.includes(activeModel.id);
   const progress = activeModel
     ? modelProgress.find((p) => p.file === activeModel.id)
     : undefined;
@@ -71,34 +80,33 @@ function ReadyStrip() {
   const modelReady = !!activeModel?.installed;
 
   const handleMicChange = async (name: string | null) => {
-    if (!name) return;
+    if (!name || useStore.getState().recording || useStore.getState().recordingBusy) return;
     try {
       await api.setMic(name);
       useStore.getState().setMic(name);
       toast.success(`Microphone: ${micLabel(name, mics)}`);
-      if (testing) {
-        await api.cancelRecording().catch(() => {});
-        await api.startRecording("test");
-      }
     } catch (e) {
       toast.error(`Microphone switch failed: ${String(e)}`);
     }
   };
 
   const handleTestToggle = async () => {
+    if (useStore.getState().recordingBusy) return;
     if (testing) {
+      if (useStore.getState().recordingMode !== "test") { setTesting(false); return; }
       try {
-        await api.stopRecording();
-      } catch (e) {
-        console.error(e);
-      } finally {
+        await useStore.getState().stopRecording();
         setTesting(false);
+      } catch (e) {
+        toast.error(String(e));
+        setTesting(useStore.getState().recordingMode === "test");
       }
     } else {
+      if (useStore.getState().recording) return;
       setTesting(true);
+      testingRef.current = true;
       try {
-        await api.cancelRecording().catch(() => {});
-        await api.startRecording("test");
+        if (!await useStore.getState().startRecording("test")) setTesting(false);
       } catch (e) {
         setTesting(false);
         toast.error(String(e));
@@ -108,25 +116,17 @@ function ReadyStrip() {
 
   const handleDownload = async () => {
     if (!activeModel) return;
-    setDownloading(true);
     try {
-      await api.ensureModel(activeModel.id);
-      await useStore.getState().refreshAll();
+      await useStore.getState().downloadModel(activeModel.id);
     } catch (e) {
       toast.error(String(e));
-    } finally {
-      setDownloading(false);
     }
   };
 
   const handleCancel = async () => {
     if (!activeModel) return;
     try {
-      await api.cancelModelDownload(activeModel.id);
-      useStore.getState().removeModelProgress(activeModel.id);
-      setDownloading(false);
-      toast.info("Download cancelled");
-      await useStore.getState().refreshCatalog();
+      await useStore.getState().cancelModel(activeModel.id);
     } catch (e) {
       toast.error(String(e));
     }
@@ -150,7 +150,7 @@ function ReadyStrip() {
               </span>
             )}
           </div>
-          <Select value={mic ?? ""} onValueChange={handleMicChange}>
+          <Select value={mic ?? ""} onValueChange={handleMicChange} disabled={recording || recordingBusy}>
             <SelectTrigger className="w-full">
               <SelectValue>{micLabel(mic, mics)}</SelectValue>
             </SelectTrigger>
@@ -177,6 +177,7 @@ function ReadyStrip() {
               variant={testing ? "destructive" : "outline"}
               size="sm"
               onClick={handleTestToggle}
+              disabled={recordingBusy || (!testing && recording)}
             >
               {testing ? "■ Stop" : "● Test"}
             </Button>
@@ -219,8 +220,8 @@ function ReadyStrip() {
             </span>
             {!modelReady && activeModel?.available && (
               downloading || progress ? (
-                <Button size="sm" variant="destructive" onClick={handleCancel}>
-                  ✕ Cancel
+                <Button size="sm" variant="destructive" onClick={handleCancel} disabled={cancelling}>
+                  {cancelling ? "Cancelling…" : "✕ Cancel"}
                 </Button>
               ) : (
                 <Button size="sm" onClick={handleDownload} disabled={downloading}>
@@ -240,7 +241,7 @@ function ReadyStrip() {
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
                 <span>
-                  Downloading…
+                  {cancelling ? "Cancelling…" : progress.total > 0 && progress.received >= progress.total ? "Installing…" : "Downloading…"}
                   {progress.speedBytesPerSec && progress.speedBytesPerSec > 0
                     ? ` (${formatBytes(progress.speedBytesPerSec)}/s)`
                     : ""}
@@ -267,13 +268,14 @@ function ReadyStrip() {
 }
 
 function RecordButton() {
-  const { recording, toggle } = useRecording();
+  const { recording, busy, toggle } = useRecording();
   const level = useStore((s) => s.level);
 
   return (
     <div className="flex flex-col gap-2">
       <Button
         onClick={toggle}
+        disabled={busy}
         variant={recording ? "outline" : "default"}
         className={`h-16 w-full text-lg font-bold tracking-widest uppercase ${
           recording ? "animate-od-blink" : ""
@@ -307,7 +309,10 @@ function RecordButton() {
 
 function LastResultPanel() {
   const lastResult = useStore((s) => s.lastResult);
-  const [undone, setUndone] = useState(false);
+  const [undoneResult, setUndoneResult] = useState<api.TranscriptResult | null>(null);
+  const [undoing, setUndoing] = useState(false);
+  const undone = lastResult !== null && undoneResult === lastResult;
+  const inserted = lastResult?.injected === true && !lastResult.copied && !lastResult.error;
 
   return (
     <div className="flex flex-col gap-2">
@@ -320,7 +325,7 @@ function LastResultPanel() {
         <Card>
           <CardContent className="flex items-center gap-3 p-4">
             <span className="flex h-5 shrink-0 items-center border-2 border-primary bg-primary px-1.5 text-[10px] font-bold tracking-wider text-primary-foreground">
-              INSERTED ✓
+              {lastResult.error ? "NOT INSERTED" : inserted ? "INSERTED ✓" : lastResult.copied ? "COPIED" : "TRANSCRIBED"}
             </span>
             <span className="min-w-0 flex-1 truncate text-sm font-medium">
               “{lastResult.text}”
@@ -333,13 +338,19 @@ function LastResultPanel() {
               size="sm"
               variant="outline"
               className="ml-auto shrink-0"
-              disabled={undone}
+              disabled={!inserted || undone || undoing}
+              title={inserted ? "Undo in the previous application" : "Undo is available only for inserted text"}
               onClick={async () => {
+                if (!inserted || undoing || useStore.getState().lastResult !== lastResult) return;
+                const resultToUndo = lastResult;
+                setUndoing(true);
                 try {
                   await api.undoLastInsert();
-                  setUndone(true);
+                  setUndoneResult(resultToUndo);
                 } catch (e) {
                   toast.error(String(e));
+                } finally {
+                  setUndoing(false);
                 }
               }}
             >
@@ -352,6 +363,14 @@ function LastResultPanel() {
             )}
           </CardContent>
         </Card>
+      )}
+      {lastResult && (
+        <p className="text-xs text-muted-foreground">
+          {lastResult.error ? `Insertion failed: ${lastResult.error}`
+            : inserted ? "Undo returns to the previous application."
+            : lastResult.copied ? "Copied to clipboard. Paste into your application."
+            : "Text is available here; insertion was not confirmed."}
+        </p>
       )}
     </div>
   );

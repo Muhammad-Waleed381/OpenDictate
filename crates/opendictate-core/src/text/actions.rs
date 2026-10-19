@@ -139,15 +139,27 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
         "delete last word" | "delete word" | "erase word" => return Some(VoiceAction::DeleteWord),
         "delete last line" | "delete line" | "clear line" => return Some(VoiceAction::DeleteLine),
         "clear all" | "delete all" | "select all and delete" => return Some(VoiceAction::ClearAll),
-        "new line" | "press enter" | "hit enter" | "line break" => return Some(VoiceAction::NewLine),
+        "new line" | "press enter" | "hit enter" | "line break" => {
+            return Some(VoiceAction::NewLine)
+        }
         "new paragraph" | "next paragraph" => return Some(VoiceAction::NewParagraph),
         "tab" | "press tab" | "indent" => return Some(VoiceAction::Tab),
-        "bullet point" | "bullet list" | "add bullet" | "bullet" => return Some(VoiceAction::BulletPoint),
-        "stop listening" | "go to sleep" | "pause dictation" | "sleep mode" => return Some(VoiceAction::Sleep),
-        "send" | "submit" | "send message" | "send prompt" | "submit prompt" => return Some(VoiceAction::Submit),
-        "stop process" | "cancel command" | "cancel process" | "abort command" | "interrupt" => return Some(VoiceAction::Interrupt),
+        "bullet point" | "bullet list" | "add bullet" | "bullet" => {
+            return Some(VoiceAction::BulletPoint)
+        }
+        "stop listening" | "go to sleep" | "pause dictation" | "sleep mode" => {
+            return Some(VoiceAction::Sleep)
+        }
+        "send" | "submit" | "send message" | "send prompt" | "submit prompt" => {
+            return Some(VoiceAction::Submit)
+        }
+        "stop process" | "cancel command" | "cancel process" | "abort command" | "interrupt" => {
+            return Some(VoiceAction::Interrupt)
+        }
         "next tab" | "switch to next tab" => return Some(VoiceAction::NextTab),
-        "previous tab" | "prev tab" | "switch to previous tab" => return Some(VoiceAction::PrevTab),
+        "previous tab" | "prev tab" | "switch to previous tab" => {
+            return Some(VoiceAction::PrevTab)
+        }
         "new tab" | "open new tab" => return Some(VoiceAction::NewTab),
         "close tab" => return Some(VoiceAction::CloseTab),
         "scroll down" | "page down" => return Some(VoiceAction::ScrollDown),
@@ -157,16 +169,28 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
         "git pull" => return Some(VoiceAction::TerminalCommand("git pull".to_string())),
         "git push" => return Some(VoiceAction::TerminalCommand("git push".to_string())),
         "git log" => return Some(VoiceAction::TerminalCommand("git log".to_string())),
-        "clear terminal" | "clear screen" => return Some(VoiceAction::TerminalCommand("clear".to_string())),
+        "clear terminal" | "clear screen" => {
+            return Some(VoiceAction::TerminalCommand("clear".to_string()))
+        }
         _ => {}
     }
 
+    // Only command words are normalized. Prefix lengths are ASCII byte
+    // boundaries checked with `get`, so Unicode payloads remain untouched.
+    let original = raw_text.trim();
+    let payload = |prefix: &str| -> Option<&str> {
+        original
+            .get(..prefix.len())
+            .filter(|head| head.eq_ignore_ascii_case(prefix))
+            .and_then(|_| original.get(prefix.len()..))
+    };
+
     // 2. AI Prompting & Auto-Send: "prompt <text>", "ask <text>"
-    if let Some(rest) = cleaned.strip_prefix("prompt ")
-        .or_else(|| cleaned.strip_prefix("ask "))
-        .or_else(|| cleaned.strip_prefix("tell claude "))
-        .or_else(|| cleaned.strip_prefix("tell cursor "))
-        .or_else(|| cleaned.strip_prefix("tell codex "))
+    if let Some(rest) = payload("prompt ")
+        .or_else(|| payload("ask "))
+        .or_else(|| payload("tell claude "))
+        .or_else(|| payload("tell cursor "))
+        .or_else(|| payload("tell codex "))
     {
         let prompt_text = rest.trim();
         if !prompt_text.is_empty() {
@@ -175,10 +199,10 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
     }
 
     // 3. Open Website: "open website <url>", "open url <url>", "go to <url>"
-    if let Some(rest) = cleaned.strip_prefix("open website ")
-        .or_else(|| cleaned.strip_prefix("open site "))
-        .or_else(|| cleaned.strip_prefix("open url "))
-        .or_else(|| cleaned.strip_prefix("go to "))
+    if let Some(rest) = payload("open website ")
+        .or_else(|| payload("open site "))
+        .or_else(|| payload("open url "))
+        .or_else(|| payload("go to "))
     {
         let url = rest.trim();
         if !url.is_empty() {
@@ -187,9 +211,9 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
     }
 
     // 4. Web Search: "search for <query>", "google <query>", "search <query>"
-    if let Some(rest) = cleaned.strip_prefix("search for ")
-        .or_else(|| cleaned.strip_prefix("google "))
-        .or_else(|| cleaned.strip_prefix("search "))
+    if let Some(rest) = payload("search for ")
+        .or_else(|| payload("google "))
+        .or_else(|| payload("search "))
     {
         let query = rest.trim();
         if !query.is_empty() {
@@ -198,10 +222,10 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
     }
 
     // 5. App Switching: "switch to <app>", "open <app>", "focus <app>"
-    if let Some(rest) = cleaned.strip_prefix("switch to ")
-        .or_else(|| cleaned.strip_prefix("open app "))
-        .or_else(|| cleaned.strip_prefix("focus "))
-        .or_else(|| cleaned.strip_prefix("open "))
+    if let Some(rest) = payload("switch to ")
+        .or_else(|| payload("open app "))
+        .or_else(|| payload("focus "))
+        .or_else(|| payload("open "))
     {
         let target = rest.trim();
         if !target.is_empty() {
@@ -210,9 +234,7 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
     }
 
     // 6. Prefix commands: "all caps <phrase>", "uppercase <phrase>"
-    if let Some(rest) = cleaned.strip_prefix("all caps ")
-        .or_else(|| cleaned.strip_prefix("uppercase "))
-    {
+    if let Some(rest) = payload("all caps ").or_else(|| payload("uppercase ")) {
         let phrase = rest.trim();
         if !phrase.is_empty() {
             return Some(VoiceAction::AllCaps(phrase.to_uppercase()));
@@ -220,7 +242,7 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
     }
 
     // 7. Prefix commands: "camel case <phrase>"
-    if let Some(rest) = cleaned.strip_prefix("camel case ") {
+    if let Some(rest) = payload("camel case ") {
         let phrase = rest.trim();
         if !phrase.is_empty() {
             return Some(VoiceAction::CamelCase(to_camel_case(phrase)));
@@ -228,7 +250,7 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
     }
 
     // 8. Prefix commands: "snake case <phrase>"
-    if let Some(rest) = cleaned.strip_prefix("snake case ") {
+    if let Some(rest) = payload("snake case ") {
         let phrase = rest.trim();
         if !phrase.is_empty() {
             return Some(VoiceAction::SnakeCase(to_snake_case(phrase)));
@@ -236,7 +258,7 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
     }
 
     // 9. Prefix commands: "title case <phrase>"
-    if let Some(rest) = cleaned.strip_prefix("title case ") {
+    if let Some(rest) = payload("title case ") {
         let phrase = rest.trim();
         if !phrase.is_empty() {
             return Some(VoiceAction::TitleCase(to_title_case(phrase)));
@@ -244,9 +266,9 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
     }
 
     // 10. Prefix commands: "insert snippet <name>", "paste snippet <name>"
-    if let Some(rest) = cleaned.strip_prefix("insert snippet ")
-        .or_else(|| cleaned.strip_prefix("paste snippet "))
-        .or_else(|| cleaned.strip_prefix("snippet "))
+    if let Some(rest) = payload("insert snippet ")
+        .or_else(|| payload("paste snippet "))
+        .or_else(|| payload("snippet "))
     {
         let name = rest.trim();
         if !name.is_empty() {
@@ -262,21 +284,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preserves_command_payload_case_punctuation_and_unicode() {
+        assert_eq!(
+            parse_voice_action("OPEN URL https://Example.com/Case?Token=AbC!"),
+            Some(VoiceAction::OpenUrl(
+                "https://Example.com/Case?Token=AbC!".into()
+            ))
+        );
+        assert_eq!(
+            parse_voice_action("ASK Explain İ and Café?"),
+            Some(VoiceAction::PromptAndSend("Explain İ and Café?".into()))
+        );
+        assert_eq!(
+            parse_voice_action("Insert Snippet My API!"),
+            Some(VoiceAction::InsertSnippet("My API!".into()))
+        );
+    }
+
+    #[test]
     fn parses_undo_and_deletion_actions() {
         assert_eq!(parse_voice_action("scratch that."), Some(VoiceAction::Undo));
         assert_eq!(parse_voice_action("Undo that"), Some(VoiceAction::Undo));
-        assert_eq!(parse_voice_action("delete last word"), Some(VoiceAction::DeleteWord));
-        assert_eq!(parse_voice_action("delete line!"), Some(VoiceAction::DeleteLine));
-        assert_eq!(parse_voice_action("clear all?"), Some(VoiceAction::ClearAll));
+        assert_eq!(
+            parse_voice_action("delete last word"),
+            Some(VoiceAction::DeleteWord)
+        );
+        assert_eq!(
+            parse_voice_action("delete line!"),
+            Some(VoiceAction::DeleteLine)
+        );
+        assert_eq!(
+            parse_voice_action("clear all?"),
+            Some(VoiceAction::ClearAll)
+        );
     }
 
     #[test]
     fn parses_formatting_actions() {
         assert_eq!(parse_voice_action("new line."), Some(VoiceAction::NewLine));
-        assert_eq!(parse_voice_action("press enter"), Some(VoiceAction::NewLine));
-        assert_eq!(parse_voice_action("new paragraph"), Some(VoiceAction::NewParagraph));
+        assert_eq!(
+            parse_voice_action("press enter"),
+            Some(VoiceAction::NewLine)
+        );
+        assert_eq!(
+            parse_voice_action("new paragraph"),
+            Some(VoiceAction::NewParagraph)
+        );
         assert_eq!(parse_voice_action("tab"), Some(VoiceAction::Tab));
-        assert_eq!(parse_voice_action("bullet point"), Some(VoiceAction::BulletPoint));
+        assert_eq!(
+            parse_voice_action("bullet point"),
+            Some(VoiceAction::BulletPoint)
+        );
         assert_eq!(parse_voice_action("go to sleep"), Some(VoiceAction::Sleep));
     }
 
@@ -296,7 +354,9 @@ mod tests {
         );
         assert_eq!(
             parse_voice_action("title case user authentication controller"),
-            Some(VoiceAction::TitleCase("User Authentication Controller".to_string()))
+            Some(VoiceAction::TitleCase(
+                "User Authentication Controller".to_string()
+            ))
         );
     }
 
@@ -316,14 +376,21 @@ mod tests {
     fn parses_ai_prompt_and_send() {
         assert_eq!(
             parse_voice_action("prompt write a test for my api"),
-            Some(VoiceAction::PromptAndSend("write a test for my api".to_string()))
+            Some(VoiceAction::PromptAndSend(
+                "write a test for my api".to_string()
+            ))
         );
         assert_eq!(
             parse_voice_action("tell claude refactor this function"),
-            Some(VoiceAction::PromptAndSend("refactor this function".to_string()))
+            Some(VoiceAction::PromptAndSend(
+                "refactor this function".to_string()
+            ))
         );
         assert_eq!(parse_voice_action("send"), Some(VoiceAction::Submit));
-        assert_eq!(parse_voice_action("stop process"), Some(VoiceAction::Interrupt));
+        assert_eq!(
+            parse_voice_action("stop process"),
+            Some(VoiceAction::Interrupt)
+        );
     }
 
     #[test]
@@ -338,14 +405,19 @@ mod tests {
         );
         assert_eq!(parse_voice_action("next tab"), Some(VoiceAction::NextTab));
         assert_eq!(parse_voice_action("close tab"), Some(VoiceAction::CloseTab));
-        assert_eq!(parse_voice_action("scroll down"), Some(VoiceAction::ScrollDown));
+        assert_eq!(
+            parse_voice_action("scroll down"),
+            Some(VoiceAction::ScrollDown)
+        );
     }
 
     #[test]
     fn parses_search_and_url() {
         assert_eq!(
             parse_voice_action("search for best mechanical keyboard"),
-            Some(VoiceAction::WebSearch("best mechanical keyboard".to_string()))
+            Some(VoiceAction::WebSearch(
+                "best mechanical keyboard".to_string()
+            ))
         );
         assert_eq!(
             parse_voice_action("google rust tokio tutorial"),
@@ -371,7 +443,13 @@ mod tests {
 
     #[test]
     fn returns_none_for_normal_dictation() {
-        assert_eq!(parse_voice_action("Hello world this is a normal sentence."), None);
-        assert_eq!(parse_voice_action("I want to buy a new line of shoes"), None);
+        assert_eq!(
+            parse_voice_action("Hello world this is a normal sentence."),
+            None
+        );
+        assert_eq!(
+            parse_voice_action("I want to buy a new line of shoes"),
+            None
+        );
     }
 }

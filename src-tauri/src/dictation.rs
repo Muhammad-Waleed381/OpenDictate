@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use opendictate_core::audio::vad::{
@@ -11,355 +11,21 @@ use opendictate_core::stt::models;
 use opendictate_core::stt::streaming::StreamingRecognizer;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::db;
-use crate::inject;
-use crate::dock;
-use crate::notify;
+use crate::session::{submit_after_insert, SpeechBuffer, WorkToken};
 use crate::state::{AppState, HistoryEntry, StreamingPipe, TranscriptResult};
+use crate::{db, dock, inject, notify};
 
+const MAX_OFFLINE_SAMPLES: usize = 110 * 16_000;
+const CONTINUOUS_BACKLOG: usize = 2;
 
-/// Resolves the execution-provider to request for new engines from the
-/// current settings. "auto" defers to the platform policy in
-/// [`opendictate_core::stt::provider::Provider::auto`]; engines always fall
-/// back to CPU internally when a GPU provider cannot be created.
-fn desired_provider(state: &AppState) -> opendictate_core::stt::provider::Provider {
-    let mode = state
-        .settings
-        .lock()
-        .map(|s| s.gpu.clone())
-        .unwrap_or_default();
-    opendictate_core::stt::provider::resolve(&mode)
-}
-
-
-pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String> {
-    // Determine whether handsfree mode is the current owner of the recorder.
-    // When handsfree is active it keeps the mic open continuously; cancelling
-    // the stream here would stop handsfree's mic, causing a race with the
-    // handsfree loop that will try to restart it.
-    let handsfree_owns_mic = state.handsfree_active.load(Ordering::SeqCst);
-
-    if state.recorder.is_recording() {
-        if handsfree_owns_mic {
-            // Handsfree holds the mic. Clear the buffer so normal dictation
-            // starts with a clean slate from this moment forward, but keep the
-            // hardware stream alive to avoid the cancel→restart race.
-            state.recorder.clear_buffer();
-            log::info!("start: handsfree owns mic; cleared buffer for fresh dictation session");
-        } else {
-            log::warn!("recording already in progress; cancelling stale recording");
-            state.recorder.cancel().map_err(|e| e.to_string())?;
-        }
-    }
-
-    state.set_test_mode(test);
-
-    let streaming = !test && is_streaming_enabled(state);
-    if streaming {
-        let model_id = selected_model_id(state);
-        if !models::is_model_installed(&model_id) {
-            return Err(format!(
-                "STT model '{model_id}' is not installed — download it in Settings → Models"
-            ));
-        }
-    }
-
-    // Only start the recorder if it is not already running (handsfree path
-    // keeps it open; otherwise open it fresh).
-    if !state.recorder.is_recording() {
-        let mic = state.settings.lock().map(|s| s.mic.clone()).unwrap_or(None);
-        match mic {
-            Some(name) if !name.is_empty() => state.recorder.start_with_name(&name),
-            _ => state.recorder.start(),
-        }
-        .map_err(|e| e.to_string())?;
-    }
-
-
-    dock::set_state(app, "listening", None);
-    dock::set_caption(app, Some("listening…"));
-    if !test {
-        notify::notify("Dictation on", "Recording — press Ctrl+K to stop");
-        play_sound(state, crate::audio::SoundEvent::Listening);
-    }
-
-    if streaming {
-        if let Err(e) = spawn_streaming(app, state) {
-            let _ = state.recorder.cancel();
-            dock::set_caption(app, None);
-            dock::set_state(app, "hidden", None);
-            return Err(e);
-        }
-    } else if !test && is_continuous_enabled(state) {
-        state.set_continuous(true);
-        spawn_continuous_loop(app, state);
-    }
-
-    spawn_level_emitter(app, state);
-    if models::is_caption_model_ready() {
-        spawn_caption_loop(app, state);
-    } else if !test {
-        // Captions are core UX: fetch the small caption engine quietly so
-        // the next dictation has them.
-        let app2 = app.clone();
-        std::thread::spawn(move || {
-            let st = state_from_app(&app2);
-            let _ = opendictate_core::stt::models::ensure_model(
-                models::CAPTION_MODEL_ID,
-                &mut |_file, _received, _total| {},
-            );
-            log::info!("caption model ensured for next dictation");
-            drop(st);
-        });
-    }
-
-    // Mark that a user-initiated dictation session is now open. The toggle
-    // hotkey reads this to distinguish "user is dictating" from "handsfree is
-    // just holding the mic warm" so a second press correctly stops the session.
-    state.user_dictation_active.store(true, Ordering::SeqCst);
-    // Tell the UI: hotkey-driven start/stop never passes through the frontend,
-    // so the main window would otherwise keep showing "Idle" and the Record
-    // button would start a second session instead of stopping the first.
-    let _ = app.emit("recording-changed", serde_json::json!({ "recording": true }));
-    Ok(())
-}
-
-pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, String> {
-    state.set_continuous(false);
-    state.user_dictation_active.store(false, Ordering::SeqCst);
-    let _ = app.emit("recording-changed", serde_json::json!({ "recording": false }));
-    if state.is_streaming_active() {
-        return stop_streaming(app, state);
-    }
-    if !state.recorder.is_recording() {
-        return Err("no recording in progress".to_string());
-    }
-
-    let audio = state.recorder.stop().map_err(|e| e.to_string())?;
-    let test = state.is_test_mode();
-    dock::set_state(app, "transcribing", None);
-    dock::set_caption(app, Some("transcribing…"));
-
-    process_utterance_on_worker(app, audio, test, false)
-}
-
-fn process_utterance_on_worker(
-    app: &AppHandle,
+pub struct QueuedAudio {
     audio: Vec<f32>,
-    test: bool,
-    continuous: bool,
-) -> Result<TranscriptResult, String> {
-    let app = app.clone();
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    std::thread::Builder::new()
-        .name("opendictate-inference".to_string())
-        .spawn(move || {
-            let state = state_from_app(&app);
-            let result = process_utterance(&app, &state, &audio, test, continuous);
-            let _ = sender.send(result);
-        })
-        .map_err(|e| format!("failed to start inference worker: {e}"))?;
-    receiver
-        .recv()
-        .map_err(|_| "inference worker exited unexpectedly".to_string())?
-}
-
-pub fn cancel(app: &AppHandle, state: &AppState) -> Result<(), String> {
-    state.set_continuous(false);
-    state.set_streaming(false);
-    state.user_dictation_active.store(false, Ordering::SeqCst);
-    let _ = app.emit("recording-changed", serde_json::json!({ "recording": false }));
-    state.caption_active.store(false, Ordering::SeqCst);
-    *state.caption_stream.lock().map_err(|e| e.to_string())? = None;
-    // Clear the streaming pipe before the early return below: when cancel is
-    // invoked after the recorder already stopped (e.g. a failed
-    // stop_streaming) the pipe used to survive with a stale session.
-    *state
-        .stream
-        .lock()
-        .map_err(|e| e.to_string())? = None;
-    if !state.recorder.is_recording() {
-        dock::set_caption(app, None);
-        dock::set_state(app, "hidden", None);
-        return Ok(());
-    }
-    state.recorder.cancel().map_err(|e| e.to_string())?;
-    state.set_test_mode(false);
-    dock::set_caption(app, None);
-    dock::set_state(app, "hidden", None);
-    Ok(())
-}
-
-fn continuous_flag_from_app(app: &AppHandle) -> bool {
-    app.state::<AppState>().continuous.load(Ordering::SeqCst)
-}
-
-fn is_continuous_enabled(state: &AppState) -> bool {
-    state
-        .settings
-        .lock()
-        .map(|s| s.continuous)
-        .unwrap_or(false)
-}
-
-fn spoken_punctuation_enabled(state: &AppState) -> bool {
-    state
-        .settings
-        .lock()
-        .map(|s| s.spoken_punctuation)
-        .unwrap_or(false)
-}
-
-fn audio_feedback(state: &AppState) -> (bool, f32) {
-    state
-        .settings
-        .lock()
-        .map(|s| (s.audio_feedback, s.audio_feedback_volume))
-        .unwrap_or((false, 0.5))
-}
-
-fn play_sound(state: &AppState, event: crate::audio::SoundEvent) {
-    let (enabled, volume) = audio_feedback(state);
-    if enabled {
-        crate::audio::play_event(volume, event);
-    }
-}
-
-fn sensitivity(state: &AppState) -> f32 {
-    state
-        .settings
-        .lock()
-        .map(|s| s.vad_sensitivity)
-        .unwrap_or(0.5)
-}
-
-/// Keeps the mic open: each utterance is endpointed by trailing silence,
-/// transcribed, and inserted, then listening resumes. Killed when the user
-/// toggles stop (clears the continuous flag) or calls cancel.
-fn spawn_continuous_loop(app: &AppHandle, state: &AppState) {
-    const SILENCE_TIMEOUT: Duration = Duration::from_millis(1400);
-    const MIN_UTTERANCE: Duration = Duration::from_millis(600);
-    // Endpoint long continuous speech before the recorder's
-    // MAX_RECORDING_SAMPLES cap (120 s) starts draining the front of the
-    // buffer, which would silently truncate the utterance. Slightly under
-    // the cap so the forced endpoint lands while everything is still buffered.
-    const MAX_UTTERANCE: Duration = Duration::from_secs(110);
-
-    let app = app.clone();
-    let recorder = Arc::clone(&state.recorder);
-    let continuous = Arc::clone(&state.continuous);
-    std::thread::spawn(move || {
-        let mut silent_since = Instant::now();
-        let mut utterance_started = Instant::now();
-
-        while continuous.load(std::sync::atomic::Ordering::SeqCst) {
-            if !recorder.is_recording() {
-                break;
-            }
-            let rms = recorder.current_rms();
-            let energy_threshold = sensitivity_to_energy_threshold(
-                state_sensitivity(&app),
-            );
-            if rms < energy_threshold {
-                if silent_since.elapsed() >= SILENCE_TIMEOUT
-                    && utterance_started.elapsed() >= MIN_UTTERANCE
-                {
-                    let audio = match recorder.stop() {
-                        Ok(a) => a,
-                        Err(e) => {
-                            log::warn!("continuous: stop failed: {e}");
-                            break;
-                        }
-                    };
-                    if !continuous.load(std::sync::atomic::Ordering::SeqCst) {
-                        break;
-                    }
-                    dock::set_state(&app, "transcribing", None);
-                    let _ = process_utterance_on_worker(&app, audio, false, true);
-                    if !continuous.load(std::sync::atomic::Ordering::SeqCst) {
-                        break;
-                    }
-                    match restart_recorder(&app) {
-                        Ok(()) => {
-                            silent_since = Instant::now();
-                            utterance_started = Instant::now();
-                        }
-                        Err(e) => {
-                            log::warn!("continuous: restart failed: {e}");
-                            break;
-                        }
-                    }
-                }
-            } else {
-                silent_since = Instant::now();
-            }
-            // Max-utterance guard: forces an endpoint even mid-speech so a
-            // single uninterrupted monologue cannot overflow the buffer cap.
-            if utterance_started.elapsed() >= MAX_UTTERANCE {
-                log::info!("continuous: max utterance length reached; endpointing early");
-                let audio = match recorder.stop() {
-                    Ok(a) => a,
-                    Err(e) => {
-                        log::warn!("continuous: stop failed: {e}");
-                        break;
-                    }
-                };
-                if !continuous.load(std::sync::atomic::Ordering::SeqCst) {
-                    break;
-                }
-                dock::set_state(&app, "transcribing", None);
-                let _ = process_utterance_on_worker(&app, audio, false, true);
-                if !continuous.load(std::sync::atomic::Ordering::SeqCst) {
-                    break;
-                }
-                match restart_recorder(&app) {
-                    Ok(()) => {
-                        silent_since = Instant::now();
-                        utterance_started = Instant::now();
-                    }
-                    Err(e) => {
-                        log::warn!("continuous: restart failed: {e}");
-                        break;
-                    }
-                }
-            }
-            std::thread::sleep(Duration::from_millis(60));
-        }
-        continuous.store(false, std::sync::atomic::Ordering::SeqCst);
-    });
-}
-
-fn restart_recorder(app: &AppHandle) -> Result<(), String> {
-    let state = state_from_app(app);
-    let mic = state
-        .settings
-        .lock()
-        .map(|s| s.mic.clone())
-        .unwrap_or(None);
-    match mic {
-        Some(name) if !name.is_empty() => state.recorder.start_with_name(&name),
-        _ => state.recorder.start(),
-    }
-    .map_err(|e| e.to_string())?;
-
-    if !state.handsfree_active.load(Ordering::SeqCst) || state.handsfree_awake.load(Ordering::SeqCst) || state.user_dictation_active.load(Ordering::SeqCst) {
-        dock::set_state(app, "listening", None);
-    }
-    Ok(())
+    finish: bool,
+    response: Option<mpsc::SyncSender<Result<TranscriptResult, String>>>,
 }
 
 pub fn state_from_app(app: &AppHandle) -> tauri::State<'_, AppState> {
     app.state::<AppState>()
-}
-
-fn state_sensitivity(app: &AppHandle) -> f32 {
-    let state = state_from_app(app);
-    sensitivity(&state)
-}
-
-fn is_streaming_enabled(state: &AppState) -> bool {
-    let model_id = selected_model_id(state);
-    models::is_streaming_model(&model_id)
 }
 
 fn selected_model_id(state: &AppState) -> String {
@@ -376,201 +42,578 @@ fn selected_model_id(state: &AppState) -> String {
         .unwrap_or_else(|_| models::STT_MODEL_ID.to_string())
 }
 
-/// Builds the streaming pipe (recognizer + session) and starts the capture
-/// loop. Streaming ignores the continuous toggle: it always runs until stop.
-pub fn spawn_streaming(app: &AppHandle, state: &AppState) -> Result<(), String> {
-    let load_started = Instant::now();
+fn desired_provider(state: &AppState) -> opendictate_core::stt::provider::Provider {
+    let mode = state
+        .settings
+        .lock()
+        .map(|s| s.gpu.clone())
+        .unwrap_or_default();
+    opendictate_core::stt::provider::resolve(&mode)
+}
+
+fn sensitivity(state: &AppState) -> f32 {
+    state
+        .settings
+        .lock()
+        .map(|s| s.vad_sensitivity)
+        .unwrap_or(0.5)
+}
+
+fn play_sound(state: &AppState, event: crate::audio::SoundEvent) {
+    let (enabled, volume) = state
+        .settings
+        .lock()
+        .map(|s| (s.audio_feedback, s.audio_feedback_volume))
+        .unwrap_or((false, 0.5));
+    if enabled {
+        crate::audio::play_event(volume, event);
+    }
+}
+
+fn start_capture(state: &AppState) -> Result<(), String> {
+    let mic = state
+        .settings
+        .lock()
+        .map_err(|e| e.to_string())?
+        .mic
+        .clone();
+    match mic {
+        Some(name) if !name.is_empty() && name != "default" => {
+            state.recorder.start_with_name(&name)
+        }
+        _ => state.recorder.start(),
+    }
+    .map_err(|e| e.to_string())
+}
+
+fn cancel_capture(state: &AppState) -> Result<(), String> {
+    match state.recorder.cancel() {
+        Ok(()) => Ok(()),
+        // Cancelling in-flight inference is valid after capture has stopped.
+        Err(opendictate_core::CoreError::Audio(message))
+            if message == "no recording in progress" =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn work_current(state: &AppState, token: WorkToken) -> bool {
+    state.sessions.current(token)
+        && (token.handsfree_generation.is_none()
+            || (state.handsfree_active.load(Ordering::SeqCst)
+                && !state.user_dictation_active.load(Ordering::SeqCst)))
+}
+
+fn ensure_current(state: &AppState, token: WorkToken) -> Result<(), String> {
+    if work_current(state, token) {
+        Ok(())
+    } else {
+        Err("dictation session was cancelled or replaced".to_string())
+    }
+}
+
+fn report_error(app: &AppHandle, state: &AppState, token: WorkToken, error: &str) {
+    if let Ok(_commit) = state.sessions.commit_guard(token) {
+        if !work_current(state, token) {
+            return;
+        }
+        dock::set_state(app, "error", Some(error));
+        let _ = app.emit("dictation-error", serde_json::json!({ "error": error }));
+        notify::notify("Dictation error", error);
+        play_sound(state, crate::audio::SoundEvent::Error);
+    }
+}
+
+pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String> {
+    let _transition = state
+        .sessions
+        .transition
+        .lock()
+        .map_err(|e| e.to_string())?;
+    if state.user_dictation_active.load(Ordering::SeqCst) {
+        return Err("a dictation session is already active".to_string());
+    }
     let model_id = selected_model_id(state);
-    let dir = models::model_dir_for(&model_id);
-    let recognizer = {
-        let mut cache = state
-            .streaming_engine
-            .lock()
-            .map_err(|e| e.to_string())?;
-        if let Some(existing) = cache.as_ref() {
-            if existing.model_id == model_id {
-                log::debug!("streaming engine cache hit for {}", model_id);
-                Arc::clone(&existing.recognizer)
-            } else {
-                let created = {
-                    let prov = desired_provider(state);
-                    let rec = StreamingRecognizer::new_with_provider(&dir, None, prov)
-                        .map_err(|e| e.to_string())?;
-                    if rec.provider != "cpu" {
-                        state.gpu_active.store(true, Ordering::SeqCst);
-                    }
-                    Arc::new(rec)
-                };
-                *cache = Some(crate::state::CachedStreamingEngine {
-                    model_id: model_id.clone(),
-                    recognizer: Arc::clone(&created),
-                });
-                created
-            }
+    if !test && !models::is_model_installed(&model_id) {
+        return Err(format!(
+            "STT model '{model_id}' is not installed — download it in Settings → Models"
+        ));
+    }
+    let token = state.sessions.invalidate();
+    *state.recording_token.lock().map_err(|e| e.to_string())? = Some(token);
+    state.handsfree_awake.store(false, Ordering::SeqCst);
+    state.set_test_mode(test);
+    state.set_continuous(false);
+    state.set_streaming(false);
+    state.caption_active.store(false, Ordering::SeqCst);
+    *state.caption_stream.lock().map_err(|e| e.to_string())? = None;
+    *state.stream.lock().map_err(|e| e.to_string())? = None;
+    if let Err(error) = crate::session::begin_explicit_capture(
+        state.recorder.is_recording(),
+        || cancel_capture(state),
+        || state.recorder.clear_buffer(),
+        || start_capture(state),
+    ) {
+        *state.recording_token.lock().map_err(|e| e.to_string())? = None;
+        state.set_test_mode(false);
+        return Err(error);
+    }
+    state.user_dictation_active.store(true, Ordering::SeqCst);
+
+    let streaming = !test && models::is_streaming_model(&model_id);
+    let continuous =
+        !test && !streaming && state.settings.lock().map(|s| s.continuous).unwrap_or(false);
+    let setup = if streaming {
+        spawn_streaming(app, state, token)
+    } else if continuous {
+        spawn_continuous_loop(app, state, token)
+    } else {
+        Ok(())
+    };
+    if let Err(error) = setup {
+        state.sessions.invalidate();
+        *state.recording_token.lock().map_err(|e| e.to_string())? = None;
+        state.user_dictation_active.store(false, Ordering::SeqCst);
+        state.set_test_mode(false);
+        state.set_streaming(false);
+        state.set_continuous(false);
+        *state.stream.lock().map_err(|e| e.to_string())? = None;
+        *state.continuous_queue.lock().map_err(|e| e.to_string())? = None;
+        if !state.handsfree_active.load(Ordering::SeqCst) {
+            let _ = state.recorder.cancel();
+        }
+        return Err(error);
+    }
+    dock::set_state(app, "listening", None);
+    dock::set_caption(
+        app,
+        Some(if test {
+            "testing microphone…"
         } else {
-            let created = {
-                    let prov = desired_provider(state);
-                    let rec = StreamingRecognizer::new_with_provider(&dir, Some("nemo_transducer"), prov)
-                        .map_err(|e| e.to_string())?;
-                    if rec.provider != "cpu" {
-                        state.gpu_active.store(true, Ordering::SeqCst);
-                    }
-                    Arc::new(rec)
-                };
-            *cache = Some(crate::state::CachedStreamingEngine {
-                model_id: model_id.clone(),
-                recognizer: Arc::clone(&created),
-            });
-            created
+            "listening…"
+        }),
+    );
+    if !test {
+        notify::notify("Dictation on", "Recording — use your hotkey to stop");
+        play_sound(state, crate::audio::SoundEvent::Listening);
+    }
+    spawn_level_emitter(app, state, token);
+    if !test && models::is_caption_model_ready() {
+        spawn_caption_loop(app, state, token);
+    }
+    spawn_capture_guard(app, token, !streaming && !continuous);
+    let _ = app.emit(
+        "recording-changed",
+        serde_json::json!({ "recording": true }),
+    );
+    Ok(())
+}
+
+pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, String> {
+    stop_session(app, state, None)
+}
+
+fn stop_session(
+    app: &AppHandle,
+    state: &AppState,
+    expected: Option<WorkToken>,
+) -> Result<TranscriptResult, String> {
+    let transition = state
+        .sessions
+        .transition
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let token = state
+        .recording_token
+        .lock()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "no recording in progress".to_string())?;
+    if expected.is_some_and(|t| t != token) {
+        return Err("recording session changed".into());
+    }
+    if !state.user_dictation_active.load(Ordering::SeqCst) {
+        return Err("no recording in progress".into());
+    }
+    let test = state.is_test_mode();
+    let was_streaming = state.is_streaming_active();
+    state.set_continuous(false);
+    state.set_streaming(false);
+    state.caption_active.store(false, Ordering::SeqCst);
+    *state.caption_stream.lock().map_err(|e| e.to_string())? = None;
+    let mut pipe = state.stream.lock().map_err(|e| e.to_string())?.take();
+    let queue = state
+        .continuous_queue
+        .lock()
+        .map_err(|e| e.to_string())?
+        .take();
+    let handsfree = state.handsfree_active.load(Ordering::SeqCst);
+    let audio = if let Some(pipe) = pipe.as_mut() {
+        // Join the capture producer before its final unread tail. Handsfree
+        // resumes capture after this explicit boundary if it is still enabled.
+        state
+            .recorder
+            .stop_since(&mut pipe.watermark)
+            .map_err(|e| e.to_string())
+    } else if handsfree && state.recorder.is_recording() {
+        Ok(state.recorder.drain_buffer())
+    } else {
+        state.recorder.stop().map_err(|e| e.to_string())
+    };
+    state.user_dictation_active.store(false, Ordering::SeqCst);
+    *state.recording_token.lock().map_err(|e| e.to_string())? = None;
+    state.set_test_mode(false);
+    if !test && state.sessions.current(token) {
+        dock::set_state(app, "transcribing", None);
+        dock::set_caption(app, Some("finalizing…"));
+    }
+    let _ = app.emit(
+        "recording-changed",
+        serde_json::json!({ "recording": false }),
+    );
+    drop(transition);
+    let audio = match audio {
+        Ok(audio) => audio,
+        Err(error) => {
+            report_error(app, state, token, &error);
+            return Err(error);
         }
     };
-    log::info!("streaming engine ready in {} ms", load_started.elapsed().as_millis());
-    let dictionary = dictionary_terms(state);
-    let hotwords = dictionary_hotwords(&dictionary);
-    let session = recognizer.create_session(hotwords.as_deref());
 
-    let pipe = StreamingPipe {
+    let result = if test {
+        Ok(microphone_test_result(&audio))
+    } else if was_streaming {
+        let pipe = pipe
+            .take()
+            .ok_or_else(|| "streaming session is missing".to_string())?;
+        pipe.recognizer.accept(&pipe.session, &audio);
+        pipe.recognizer.finish(&pipe.session);
+        let raw = pipe.recognizer.result(&pipe.session);
+        let duration_ms = pipe.session.started_at.elapsed().as_millis() as u64;
+        let _inference = state.sessions.inference.lock().map_err(|e| e.to_string())?;
+        finalize_transcript(app, state, &raw, duration_ms, token, true, true)
+    } else if let Some(queue) = queue {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        queue
+            .send(QueuedAudio {
+                audio,
+                finish: true,
+                response: Some(sender),
+            })
+            .map_err(|_| "continuous inference worker exited".to_string())?;
+        drop(queue);
+        receiver
+            .recv()
+            .map_err(|_| "continuous inference worker exited".to_string())?
+    } else {
+        process_utterance(app, state, &audio, token, false, true)
+    };
+    if test && state.sessions.current(token) {
+        restore_dock(app, state);
+    }
+    if let Err(error) = &result {
+        report_error(app, state, token, error);
+    }
+    result
+}
+
+pub fn cancel(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    // Signal cancellation before waiting for a transition that may itself be
+    // waiting for an in-flight decode. Stop retains the original recording token.
+    state.sessions.invalidate();
+    let _transition = state
+        .sessions
+        .transition
+        .lock()
+        .map_err(|e| e.to_string())?;
+    state.sessions.invalidate();
+    *state.recording_token.lock().map_err(|e| e.to_string())? = None;
+    state.set_continuous(false);
+    state.set_streaming(false);
+    state.caption_active.store(false, Ordering::SeqCst);
+    state.user_dictation_active.store(false, Ordering::SeqCst);
+    state.set_test_mode(false);
+    *state.stream.lock().map_err(|e| e.to_string())? = None;
+    *state.caption_stream.lock().map_err(|e| e.to_string())? = None;
+    *state.continuous_queue.lock().map_err(|e| e.to_string())? = None;
+    if state.handsfree_active.load(Ordering::SeqCst) && state.recorder.is_recording() {
+        state.recorder.clear_buffer();
+    } else {
+        cancel_capture(state)?;
+    }
+    let _ = app.emit(
+        "recording-changed",
+        serde_json::json!({ "recording": false }),
+    );
+    restore_dock(app, state);
+    Ok(())
+}
+
+fn microphone_test_result(audio: &[f32]) -> TranscriptResult {
+    TranscriptResult {
+        text: if audio.iter().any(|s| s.abs() >= 0.0005) {
+            "Microphone detected audio".into()
+        } else {
+            String::new()
+        },
+        duration_ms: audio.len() as u64 * 1000 / 16_000,
+    }
+}
+
+fn spawn_capture_guard(app: &AppHandle, token: WorkToken, manual: bool) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(60));
+        let state = state_from_app(&app);
+        if !state.sessions.current(token) || !state.user_dictation_active.load(Ordering::SeqCst) {
+            break;
+        }
+        let failed = !state.recorder.is_recording();
+        if failed || (manual && state.recorder.buffered_samples() >= MAX_OFFLINE_SAMPLES) {
+            if failed {
+                notify::notify("Microphone stopped", "Finishing the audio already captured. Check your microphone before recording again.");
+            } else {
+                notify::notify("Recording limit reached", "Finishing this recording before the 120-second audio buffer fills. Start a new recording to continue.");
+            }
+            let _ = app.emit(
+                "recording-limit",
+                serde_json::json!({ "reason": if failed { "capture-ended" } else { "duration" } }),
+            );
+            let _ = stop_session(&app, &state, Some(token));
+            break;
+        }
+    });
+}
+
+/// Inference consumes a bounded queue while this producer keeps capture open.
+/// A full queue stops capture visibly, then flushes all already-captured audio.
+fn spawn_continuous_loop(
+    app: &AppHandle,
+    state: &AppState,
+    token: WorkToken,
+) -> Result<(), String> {
+    let (sender, receiver) = mpsc::sync_channel::<QueuedAudio>(CONTINUOUS_BACKLOG);
+    let worker_app = app.clone();
+    std::thread::Builder::new()
+        .name("opendictate-continuous-inference".into())
+        .spawn(move || {
+            while let Ok(work) = receiver.recv() {
+                let state = state_from_app(&worker_app);
+                let result =
+                    process_utterance(&worker_app, &state, &work.audio, token, true, work.finish);
+                if let Err(error) = &result {
+                    report_error(&worker_app, &state, token, error);
+                }
+                if let Some(response) = work.response {
+                    let _ = response.send(result);
+                }
+                if work.finish {
+                    break;
+                }
+            }
+        })
+        .map_err(|e| format!("failed to start continuous inference: {e}"))?;
+    *state.continuous_queue.lock().map_err(|e| e.to_string())? = Some(sender.clone());
+    state.set_continuous(true);
+    let app = app.clone();
+    let capture_worker = move || {
+        let mut silent_since = Instant::now();
+        let mut utterance_started = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(60));
+            let state = state_from_app(&app);
+            let Ok(transition) = state.sessions.transition.lock() else {
+                break;
+            };
+            if !state.sessions.current(token)
+                || !state.continuous.load(Ordering::SeqCst)
+                || !state.user_dictation_active.load(Ordering::SeqCst)
+            {
+                break;
+            }
+            if !state.recorder.is_recording() {
+                break;
+            }
+            if state.recorder.current_rms() >= sensitivity_to_energy_threshold(sensitivity(&state))
+            {
+                silent_since = Instant::now();
+            }
+            let endpoint = silent_since.elapsed() >= Duration::from_millis(1400)
+                && utterance_started.elapsed() >= Duration::from_millis(600);
+            if !endpoint && state.recorder.buffered_samples() < MAX_OFFLINE_SAMPLES {
+                continue;
+            }
+            let audio = state.recorder.drain_buffer();
+            let work = QueuedAudio {
+                audio,
+                finish: false,
+                response: None,
+            };
+            match sender.try_send(work) {
+                Ok(()) => {
+                    silent_since = Instant::now();
+                    utterance_started = Instant::now();
+                }
+                Err(mpsc::TrySendError::Full(mut work)) => {
+                    let tail = if state.handsfree_active.load(Ordering::SeqCst) {
+                        state.recorder.drain_buffer()
+                    } else {
+                        match state.recorder.stop() {
+                            Ok(audio) => audio,
+                            Err(error) => {
+                                log::warn!("continuous capture stop failed: {error}; recovering the retained buffer");
+                                state.recorder.drain_buffer()
+                            }
+                        }
+                    };
+                    work.audio.extend(tail);
+                    work.finish = true;
+                    state.set_continuous(false);
+                    state.caption_active.store(false, Ordering::SeqCst);
+                    state.user_dictation_active.store(false, Ordering::SeqCst);
+                    if let Ok(mut recording) = state.recording_token.lock() {
+                        *recording = None;
+                    }
+                    if let Ok(mut q) = state.continuous_queue.lock() {
+                        *q = None;
+                    }
+                    let _ = app.emit(
+                        "recording-changed",
+                        serde_json::json!({ "recording": false }),
+                    );
+                    notify::notify("Recording paused", "Transcription could not keep up. Finishing all captured audio; start again when processing completes.");
+                    let _ = app.emit(
+                        "recording-limit",
+                        serde_json::json!({ "reason": "processing-backlog" }),
+                    );
+                    drop(transition);
+                    let _ = sender.send(work);
+                    break;
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    drop(transition);
+                    let _ = stop_session(&app, &state, Some(token));
+                    break;
+                }
+            }
+        }
+    };
+    std::thread::Builder::new()
+        .name("opendictate-continuous-capture".into())
+        .spawn(capture_worker)
+        .map_err(|e| {
+            state.set_continuous(false);
+            if let Ok(mut queue) = state.continuous_queue.lock() {
+                *queue = None;
+            }
+            format!("failed to start continuous capture: {e}")
+        })?;
+    Ok(())
+}
+
+pub fn warmup_streaming(state: &AppState) -> Result<Arc<StreamingRecognizer>, String> {
+    let model_id = selected_model_id(state);
+    let provider = desired_provider(state);
+    let mut cache = state.streaming_engine.lock().map_err(|e| e.to_string())?;
+    if let Some(existing) = cache.as_ref().filter(|e| e.model_id == model_id) {
+        return Ok(Arc::clone(&existing.recognizer));
+    }
+    let recognizer = Arc::new(
+        StreamingRecognizer::new_with_provider(
+            &models::model_dir_for(&model_id),
+            Some("nemo_transducer"),
+            provider,
+        )
+        .map_err(|e| e.to_string())?,
+    );
+    state
+        .gpu_active
+        .store(recognizer.provider != "cpu", Ordering::SeqCst);
+    *cache = Some(crate::state::CachedStreamingEngine {
+        model_id,
+        recognizer: Arc::clone(&recognizer),
+    });
+    Ok(recognizer)
+}
+
+fn spawn_streaming(app: &AppHandle, state: &AppState, token: WorkToken) -> Result<(), String> {
+    let recognizer = warmup_streaming(state)?;
+    let session =
+        recognizer.create_session(dictionary_hotwords(&dictionary_terms(state)).as_deref());
+    *state.stream.lock().map_err(|e| e.to_string())? = Some(StreamingPipe {
+        token,
         recognizer,
         session,
         watermark: 0,
         total_fed: 0,
-    };
-    *state.stream.lock().map_err(|e| e.to_string())? = Some(pipe);
+    });
     state.set_streaming(true);
-
-    spawn_streaming_loop(app, state);
+    let app = app.clone();
+    std::thread::Builder::new()
+        .name("opendictate-streaming".into())
+        .spawn(move || {
+            loop {
+                let state = state_from_app(&app);
+                if !state.sessions.current(token)
+                    || !state.is_streaming_active()
+                    || !state.user_dictation_active.load(Ordering::SeqCst)
+                {
+                    break;
+                }
+                let Ok(mut guard) = state.stream.lock() else {
+                    break;
+                };
+                let Some(pipe) = guard.as_mut().filter(|p| p.token == token) else {
+                    break;
+                };
+                if !state.is_streaming_active() || !state.sessions.current(token) {
+                    break;
+                }
+                // Watermark advance and waveform acceptance are one ownership step.
+                let samples = state.recorder.take_since(&mut pipe.watermark);
+                pipe.total_fed += samples.len();
+                if !samples.is_empty() {
+                    pipe.recognizer.accept(&pipe.session, &samples);
+                    pipe.recognizer.drain(&pipe.session);
+                }
+                let raw = pipe.recognizer.result(&pipe.session);
+                if !raw.is_empty() && !state.caption_active.load(Ordering::SeqCst) {
+                    if let Ok(_commit) = state.sessions.commit_guard(token) {
+                        if state.is_streaming_active() {
+                            let _ = app.emit(
+                                "partial",
+                                serde_json::json!({ "text": raw, "streaming": true }),
+                            );
+                            dock::set_caption(&app, Some(&raw));
+                        }
+                    }
+                }
+                if pipe.recognizer.is_endpoint(&pipe.session) {
+                    let duration = pipe.session.started_at.elapsed().as_millis() as u64;
+                    // Reserve inference order before releasing the pipe; manual
+                    // finalization cannot overtake this endpoint's final transcript.
+                    let inference = state.sessions.inference.lock();
+                    pipe.recognizer.reset(&mut pipe.session);
+                    drop(guard);
+                    let result = inference.map_err(|e| e.to_string()).and_then(|_inference| {
+                        finalize_transcript(&app, &state, &raw, duration, token, true, false)
+                    });
+                    if let Err(error) = result {
+                        report_error(&app, &state, token, &error);
+                    }
+                } else {
+                    drop(guard);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        })
+        .map_err(|e| format!("failed to start streaming worker: {e}"))?;
     Ok(())
 }
 
-/// Feeds captured samples into the recognizer in small chunks, emits partial
-/// hypotheses as live captions, and commits each endpointed utterance.
-fn spawn_streaming_loop(app: &AppHandle, state: &AppState) {
-    const STREAM_POLL_INTERVAL: Duration = Duration::from_millis(100);
-    let app = app.clone();
-    let recorder = Arc::clone(&state.recorder);
-    let stream = Arc::clone(&state.stream);
-    let stream_active = Arc::clone(&state.stream_active);
-    std::thread::spawn(move || {
-        log::info!("stream loop: started");
-        loop {
-            if !stream_active.load(Ordering::SeqCst) || !recorder.is_recording() {
-                log::info!("stream loop: exiting (active={}, recording={})", stream_active.load(Ordering::SeqCst), recorder.is_recording());
-                break;
-            }
-            let mut pipe_guard = match stream.lock() {
-                Ok(g) => g,
-                Err(_) => {
-                    log::info!("stream loop: exiting (pipe lock poisoned)");
-                    break;
-                }
-            };
-            let Some(pipe) = pipe_guard.as_mut() else {
-                log::info!("stream loop: exiting (no pipe)");
-                break;
-            };
-            if !stream_active.load(Ordering::SeqCst) {
-                log::info!("stream loop: exiting (active cleared)");
-                break;
-            }
-
-            let samples = recorder.take_since(&mut pipe.watermark);
-            if !samples.is_empty() && pipe.total_fed % 33 == 0 {
-                let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
-                log::info!(
-                    "stream loop: fed {} samples (rms {rms:.4}), partial so far: {}",
-                    samples.len(),
-                    pipe.recognizer.result(&pipe.session).len()
-                );
-            }
-            pipe.total_fed += samples.len();
-            drop(pipe_guard);
-            if samples.is_empty() {
-                std::thread::sleep(STREAM_POLL_INTERVAL);
-                continue;
-            }
-            pipe_guard = match stream.lock() {
-                Ok(g) => g,
-                Err(_) => break,
-            };
-            let Some(pipe) = pipe_guard.as_mut() else {
-                break;
-            };
-            if !samples.is_empty() {
-                pipe.recognizer.accept(&pipe.session, &samples);
-                // Decode everything accepted so far; without this the decode
-                // queue grows unboundedly and partials lag further behind.
-                pipe.recognizer.drain(&pipe.session);
-            }
-
-            if pipe.recognizer.is_ready(&pipe.session) {
-                let text = pipe.recognizer.result(&pipe.session);
-                // When the zipformer caption engine is live it owns partial
-                // emission (it decodes in real time; this model may lag by
-                // minutes). Endpoint commits below still come from here.
-                let captions_owned = state_from_app(&app)
-                    .caption_active
-                    .load(Ordering::SeqCst);
-                if !text.is_empty() && !captions_owned {
-                    let _ = app.emit(
-                        "partial",
-                        serde_json::json!({ "text": text, "streaming": true }),
-                    );
-                    dock::set_caption(&app, Some(&text));
-                }
-            }
-
-            if pipe.recognizer.is_endpoint(&pipe.session) {
-                let mut text = pipe.recognizer.result(&pipe.session);
-                if spoken_punctuation_enabled(&state_from_app(&app)) {
-                    text = opendictate_core::text::map_spoken_punctuation(&text);
-                }
-                let duration_ms = pipe.session.started_at.elapsed().as_millis() as u64;
-                // Reset while the pipe is still locked (fast, local), then
-                // release the lock BEFORE the slow commit path below: voice
-                // polish is a network round-trip and holding the pipe mutex
-                // through it would stall partial-caption feeding for seconds.
-                pipe.recognizer.reset(&mut pipe.session);
-                drop(pipe_guard);
-                if !text.is_empty() {
-                    let handled = handle_voice_action_or_snippet(&app, &state_from_app(&app), &text);
-                    if handled.is_none() {
-                        let text = apply_voice_polish(&state_from_app(&app), &text);
-                        let _ = commit_text(
-                            &app,
-                            &state_from_app(&app),
-                            &text,
-                            duration_ms,
-                            true,
-                            false,
-                        );
-                    }
-                }
-                std::thread::sleep(STREAM_POLL_INTERVAL);
-                continue;
-            }
-
-            drop(pipe_guard);
-            std::thread::sleep(STREAM_POLL_INTERVAL);
-        }
-        stream_active.store(false, Ordering::SeqCst);
-        dock::set_caption(&app, None);
-    });
-}
-
-
-/// Live captions from the internal zipformer caption engine. Runs during any
-/// recording (offline or streaming accuracy path) and owns `partial`
-/// emission so captions stay real-time even when the selected STT model
-/// decodes slower than the mic speaks.
-fn spawn_caption_loop(app: &AppHandle, state: &AppState) {
-    const CAPTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
-    let app = app.clone();
-    let recorder = Arc::clone(&state.recorder);
-    let caption_stream = Arc::clone(&state.caption_stream);
-    let caption_active = Arc::clone(&state.caption_active);
-
+fn spawn_caption_loop(app: &AppHandle, state: &AppState, token: WorkToken) {
     let Ok(mut cache) = state.caption_engine.lock() else {
-        log::warn!("captions unavailable: engine cache poisoned");
         return;
     };
     let recognizer = if let Some(existing) = cache.as_ref() {
@@ -578,8 +621,8 @@ fn spawn_caption_loop(app: &AppHandle, state: &AppState) {
     } else {
         let created = match StreamingRecognizer::new(&models::caption_model_dir()) {
             Ok(r) => Arc::new(r),
-            Err(e) => {
-                log::warn!("captions unavailable: {e}");
+            Err(error) => {
+                log::warn!("captions unavailable: {error}");
                 return;
             }
         };
@@ -590,147 +633,112 @@ fn spawn_caption_loop(app: &AppHandle, state: &AppState) {
         created
     };
     drop(cache);
-    // Captions never use dictionary hotwords; those belong to the accuracy
-    // model that produces the final transcript.
     let session = recognizer.create_session(None);
-    *caption_stream.lock().unwrap_or_else(|e| e.into_inner()) = Some(StreamingPipe {
+    *state
+        .caption_stream
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(StreamingPipe {
+        token,
         recognizer,
         session,
         watermark: 0,
         total_fed: 0,
     });
-    caption_active.store(true, Ordering::SeqCst);
-
+    state.caption_active.store(true, Ordering::SeqCst);
+    let app = app.clone();
     std::thread::spawn(move || {
-        log::info!("caption loop: started");
-        let continuous = continuous_flag_from_app(&app);
-        while caption_active.load(Ordering::SeqCst)
-            && (recorder.is_recording() || continuous)
-        {
-            let mut pipe_guard = match caption_stream.lock() {
-                Ok(g) => g,
-                Err(_) => break,
-            };
-            let Some(pipe) = pipe_guard.as_mut() else {
+        loop {
+            let state = state_from_app(&app);
+            if !state.sessions.current(token)
+                || !state.caption_active.load(Ordering::SeqCst)
+                || !state.user_dictation_active.load(Ordering::SeqCst)
+            {
+                break;
+            }
+            let Ok(mut guard) = state.caption_stream.lock() else {
                 break;
             };
-            let samples = recorder.take_since(&mut pipe.watermark);
+            let Some(pipe) = guard.as_mut().filter(|p| p.token == token) else {
+                break;
+            };
+            if !state.sessions.current(token) || !state.caption_active.load(Ordering::SeqCst) {
+                break;
+            }
+            let samples = state.recorder.take_since(&mut pipe.watermark);
             pipe.total_fed += samples.len();
             if !samples.is_empty() {
                 pipe.recognizer.accept(&pipe.session, &samples);
                 pipe.recognizer.drain(&pipe.session);
-                let text = pipe.recognizer.result(&pipe.session);
-                drop(pipe_guard);
-                if !text.is_empty() {
-                    let _ = app.emit(
-                        "partial",
-                        serde_json::json!({ "text": text, "streaming": true }),
-                    );
-                    dock::set_caption(&app, Some(&text));
-                }
-                std::thread::sleep(CAPTION_POLL_INTERVAL);
-                continue;
             }
-            drop(pipe_guard);
-            std::thread::sleep(CAPTION_POLL_INTERVAL);
+            let text = pipe.recognizer.result(&pipe.session);
+            if !text.is_empty() {
+                if let Ok(_commit) = state.sessions.commit_guard(token) {
+                    if state.caption_active.load(Ordering::SeqCst) {
+                        let _ = app.emit(
+                            "partial",
+                            serde_json::json!({ "text": text, "streaming": true }),
+                        );
+                        dock::set_caption(&app, Some(&text));
+                    }
+                }
+            }
+            drop(guard);
+            std::thread::sleep(Duration::from_millis(100));
         }
-        caption_active.store(false, Ordering::SeqCst);
-        *caption_stream.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        log::info!("caption loop: exited");
+        let state = state_from_app(&app);
+        if let Ok(mut guard) = state.caption_stream.lock() {
+            if guard.as_ref().is_some_and(|p| p.token == token) {
+                *guard = None;
+                if state.sessions.current(token) {
+                    state.caption_active.store(false, Ordering::SeqCst);
+                }
+            }
+        };
     });
 }
 
-/// Finalizes a manual stop for streaming mode: consumes whatever remains in
-/// the capture buffer, decodes it and commits the last utterance.
-fn stop_streaming(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, String> {
-    state.set_streaming(false);
-    if !state.recorder.is_recording() {
-        return Err("no recording in progress".to_string());
-    }
-
-    let test = state.is_test_mode();
-
-    // The loop checks the active flag under the pipe lock, so once we hold
-    // the lock no more samples are consumed by the loop.
-    let mut pipe_guard = state.stream.lock().map_err(|e| e.to_string())?;
-    let pipe = pipe_guard
-        .as_mut()
-        .ok_or_else(|| "streaming is not active".to_string())?;
-
-    // Capture whatever is left in the live buffer before releasing the mic.
-    let tail = state.recorder.take_since(&mut pipe.watermark);
-    if let Err(e) = state.recorder.stop() {
-        log::warn!("streaming stop: recorder stop failed: {e}");
-    }
-
-    pipe.recognizer.accept(&pipe.session, &tail);
-    // The online decoder lags behind real time; drain everything accepted so
-    // the final transcript reflects the whole utterance. This can take a
-    // while on slow CPUs — keep the dock caption alive while it runs.
-    log::info!("streaming stop: draining decode backlog");
-    let drain_started = Instant::now();
-    dock::set_caption(app, Some("finalizing…"));
-    pipe.recognizer.drain(&pipe.session);
-    log::info!(
-        "streaming stop: drained in {} ms",
-        drain_started.elapsed().as_millis()
-    );
-    let mut text = pipe.recognizer.result(&pipe.session);
-    if spoken_punctuation_enabled(state) {
-        text = opendictate_core::text::map_spoken_punctuation(&text);
-    }
-    let duration_ms = pipe.session.started_at.elapsed().as_millis() as u64;
-    let result = TranscriptResult {
-        text: text.clone(),
-        duration_ms,
-    };
-
-    drop(pipe_guard);
-    *state.stream.lock().map_err(|e| e.to_string())? = None;
-    dock::set_caption(app, None);
-
-    if !test && !text.is_empty() {
-        let snippet_text = handle_snippet_command(app, state, &text);
-        if let Some(snippet_text) = snippet_text {
-            if !snippet_text.is_empty() {
-                return Ok(TranscriptResult {
-                    text: snippet_text,
-                    duration_ms,
-                });
+fn spawn_level_emitter(app: &AppHandle, _state: &AppState, token: WorkToken) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        loop {
+            let state = state_from_app(&app);
+            {
+                let Ok(_commit) = state.sessions.commit_guard(token) else {
+                    break;
+                };
+                if !state.user_dictation_active.load(Ordering::SeqCst) {
+                    break;
+                }
+                let _ = app.emit(
+                    "audio-level",
+                    serde_json::json!({ "rms": state.recorder.current_rms() }),
+                );
             }
-        } else {
-            let _ = commit_text(app, state, &text, duration_ms, true, true);
+            std::thread::sleep(Duration::from_millis(33));
         }
-    } else if !test {
-        notify::notify("No speech detected", "Try again or check your microphone");
-        play_sound(state, crate::audio::SoundEvent::Error);
-        let app = app.clone();
-        std::thread::spawn(move || {
-            dock::set_caption(&app, Some("no speech detected"));
-            std::thread::sleep(Duration::from_millis(2200));
-            dock::set_caption(&app, None);
-            dock::set_state(&app, "hidden", None);
-        });
-    }
-
-    Ok(result)
+        let state = state_from_app(&app);
+        if let Ok(_commit) = state.sessions.commit_guard(token) {
+            let _ = app.emit("audio-level", serde_json::json!({ "rms": 0.0 }));
+        };
+    });
 }
 
 fn process_utterance(
     app: &AppHandle,
     state: &AppState,
     audio: &[f32],
-    test: bool,
+    token: WorkToken,
     continuous: bool,
+    finish: bool,
 ) -> Result<TranscriptResult, String> {
+    ensure_current(state, token)?;
+    let _inference = state.sessions.inference.lock().map_err(|e| e.to_string())?;
+    ensure_current(state, token)?;
     let speech = run_vad(state, audio).map_err(|e| e.to_string())?;
-    let (final_audio, duration_ms) = if speech.has_speech {
-        (speech.trimmed_audio, speech.speech_duration_ms)
+    let final_audio = if speech.has_speech {
+        speech.trimmed_audio
     } else if !continuous && audio.len() >= 2400 {
-        // Fallback for manual hotkey recordings: ensure speech is never discarded
-        // when the user explicitly pressed the hotkey to speak.
-        // Trim silence using energy VAD to prevent Whisper repetition loops.
-        let energy_trimmed = opendictate_core::audio::vad::apply_energy_vad_with_config(
+        let trimmed = opendictate_core::audio::vad::apply_energy_vad_with_config(
             audio,
             &opendictate_core::audio::vad::VadConfig {
                 energy_threshold: 0.0005,
@@ -739,73 +747,148 @@ fn process_utterance(
                 hangover_frames: 15,
             },
         );
-        let trimmed = if energy_trimmed.has_speech {
-            energy_trimmed.trimmed_audio
+        if trimmed.has_speech {
+            trimmed.trimmed_audio
         } else {
             audio.to_vec()
-        };
-        let dur = (trimmed.len() as u64 * 1000) / 16_000;
-        (trimmed, dur)
-    } else {
-        if continuous {
-            dock::set_state(app, "hidden", None);
-        } else {
-            dock::set_caption(app, Some("no speech detected"));
-            notify::notify("No speech detected", "Try again or check your microphone");
-            play_sound(state, crate::audio::SoundEvent::Error);
-            let app = app.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(2200));
-                dock::set_caption(&app, None);
-                dock::set_state(&app, "hidden", None);
-            });
         }
-        return Ok(TranscriptResult {
-            text: String::new(),
-            duration_ms: 0,
-        });
-    };
-
-    let engine = load_engine(state)?;
-    let dictionary = dictionary_terms(state);
-    let hotwords = dictionary_hotwords(&dictionary);
-    let raw = engine
-        .transcribe(&final_audio, hotwords.as_deref())
-        .map_err(|e| e.to_string())?;
-    let mapped = if spoken_punctuation_enabled(state) {
-        opendictate_core::text::map_spoken_punctuation(&raw)
     } else {
-        raw
+        Vec::new()
     };
-    let corrected = opendictate_core::text::correct_dictionary_terms(&mapped, &dictionary);
-    let text = inject::clean_text(&corrected);
-
-    if let Some(action_text) = handle_voice_action_or_snippet(app, state, &text) {
-        return Ok(TranscriptResult {
-            text: action_text,
-            duration_ms,
-        });
+    let duration_ms = final_audio.len() as u64 * 1000 / 16_000;
+    if final_audio.is_empty() {
+        return finalize_transcript(app, state, "", 0, token, continuous, finish);
     }
-
-    let text = apply_voice_polish(state, &text);
-
-    if test {
-        dock::set_caption(app, None);
-        dock::set_state(app, "hidden", None);
-        return Ok(TranscriptResult {
-            text,
-            duration_ms,
-        });
-    }
-
-    commit_text(app, state, &text, duration_ms, continuous, !continuous)?;
-
-    Ok(TranscriptResult { text, duration_ms })
+    ensure_current(state, token)?;
+    let engine = load_engine(state)?;
+    let raw = engine
+        .transcribe(
+            &final_audio,
+            dictionary_hotwords(&dictionary_terms(state)).as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+    finalize_transcript(app, state, &raw, duration_ms, token, continuous, finish)
 }
 
-/// Helper to check if voice actions are enabled.
-fn voice_actions_enabled(state: &AppState) -> bool {
-    state.settings.lock().map(|s| s.voice_actions_enabled).unwrap_or(true)
+fn normalize_transcript(raw: &str, punctuation: bool, dictionary: &[String]) -> String {
+    let mapped = if punctuation {
+        opendictate_core::text::map_spoken_punctuation(raw)
+    } else {
+        raw.to_string()
+    };
+    opendictate_core::text::correct_dictionary_terms(&inject::clean_text(&mapped), dictionary)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SnippetCommand {
+    name: String,
+    tail: String,
+}
+
+struct PreparedTranscript {
+    text: String,
+    action: Option<opendictate_core::text::VoiceAction>,
+    snippet: Option<SnippetCommand>,
+}
+
+fn split_snippet_payload(payload: &str) -> Option<SnippetCommand> {
+    let mut parts = payload.trim().splitn(2, char::is_whitespace);
+    let name = parts.next().unwrap_or("");
+    if name.is_empty() {
+        return None;
+    }
+    Some(SnippetCommand {
+        name: name.to_string(),
+        tail: parts.next().unwrap_or("").trim().to_string(),
+    })
+}
+
+fn parse_snippet_command(text: &str, aliases_enabled: bool) -> Option<SnippetCommand> {
+    let original = text.trim();
+    let prefixes = if aliases_enabled {
+        &["insert snippet ", "paste snippet ", "snippet "][..]
+    } else {
+        &["insert snippet "][..]
+    };
+    for prefix in prefixes {
+        if original
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        {
+            // Prefix matching may ignore case, but the payload is always sliced
+            // from the original input; URL/code/prompt suffixes are opaque data.
+            return split_snippet_payload(original.get(prefix.len()..)?);
+        }
+    }
+    None
+}
+
+fn prepare_transcript(
+    raw: &str,
+    punctuation: bool,
+    dictionary: &[String],
+    actions_enabled: bool,
+) -> PreparedTranscript {
+    let original = raw.trim();
+    let action = if actions_enabled {
+        opendictate_core::text::parse_voice_action(original)
+    } else {
+        None
+    };
+    let snippet = parse_snippet_command(original, actions_enabled);
+    // Punctuation mapping, sentence capitalization and dictionary correction
+    // apply only to prose. Running them before command matching can mutate a
+    // case-sensitive URL/path or turn literal payload words into punctuation.
+    let text = if action.is_some() || snippet.is_some() {
+        original.to_string()
+    } else {
+        normalize_transcript(original, punctuation, dictionary)
+    };
+    PreparedTranscript {
+        text,
+        action,
+        snippet,
+    }
+}
+
+fn finalize_transcript(
+    app: &AppHandle,
+    state: &AppState,
+    raw: &str,
+    duration_ms: u64,
+    token: WorkToken,
+    continuous: bool,
+    finish: bool,
+) -> Result<TranscriptResult, String> {
+    ensure_current(state, token)?;
+    let dictionary = dictionary_terms(state);
+    let (punctuation, actions_enabled) = state
+        .settings
+        .lock()
+        .map(|s| (s.spoken_punctuation, s.voice_actions_enabled))
+        .unwrap_or((false, true));
+    let prepared = prepare_transcript(raw, punctuation, &dictionary, actions_enabled);
+    let text = prepared.text.clone();
+    if text.is_empty() {
+        let _commit = state.sessions.commit_guard(token)?;
+        if finish {
+            restore_dock(app, state);
+            if !continuous {
+                notify::notify("No speech detected", "Try again or check your microphone");
+            }
+        }
+        return Ok(TranscriptResult { text, duration_ms });
+    }
+    if let Some(text) = handle_voice_action_or_snippet(app, state, &prepared, token)? {
+        return Ok(TranscriptResult { text, duration_ms });
+    }
+    ensure_current(state, token)?;
+    let text = opendictate_core::text::correct_dictionary_terms(
+        &apply_voice_polish(state, &text),
+        &dictionary,
+    );
+    commit_text(app, state, &text, duration_ms, token, continuous, finish)?;
+    Ok(TranscriptResult { text, duration_ms })
 }
 
 /// Applies AI Voice Polish (Groq API or Local SLM) if configured in Settings.
@@ -838,402 +921,6 @@ fn apply_voice_polish(state: &AppState, text: &str) -> String {
     }
 }
 
-/// Handles voice action commands (e.g. "scratch that", "new line", "all caps", etc.)
-/// and falls back to snippet commands. Returns Some(text) if handled, or None to proceed.
-fn handle_voice_action_or_snippet(app: &AppHandle, state: &AppState, text: &str) -> Option<String> {
-    use opendictate_core::text::VoiceAction;
-
-    if voice_actions_enabled(state) {
-        if let Some(action) = opendictate_core::text::parse_voice_action(text) {
-            match action {
-                VoiceAction::Undo => {
-                    let _ = inject::undo_last_insert();
-                    notify::notify("Action Executed", "Undo");
-                    show_action(app, state, "✓ Undo");
-                    return Some("✓ Action: Undo".to_string());
-                }
-                VoiceAction::DeleteWord => {
-                    let _ = inject::press_delete_word();
-                    show_action(app, state, "✓ Delete Word");
-                    return Some("✓ Action: Delete Word".to_string());
-                }
-                VoiceAction::DeleteLine => {
-                    let _ = inject::press_delete_line();
-                    show_action(app, state, "✓ Delete Line");
-                    return Some("✓ Action: Delete Line".to_string());
-                }
-                VoiceAction::ClearAll => {
-                    let _ = inject::press_clear_all();
-                    show_action(app, state, "✓ Clear All");
-                    return Some("✓ Action: Clear All".to_string());
-                }
-                VoiceAction::NewLine => {
-                    let _ = inject::press_new_line();
-                    show_action(app, state, "✓ New Line");
-                    return Some("✓ Action: New Line".to_string());
-                }
-                VoiceAction::NewParagraph => {
-                    let _ = inject::press_new_paragraph();
-                    show_action(app, state, "✓ New Paragraph");
-                    return Some("✓ Action: New Paragraph".to_string());
-                }
-                VoiceAction::Tab => {
-                    let _ = inject::press_tab();
-                    show_action(app, state, "✓ Tab");
-                    return Some("✓ Action: Tab".to_string());
-                }
-                VoiceAction::BulletPoint => {
-                    let _ = inject::inject_text(app, "• ", &insert_mode(state));
-                    show_action(app, state, "✓ Bullet");
-                    return Some("• ".to_string());
-                }
-                VoiceAction::AllCaps(phrase) => {
-                    let _ = commit_text(app, state, &phrase, 0, false, true);
-                    return Some(phrase);
-                }
-                VoiceAction::CamelCase(phrase) => {
-                    let _ = commit_text(app, state, &phrase, 0, false, true);
-                    return Some(phrase);
-                }
-                VoiceAction::SnakeCase(phrase) => {
-                    let _ = commit_text(app, state, &phrase, 0, false, true);
-                    return Some(phrase);
-                }
-                VoiceAction::TitleCase(phrase) => {
-                    let _ = commit_text(app, state, &phrase, 0, false, true);
-                    return Some(phrase);
-                }
-                VoiceAction::PromptAndSend(prompt_text) => {
-                    let _ = commit_text(app, state, &prompt_text, 0, false, false);
-                    std::thread::sleep(Duration::from_millis(60));
-                    let _ = inject::press_enter();
-                    show_action(app, state, "✓ Prompt Sent");
-                    return Some(format!("✓ Prompt Sent: {prompt_text}"));
-                }
-                VoiceAction::Submit => {
-                    let _ = inject::press_enter();
-                    show_action(app, state, "✓ Sent");
-                    return Some("✓ Sent".to_string());
-                }
-                VoiceAction::Interrupt => {
-                    let _ = inject::press_interrupt();
-                    show_action(app, state, "✓ Stopped (Ctrl+C)");
-                    return Some("✓ Stopped (Ctrl+C)".to_string());
-                }
-                VoiceAction::SwitchApp(app_name) => {
-                    let res = inject::switch_to_app(&app_name);
-                    let label = format!("✓ Switch: {app_name}");
-                    show_action(app, state, &label);
-                    return Some(match res {
-                        Ok(()) => format!("✓ Switched to {app_name}"),
-                        Err(e) => format!("⚠ App switch failed: {e}"),
-                    });
-                }
-                VoiceAction::NextTab => {
-                    let _ = inject::press_next_tab();
-                    show_action(app, state, "✓ Next Tab");
-                    return Some("✓ Next Tab".to_string());
-                }
-                VoiceAction::PrevTab => {
-                    let _ = inject::press_prev_tab();
-                    show_action(app, state, "✓ Prev Tab");
-                    return Some("✓ Prev Tab".to_string());
-                }
-                VoiceAction::NewTab => {
-                    let _ = inject::press_new_tab();
-                    show_action(app, state, "✓ New Tab");
-                    return Some("✓ New Tab".to_string());
-                }
-                VoiceAction::CloseTab => {
-                    let _ = inject::press_close_tab();
-                    show_action(app, state, "✓ Close Tab");
-                    return Some("✓ Close Tab".to_string());
-                }
-                VoiceAction::ScrollDown => {
-                    let _ = inject::press_scroll_down();
-                    show_action(app, state, "✓ Scroll Down");
-                    return Some("✓ Scroll Down".to_string());
-                }
-                VoiceAction::ScrollUp => {
-                    let _ = inject::press_scroll_up();
-                    show_action(app, state, "✓ Scroll Up");
-                    return Some("✓ Scroll Up".to_string());
-                }
-                VoiceAction::WebSearch(query) => {
-                    let _ = inject::open_browser_search(&query);
-                    let label = format!("✓ Search: {query}");
-                    show_action(app, state, &label);
-                    return Some(format!("✓ Web Search: {query}"));
-                }
-                VoiceAction::OpenUrl(url) => {
-                    let _ = inject::open_browser_url(&url);
-                    let label = format!("✓ Open: {url}");
-                    show_action(app, state, &label);
-                    return Some(format!("✓ Opened {url}"));
-                }
-                VoiceAction::TerminalCommand(cmd) => {
-                    let _ = commit_text(app, state, &cmd, 0, false, false);
-                    std::thread::sleep(Duration::from_millis(60));
-                    let _ = inject::press_enter();
-                    let label = format!("✓ Run: {cmd}");
-                    show_action(app, state, &label);
-                    return Some(format!("✓ Terminal: {cmd}"));
-                }
-                VoiceAction::InsertSnippet(name) => {
-                    return handle_snippet_command(app, state, &format!("insert snippet {name}"));
-                }
-                VoiceAction::Sleep => {
-                    state.handsfree_awake.store(false, Ordering::SeqCst);
-                    dock::set_state(app, "hidden", None);
-                    dock::set_caption(app, Some("Handsfree: Sleeping (Say 'Hey Dictate')"));
-                    notify::notify("Handsfree Mode", "Sleeping — say 'Hey Dictate' to wake");
-                    play_sound(state, crate::audio::SoundEvent::Inserted);
-                    return Some("✓ Sleeping".to_string());
-                }
-            }
-        }
-    }
-
-    handle_snippet_command(app, state, text)
-}
-
-/// Truncates a transcript for the dock caption pill.
-fn pill_text(text: &str) -> String {
-    let t = text.trim();
-    let mut s: String = t.chars().take(48).collect();
-    if t.chars().count() > 48 {
-        s.push('…');
-    }
-    s
-}
-
-/// Flashes an executed action in the dock pill, then restores the correct dock state.
-fn show_action(app: &AppHandle, state: &AppState, label: &str) {
-    dock::set_state(app, "inserted", None);
-    dock::set_caption(app, Some(label));
-    play_sound(state, crate::audio::SoundEvent::Inserted);
-    let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1500));
-        let Some(state) = app.try_state::<AppState>() else { return };
-        if state.handsfree_active.load(Ordering::SeqCst) && state.handsfree_awake.load(Ordering::SeqCst) {
-            dock::set_state(&app, "listening", None);
-            dock::set_caption(&app, Some("Listening…"));
-        } else if state.handsfree_active.load(Ordering::SeqCst) {
-            dock::set_state(&app, "hidden", None);
-            dock::set_caption(&app, Some("Handsfree: Sleeping (Say 'Hey Dictate')"));
-        } else {
-            dock::set_caption(&app, None);
-            dock::set_state(&app, "hidden", None);
-        }
-    });
-}
-
-/// Flashes the inserted transcript in the pill, then restores the correct dock state.
-fn show_inserted(app: &AppHandle, text: &str) {
-    dock::set_state(app, "inserted", None);
-    dock::set_caption(app, Some(&pill_text(text)));
-    let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1500));
-        let Some(state) = app.try_state::<AppState>() else { return };
-        if state.handsfree_active.load(Ordering::SeqCst) && state.handsfree_awake.load(Ordering::SeqCst) {
-            dock::set_state(&app, "listening", None);
-            dock::set_caption(&app, Some("Listening…"));
-        } else if state.handsfree_active.load(Ordering::SeqCst) {
-            dock::set_state(&app, "hidden", None);
-            dock::set_caption(&app, Some("Handsfree: Sleeping (Say 'Hey Dictate')"));
-        } else {
-            dock::set_caption(&app, None);
-            dock::set_state(&app, "hidden", None);
-        }
-    });
-}
-
-/// Detects an `insert snippet <name>` command. Snippet triggers are restricted
-/// to a single word, so only the first word after the prefix is treated as the
-/// name; any remaining words are dictated normally after the snippet text is
-/// inserted. The snippet is resolved with a best-effort fuzzy match on its
-/// trigger, injected alongside the tail, and dock/notification feedback is
-/// driven. Returns `Some(inserted_text)` — or `Some("")` when the name could
-/// not be resolved. Returns `None` when the text is not a snippet command, so
-/// callers fall through to normal dictation. Snippet expansions never write
-/// history entries.
-fn handle_snippet_command(app: &AppHandle, state: &AppState, text: &str) -> Option<String> {
-    const PREFIX: &str = "insert snippet";
-    let lowered = text.trim().to_lowercase();
-    let rest = lowered.strip_prefix(PREFIX)?.trim();
-    if rest.is_empty() {
-        return None;
-    }
-    let mut parts = rest.splitn(2, char::is_whitespace);
-    let name = parts.next().unwrap_or("");
-    if name.is_empty() {
-        return None;
-    }
-    let tail = parts.next().unwrap_or("").trim();
-
-    let snippet = match state.db.lock() {
-        Ok(conn) => match db::list_snippets(&conn) {
-            Ok(list) => {
-                let triggers: Vec<String> = list
-                    .iter()
-                    .filter(|s| opendictate_core::text::is_single_word(&s.trigger))
-                    .map(|s| s.trigger.clone())
-                    .collect();
-                let matched = opendictate_core::text::fuzzy_match_trigger(name, &triggers, 0.6);
-                matched.and_then(|(trigger, _)| {
-                    list.into_iter().find(|s| s.trigger == trigger)
-                })
-            }
-            Err(e) => {
-                log::warn!("snippet lookup failed: {e}");
-                return Some(String::new());
-            }
-        },
-        Err(e) => {
-            log::warn!("snippet lookup failed: {e}");
-            return Some(String::new());
-        }
-    };
-
-    let snippet = match snippet {
-        Some(snippet) => snippet,
-        None => {
-            let message = format!("Snippet not found: \"{name}\"");
-            dock::set_state(app, "error", Some(&message));
-            notify::notify("Snippet not found", &message);
-            play_sound(state, crate::audio::SoundEvent::Error);
-            return Some(String::new());
-        }
-    };
-
-    use tauri_plugin_clipboard_manager::ClipboardExt;
-    let clipboard_text = app.clipboard().read_text().ok();
-    let expanded_snippet_text =
-        opendictate_core::text::expand_snippet_template(&snippet.text, clipboard_text.as_deref());
-
-    let inserted = if tail.is_empty() {
-        expanded_snippet_text
-    } else {
-        format!("{} {}", expanded_snippet_text.trim(), tail)
-    };
-
-    if let Err(e) = inject::inject_text(app, &inserted, &insert_mode(state)) {
-        let message = format!("failed to paste: {e}");
-        dock::set_state(app, "error", Some(&message));
-        notify::notify("Dictation error", &format!("Failed to insert snippet: {e}"));
-        play_sound(state, crate::audio::SoundEvent::Error);
-        return Some(String::new());
-    }
-    if let Ok(mut last) = state.last_inserted.lock() {
-        *last = Some(inserted.clone());
-    }
-
-    let _ = app.emit(
-        "transcript",
-        serde_json::json!({ "text": inserted, "injected": true }),
-    );
-    let _ = app.emit(
-        "overlay-state",
-        serde_json::json!({ "state": "inserted", "message": null }),
-    );
-    notify::notify("Snippet inserted", &format!("\"{}\"", snippet.trigger));
-    play_sound(state, crate::audio::SoundEvent::Inserted);
-    show_inserted(app, &inserted);
-    Some(inserted)
-}
-
-/// Emits the transcript, persists it, injects it and drives dock feedback.
-/// `continuous` keeps the dock in listening state; `finish` (end of session)
-/// flashes "inserted" and then hides the dock.
-fn commit_text(
-    app: &AppHandle,
-    state: &AppState,
-    text: &str,
-    duration_ms: u64,
-    continuous: bool,
-    finish: bool,
-) -> Result<(), String> {
-    let _ = app.emit(
-        "transcript",
-        serde_json::json!({ "text": text, "injected": true }),
-    );
-    let _ = app.emit(
-        "overlay-state",
-        serde_json::json!({ "state": "inserted", "message": null }),
-    );
-
-    if text.is_empty() {
-        if state.handsfree_active.load(Ordering::SeqCst) && state.handsfree_awake.load(Ordering::SeqCst) {
-            dock::set_state(app, "listening", None);
-            dock::set_caption(app, Some("Listening…"));
-        } else if state.handsfree_active.load(Ordering::SeqCst) {
-            dock::set_state(app, "hidden", None);
-            dock::set_caption(app, Some("Handsfree: Sleeping (Say 'Hey Dictate')"));
-        } else {
-            dock::set_caption(app, None);
-            dock::set_state(app, "hidden", None);
-        }
-        return Ok(());
-    }
-
-    let entry = HistoryEntry {
-        id: 0,
-        text: text.to_string(),
-        created_at: db::now_timestamp(),
-        duration_ms,
-        source: if continuous { "continuous".to_string() } else { "hotkey".to_string() },
-    };
-    if let Ok(conn) = state.db.lock() {
-        if db::insert_history(&conn, &entry).is_ok() {
-            let _ = app.emit("history-updated", serde_json::json!({}));
-        }
-    }
-
-    if let Err(e) = inject::inject_text(app, text, &insert_mode(state)) {
-        dock::set_state(app, "error", Some(&format!("failed to paste: {e}")));
-        notify::notify("Dictation error", &format!("Failed to insert text: {e}"));
-        play_sound(state, crate::audio::SoundEvent::Error);
-        return Err(e);
-    }
-    if let Ok(mut last) = state.last_inserted.lock() {
-        *last = Some(text.to_string());
-    }
-    play_sound(state, crate::audio::SoundEvent::Inserted);
-
-    if !continuous || finish {
-        notify::notify("Inserted", &pill_text(text));
-    }
-
-    if continuous {
-        if finish {
-            show_inserted(app, text);
-        } else {
-            dock::set_state(app, "listening", None);
-            dock::set_caption(app, Some("listening…"));
-        }
-        return Ok(());
-    }
-
-    show_inserted(app, text);
-
-    Ok(())
-}
-
-fn spawn_level_emitter(app: &AppHandle, state: &AppState) {
-    let app = app.clone();
-    let recorder = Arc::clone(&state.recorder);
-    std::thread::spawn(move || {
-        while recorder.is_recording() {
-            let rms = recorder.current_rms();
-            let _ = app.emit("audio-level", serde_json::json!({ "rms": rms }));
-            std::thread::sleep(Duration::from_millis(33));
-        }
-        let _ = app.emit("audio-level", serde_json::json!({ "rms": 0.0 }));
-    });
-}
-
 fn run_vad(
     state: &AppState,
     audio: &[f32],
@@ -1242,10 +929,9 @@ fn run_vad(
     let vad_path = models::vad_model_path();
     let silero = if models::is_vad_ready() {
         let threshold = sensitivity_to_silero_threshold(sensitivity);
-        let mut cache = state
-            .vad
-            .lock()
-            .map_err(|_| opendictate_core::CoreError::Audio("VAD cache lock poisoned".to_string()))?;
+        let mut cache = state.vad.lock().map_err(|_| {
+            opendictate_core::CoreError::Audio("VAD cache lock poisoned".to_string())
+        })?;
         if let Some(cached) = cache.as_ref() {
             if (cached.sensitivity - sensitivity).abs() < f32::EPSILON {
                 Some(Arc::clone(&cached.detector))
@@ -1284,18 +970,12 @@ fn dictionary_terms(state: &AppState) -> Vec<String> {
 }
 
 fn dictionary_hotwords(terms: &[String]) -> Option<String> {
-    let joined: Vec<String> = terms
-        .iter()
-        .map(|word| format!("{} {}", word.replace(' ', "_"), HOTWORD_SCORE))
-        .collect();
-    if joined.is_empty() {
+    if terms.is_empty() {
         None
     } else {
-        Some(joined.join("\n"))
+        Some(terms.join("\n"))
     }
 }
-
-const HOTWORD_SCORE: f32 = 3.0;
 
 fn insert_mode(state: &AppState) -> String {
     state
@@ -1361,285 +1041,671 @@ pub fn load_engine(state: &AppState) -> Result<Arc<SttEngine>, String> {
         language: language_key,
         engine: Arc::clone(&engine),
     });
-    log::info!("offline engine ready in {} ms", load_started.elapsed().as_millis());
+    log::info!(
+        "offline engine ready in {} ms",
+        load_started.elapsed().as_millis()
+    );
     Ok(engine)
 }
 
-/// Loads and caches the Sherpa-ONNX Keyword Spotter (KWS) with user-configured wake words.
-pub fn ensure_kws_spotter(state: &AppState) -> Result<Arc<opendictate_core::stt::kws::Spotter>, String> {
-    let mut cache = state.kws_engine.lock().map_err(|e| e.to_string())?;
-    if let Some(existing) = cache.as_ref() {
-        return Ok(Arc::clone(&existing.spotter));
+fn handle_voice_action_or_snippet(
+    app: &AppHandle,
+    state: &AppState,
+    prepared: &PreparedTranscript,
+    token: WorkToken,
+) -> Result<Option<String>, String> {
+    use opendictate_core::text::VoiceAction;
+    let _commit = state.sessions.commit_guard(token)?;
+    ensure_current(state, token)?;
+    if let Some(snippet) = prepared.snippet.as_ref() {
+        return handle_snippet_command_locked(app, state, snippet, token);
     }
-
-    let kws_dir = models::kws_model_dir();
-    if !models::is_kws_ready() {
-        return Err("KWS model is not downloaded yet — please download it in Settings → Models".to_string());
-    }
-
-    let wake_words_str = state
-        .settings
-        .lock()
-        .map(|s| s.wake_words.clone())
-        .unwrap_or_else(|_| "hey dictate, computer".to_string());
-    let keywords: Vec<String> = wake_words_str
-        .split(',')
-        .map(|s| s.trim().to_lowercase())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    let spotter = opendictate_core::stt::kws::Spotter::new(&kws_dir, &keywords, 0.25)
-        .map_err(|e| e.to_string())?;
-    let arc = Arc::new(spotter);
-    *cache = Some(crate::state::CachedKwsEngine {
-        spotter: Arc::clone(&arc),
-    });
-    log::info!("KWS spotter initialized with wake words: {:?}", keywords);
-    Ok(arc)
+    let action = prepared.action.clone();
+    let label = match action {
+        Some(VoiceAction::Undo) => {
+            inject::undo_last_insert()?;
+            "Undo".to_string()
+        }
+        Some(VoiceAction::DeleteWord) => {
+            inject::press_delete_word()?;
+            "Delete Word".to_string()
+        }
+        Some(VoiceAction::DeleteLine) => {
+            inject::press_delete_line(app)?;
+            "Delete Line".to_string()
+        }
+        Some(VoiceAction::ClearAll) => {
+            inject::press_clear_all()?;
+            "Clear All".to_string()
+        }
+        Some(VoiceAction::NewLine) => {
+            inject::press_new_line()?;
+            "New Line".to_string()
+        }
+        Some(VoiceAction::NewParagraph) => {
+            inject::press_new_paragraph()?;
+            "New Paragraph".to_string()
+        }
+        Some(VoiceAction::Tab) => {
+            inject::press_tab()?;
+            "Tab".to_string()
+        }
+        Some(VoiceAction::BulletPoint) => {
+            commit_text_locked(app, state, "• ", 0, token, false, true)?;
+            return Ok(Some("• ".to_string()));
+        }
+        Some(
+            VoiceAction::AllCaps(phrase)
+            | VoiceAction::CamelCase(phrase)
+            | VoiceAction::SnakeCase(phrase)
+            | VoiceAction::TitleCase(phrase),
+        ) => {
+            commit_text_locked(app, state, &phrase, 0, token, false, true)?;
+            return Ok(Some(phrase));
+        }
+        Some(VoiceAction::PromptAndSend(text) | VoiceAction::TerminalCommand(text)) => {
+            let inserted = submit_after_insert(
+                || commit_text_locked(app, state, &text, 0, token, false, false),
+                || {
+                    std::thread::sleep(Duration::from_millis(60));
+                    inject::press_enter()
+                },
+            )?;
+            if inserted {
+                show_completed(app, state, token, "✓ Sent");
+            }
+            return Ok(Some(text));
+        }
+        Some(VoiceAction::Submit) => {
+            inject::press_enter()?;
+            "Sent".to_string()
+        }
+        Some(VoiceAction::Interrupt) => {
+            inject::press_interrupt()?;
+            "Stopped (Ctrl+C)".to_string()
+        }
+        Some(VoiceAction::SwitchApp(name)) => {
+            inject::switch_to_app(&name)?;
+            format!("Switched to {name}")
+        }
+        Some(VoiceAction::NextTab) => {
+            inject::press_next_tab()?;
+            "Next Tab".to_string()
+        }
+        Some(VoiceAction::PrevTab) => {
+            inject::press_prev_tab()?;
+            "Previous Tab".to_string()
+        }
+        Some(VoiceAction::NewTab) => {
+            inject::press_new_tab()?;
+            "New Tab".to_string()
+        }
+        Some(VoiceAction::CloseTab) => {
+            inject::press_close_tab()?;
+            "Close Tab".to_string()
+        }
+        Some(VoiceAction::ScrollDown) => {
+            inject::press_scroll_down()?;
+            "Scroll Down".to_string()
+        }
+        Some(VoiceAction::ScrollUp) => {
+            inject::press_scroll_up()?;
+            "Scroll Up".to_string()
+        }
+        Some(VoiceAction::WebSearch(query)) => {
+            inject::open_browser_search(&query)?;
+            format!("Search: {query}")
+        }
+        Some(VoiceAction::OpenUrl(url)) => {
+            inject::open_browser_url(&url)?;
+            format!("Opened {url}")
+        }
+        Some(VoiceAction::InsertSnippet(name)) => {
+            return handle_snippet_command_locked(
+                app,
+                state,
+                &split_snippet_payload(&name)
+                    .ok_or_else(|| "snippet name is missing".to_string())?,
+                token,
+            );
+        }
+        Some(VoiceAction::Sleep) => {
+            state.handsfree_awake.store(false, Ordering::SeqCst);
+            restore_dock(app, state);
+            return Ok(Some("✓ Sleeping".to_string()));
+        }
+        None => return Ok(None),
+    };
+    let label = format!("✓ {label}");
+    show_completed(app, state, token, &label);
+    Ok(Some(label))
 }
 
-/// Starts the Handsfree background listening service.
+fn handle_snippet_command_locked(
+    app: &AppHandle,
+    state: &AppState,
+    command: &SnippetCommand,
+    token: WorkToken,
+) -> Result<Option<String>, String> {
+    let name = command.name.as_str();
+    let tail = command.tail.as_str();
+    let list = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::list_snippets(&conn).map_err(|e| e.to_string())?
+    };
+    let triggers = list
+        .iter()
+        .filter(|s| opendictate_core::text::is_single_word(&s.trigger))
+        .map(|s| s.trigger.clone())
+        .collect::<Vec<_>>();
+    let snippet = opendictate_core::text::fuzzy_match_trigger(name, &triggers, 0.6)
+        .and_then(|(trigger, _)| list.into_iter().find(|s| s.trigger == trigger))
+        .ok_or_else(|| format!("Snippet not found: {name}"))?;
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let clipboard = app.clipboard().read_text().ok();
+    let expanded =
+        opendictate_core::text::expand_snippet_template(&snippet.text, clipboard.as_deref());
+    let text = if tail.is_empty() {
+        expanded
+    } else {
+        format!("{} {tail}", expanded.trim())
+    };
+    *state.last_inserted.lock().map_err(|e| e.to_string())? = None;
+    let mode = insert_mode(state);
+    if let Err(error) = inject::inject_text(app, &text, &mode) {
+        let _ = app.emit(
+            "transcript",
+            serde_json::json!({ "text": text, "injected": false, "error": error }),
+        );
+        return Err(format!("Failed to insert snippet: {error}"));
+    }
+    let inserted = mode != "clipboard";
+    if inserted {
+        *state.last_inserted.lock().map_err(|e| e.to_string())? = Some(text.clone());
+    }
+    let _ = app.emit(
+        "transcript",
+        serde_json::json!({ "text": text, "injected": inserted, "copied": !inserted }),
+    );
+    show_completed(
+        app,
+        state,
+        token,
+        &if inserted {
+            pill_text(&text)
+        } else {
+            "Copied to clipboard".into()
+        },
+    );
+    Ok(Some(text))
+}
+
+fn pill_text(text: &str) -> String {
+    let mut label: String = text.trim().chars().take(48).collect();
+    if text.trim().chars().count() > 48 {
+        label.push('…');
+    }
+    label
+}
+
+fn restore_dock(app: &AppHandle, state: &AppState) {
+    if state.user_dictation_active.load(Ordering::SeqCst)
+        || state.handsfree_awake.load(Ordering::SeqCst)
+    {
+        dock::set_state(app, "listening", None);
+        dock::set_caption(app, Some("Listening…"));
+    } else {
+        dock::set_state(app, "hidden", None);
+        if state.handsfree_active.load(Ordering::SeqCst) {
+            dock::set_caption(app, Some("Handsfree: Sleeping"));
+        } else {
+            dock::set_caption(app, None);
+        }
+    }
+}
+
+fn show_completed(app: &AppHandle, state: &AppState, token: WorkToken, label: &str) {
+    dock::set_state(app, "inserted", None);
+    dock::set_caption(app, Some(label));
+    play_sound(state, crate::audio::SoundEvent::Inserted);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1500));
+        let state = state_from_app(&app);
+        if let Ok(_commit) = state.sessions.commit_guard(token) {
+            restore_dock(&app, &state);
+        };
+    });
+}
+
+fn commit_text(
+    app: &AppHandle,
+    state: &AppState,
+    text: &str,
+    duration_ms: u64,
+    token: WorkToken,
+    continuous: bool,
+    finish: bool,
+) -> Result<bool, String> {
+    let _commit = state.sessions.commit_guard(token)?;
+    ensure_current(state, token)?;
+    commit_text_locked(app, state, text, duration_ms, token, continuous, finish)
+}
+
+/// The caller holds the session's commit guard through persistence, actual
+/// insertion and optional Enter. A failed insert remains recoverable in history.
+fn commit_text_locked(
+    app: &AppHandle,
+    state: &AppState,
+    text: &str,
+    duration_ms: u64,
+    token: WorkToken,
+    continuous: bool,
+    finish: bool,
+) -> Result<bool, String> {
+    if text.is_empty() {
+        return Ok(false);
+    }
+    *state.last_inserted.lock().map_err(|e| e.to_string())? = None;
+    let entry = HistoryEntry {
+        id: 0,
+        text: text.to_string(),
+        created_at: db::now_timestamp(),
+        duration_ms,
+        source: if continuous {
+            "continuous".into()
+        } else {
+            "hotkey".into()
+        },
+    };
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::insert_history(&conn, &entry).map_err(|e| format!("failed to save transcript: {e}"))?;
+    }
+    let _ = app.emit("history-updated", serde_json::json!({}));
+    let mode = insert_mode(state);
+    if let Err(error) = inject::inject_text(app, text, &mode) {
+        let _ = app.emit(
+            "transcript",
+            serde_json::json!({ "text": text, "injected": false, "error": error }),
+        );
+        return Err(format!("Failed to insert text (saved in History): {error}"));
+    }
+    let inserted = mode != "clipboard";
+    if inserted {
+        *state.last_inserted.lock().map_err(|e| e.to_string())? = Some(text.to_string());
+    }
+    let _ = app.emit(
+        "transcript",
+        serde_json::json!({ "text": text, "injected": inserted, "copied": !inserted }),
+    );
+    if finish || !continuous {
+        let label = if inserted {
+            pill_text(text)
+        } else {
+            "Copied to clipboard".into()
+        };
+        notify::notify(if inserted { "Inserted" } else { "Copied" }, &label);
+        show_completed(app, state, token, &label);
+    } else {
+        restore_dock(app, state);
+        play_sound(state, crate::audio::SoundEvent::Inserted);
+    }
+    Ok(inserted)
+}
+
+pub fn ensure_kws_spotter(
+    state: &AppState,
+) -> Result<Arc<opendictate_core::stt::kws::Spotter>, String> {
+    // Settings are read before the cache lock; settings application never nests
+    // those locks in the inverse order.
+    let wake_words = state
+        .settings
+        .lock()
+        .map_err(|e| e.to_string())?
+        .wake_words
+        .clone();
+    let mut cache = state.kws_engine.lock().map_err(|e| e.to_string())?;
+    if let Some(existing) = cache.as_ref().filter(|c| c.wake_words == wake_words) {
+        return Ok(Arc::clone(&existing.spotter));
+    }
+    if !models::is_kws_ready() {
+        return Err("KWS model is not downloaded yet — download it in Settings → Models".into());
+    }
+    let keywords = wake_words
+        .split(',')
+        .map(|w| w.trim().to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>();
+    let spotter = Arc::new(
+        opendictate_core::stt::kws::Spotter::new(&models::kws_model_dir(), &keywords, 0.25)
+            .map_err(|e| e.to_string())?,
+    );
+    *cache = Some(crate::state::CachedKwsEngine {
+        wake_words,
+        spotter: Arc::clone(&spotter),
+    });
+    Ok(spotter)
+}
+
 pub fn start_handsfree(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    let _transition = state
+        .sessions
+        .transition
+        .lock()
+        .map_err(|e| e.to_string())?;
+    start_handsfree_locked(app, state)
+}
+
+pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Result<(), String> {
     if state.handsfree_active.load(Ordering::SeqCst) {
         return Ok(());
     }
-
     let spotter = ensure_kws_spotter(state)?;
-    state.handsfree_active.store(true, Ordering::SeqCst);
-    state.handsfree_awake.store(false, Ordering::SeqCst);
-
-    if !state.recorder.is_recording() {
-        let mic = state.settings.lock().map(|s| s.mic.clone()).unwrap_or(None);
-        match mic {
-            Some(name) if !name.is_empty() => state.recorder.start_with_name(&name),
-            _ => state.recorder.start(),
-        }
-        .map_err(|e| e.to_string())?;
+    let settings = state.settings.lock().map_err(|e| e.to_string())?.clone();
+    let started_capture = !state.recorder.is_recording();
+    if started_capture {
+        start_capture(state)?;
     }
-
-    dock::set_state(app, "hidden", None);
-    dock::set_caption(app, Some("Handsfree: Sleeping (Say 'Hey Dictate')"));
-    notify::notify("Handsfree Mode Enabled", "Listening for wake phrase in background");
-
-    let app = app.clone();
-    std::thread::Builder::new()
-        .name("opendictate-handsfree".to_string())
+    let generation = state.sessions.restart_handsfree();
+    state.handsfree_awake.store(false, Ordering::SeqCst);
+    // Keep the child behind a startup latch until spawning succeeds and the
+    // service is published as active. Startup failure never leaves active=true.
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
+    let worker_app = app.clone();
+    let worker = std::thread::Builder::new()
+        .name("opendictate-handsfree".into())
         .spawn(move || {
+            if ready_rx.recv().is_err() {
+                return;
+            }
+            let app = worker_app;
             let state = state_from_app(&app);
-            let mut session = spotter.create_session();
-            let mut watermark = 0;
-            let mut last_awake_activity = Instant::now();
-            let mut utterance_samples: Vec<f32> = Vec::new();
-            let mut utterance_active = false;
+            let mut keyword_session = spotter.create_session();
+            let mut watermark = state.recorder.sample_position();
+            let mut boundary = state.sessions.token().generation;
+            let mut was_explicit = false;
+            let mut speech = SpeechBuffer::new(15 * 16_000, 8_000);
+            let mut frames: VecDeque<bool> = VecDeque::with_capacity(8);
             let mut silent_since = Instant::now();
-            let poll_interval = Duration::from_millis(60);
-            let mut frame_history: VecDeque<bool> = VecDeque::with_capacity(DEBOUNCE_WINDOW);
-
+            let mut last_awake_activity = Instant::now();
             let mut noise_floor: f32 = 0.012;
-            let mut utterance_started = Instant::now();
-            let mut consecutive_speech_frames: u32 = 0;
-            const SILENCE_TIMEOUT: Duration = Duration::from_millis(500);
-            const MAX_UTTERANCE_DURATION: Duration = Duration::from_secs(15);
-            const MIN_UTTERANCE_SAMPLES: usize = 6400; // 0.4s @ 16kHz
-            const SPEECH_CONFIRMATION_FRAMES: u32 = 2; // require >=120ms continuous speech to transition to Recording
-            const DEBOUNCE_WINDOW: usize = 8; // last N frames (8×60ms = 480ms) for majority vote
-            const SILENCE_VOTE_THRESHOLD: usize = 7; // need >=7/8 silent frames to confirm silence
-
-            let vad_path = models::vad_model_path();
-            let silero_threshold = sensitivity_to_silero_threshold(sensitivity(&state));
-            let silero_detector = if models::is_vad_ready() {
-                SileroVad::with_threshold(&vad_path, silero_threshold).ok()
+            let silero = if models::is_vad_ready() {
+                SileroVad::with_threshold(
+                    &models::vad_model_path(),
+                    sensitivity_to_silero_threshold(settings.vad_sensitivity),
+                )
+                .ok()
             } else {
                 None
             };
-
-            log::info!("handsfree background loop running (neural VAD: {}, threshold: {silero_threshold:.2})", silero_detector.is_some());
-
-            while state.handsfree_active.load(Ordering::SeqCst) {
-                if !state.recorder.is_recording() {
-                    // Only restart if we are the sole owner (no normal dictation in progress).
-                    // Do NOT call stop() here – the recorder is already idle and stop() errors
-                    // on an idle recorder, potentially masking the real state.
-                    let _ = restart_recorder(&app);
-                    // After restarting, reset our watermark to the empty buffer start.
-                    watermark = 0;
+            while state.sessions.handsfree_current(generation)
+                && state.handsfree_active.load(Ordering::SeqCst)
+            {
+                std::thread::sleep(Duration::from_millis(60));
+                let Ok(transition) = state.sessions.transition.lock() else {
+                    break;
+                };
+                if !state.sessions.handsfree_current(generation)
+                    || !state.handsfree_active.load(Ordering::SeqCst)
+                {
+                    break;
                 }
-
-                let is_awake = state.handsfree_awake.load(Ordering::SeqCst);
+                let explicit = state.user_dictation_active.load(Ordering::SeqCst);
+                let current_boundary = state.sessions.token().generation;
+                if explicit || was_explicit || boundary != current_boundary {
+                    speech.take();
+                    frames.clear();
+                    keyword_session = spotter.create_session();
+                    if let Some(ref detector) = silero {
+                        detector.reset();
+                    }
+                    state.handsfree_awake.store(false, Ordering::SeqCst);
+                    watermark = state.recorder.sample_position();
+                    boundary = current_boundary;
+                    was_explicit = explicit;
+                    if explicit {
+                        continue;
+                    }
+                }
+                if !state.recorder.is_recording() {
+                    if let Err(error) = start_capture(&state) {
+                        state.handsfree_active.store(false, Ordering::SeqCst);
+                        drop(transition);
+                        notify::notify("Handsfree stopped", &error);
+                        break;
+                    }
+                    watermark = state.recorder.sample_position();
+                }
+                let token = state.sessions.handsfree_token();
                 let samples = state.recorder.take_since(&mut watermark);
-
-                let rms = if samples.is_empty() {
-                    0.0
-                } else {
-                    let sum_sq: f32 = samples.iter().map(|&s| s * s).sum();
-                    (sum_sq / samples.len() as f32).sqrt()
-                };
-                let peak = if samples.is_empty() {
-                    0.0
-                } else {
-                    samples.iter().map(|&s| s.abs()).fold(0.0f32, f32::max)
-                };
-                let crest_factor = if rms > 1e-5 { peak / rms } else { 1.0 };
-
-                if !is_awake {
-                    // Sleeping: only run low-power KWS keyword spotting
-                    consecutive_speech_frames = 0;
-                    if !samples.is_empty() {
-                        noise_floor = (noise_floor * 0.90 + rms * 0.10).clamp(0.005, 0.12);
-                        if let Some(keyword) = spotter.process_samples(&session, &samples) {
-                            log::info!("wake word detected: '{}'", keyword);
+                drop(transition);
+                if samples.is_empty() {
+                    continue;
+                }
+                let rms =
+                    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+                if !state.handsfree_awake.load(Ordering::SeqCst) {
+                    speech.take();
+                    frames.clear();
+                    noise_floor = (noise_floor * 0.9 + rms * 0.1).clamp(0.005, 0.12);
+                    if let Some(keyword) = spotter.process_samples(&keyword_session, &samples) {
+                        if let Ok(_commit) = state.sessions.commit_guard(token) {
+                            if !work_current(&state, token) {
+                                continue;
+                            }
                             state.handsfree_awake.store(true, Ordering::SeqCst);
                             last_awake_activity = Instant::now();
-                            utterance_active = false;
-                            utterance_samples.clear();
                             silent_since = Instant::now();
-                            utterance_started = Instant::now();
-                            session = spotter.create_session();
-                            if let Some(ref silero) = silero_detector {
-                                silero.reset();
+                            keyword_session = spotter.create_session();
+                            if let Some(ref detector) = silero {
+                                detector.reset();
                             }
-                            dock::set_state(&app, "listening", None);
-                            dock::set_caption(&app, Some("Listening…"));
-                            notify::notify("Handsfree Awake", &format!("Detected \"{keyword}\""));
+                            restore_dock(&app, &state);
+                            notify::notify("Handsfree awake", &format!("Detected {keyword}"));
                             play_sound(&state, crate::audio::SoundEvent::Listening);
                         }
                     }
+                    continue;
+                }
+                let rate = if speech.active { 0.05 } else { 0.15 };
+                noise_floor = (noise_floor * (1.0 - rate) + rms * rate).clamp(0.005, 0.15);
+                let base = sensitivity_to_energy_threshold(settings.vad_sensitivity);
+                let threshold = if speech.active {
+                    (noise_floor * 1.4).max(base * 0.6)
                 } else {
-                    // Awake: use neural Silero VAD + adaptive energy for speech detection
-                    let base_threshold = sensitivity_to_energy_threshold(state_sensitivity(&app));
-                    // Noise floor adapts continuously (even during speech) with
-                    // a slower rate while utterance is active, so ambient fan
-                    // noise drift doesn't stale the threshold.
-                    let nf_rate = if utterance_active { 0.05 } else { 0.15 };
-                    noise_floor = (noise_floor * (1.0 - nf_rate) + rms * nf_rate).clamp(0.005, 0.15);
-
-                    let vad_speech = if let Some(ref silero) = silero_detector {
-                        if !samples.is_empty() {
-                            silero.accept_streaming(&samples)
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-
-                    let speech_threshold = if utterance_active {
-                        (noise_floor * 1.4).max(base_threshold * 0.6)
-                    } else {
-                        (noise_floor * 2.0).max(base_threshold * 0.9)
-                    };
-
-                    let is_speech = if silero_detector.is_some() {
-                        vad_speech
-                    } else {
-                        rms >= speech_threshold && (crest_factor >= 2.0 || rms >= noise_floor * 2.0)
-                    };
-
-                    // Sliding-window debouncer: push raw frame, keep last DEBOUNCE_WINDOW entries
-                    frame_history.push_back(is_speech);
-                    if frame_history.len() > DEBOUNCE_WINDOW {
-                        frame_history.pop_front();
+                    (noise_floor * 2.0).max(base * 0.9)
+                };
+                let is_speech = if let Some(ref detector) = silero {
+                    detector.accept_streaming(&samples)
+                } else {
+                    let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+                    rms >= threshold && (peak / rms.max(1e-5) >= 2.0 || rms >= noise_floor * 2.0)
+                };
+                frames.push_back(is_speech);
+                if frames.len() > 8 {
+                    frames.pop_front();
+                }
+                let silence_confirmed =
+                    frames.len() == 8 && frames.iter().filter(|&&s| !s).count() >= 7;
+                if is_speech {
+                    last_awake_activity = Instant::now();
+                }
+                if is_speech || !silence_confirmed {
+                    silent_since = Instant::now();
+                }
+                let was_active = speech.active;
+                let mut completed = speech.push(&samples, is_speech);
+                if !was_active && speech.active && work_current(&state, token) {
+                    dock::set_state(&app, "recording", None);
+                }
+                if speech.active
+                    && silence_confirmed
+                    && silent_since.elapsed() >= Duration::from_millis(500)
+                {
+                    let audio = speech.take();
+                    if audio.len() >= 6400 {
+                        completed.push(audio);
                     }
-                    let silent_count = frame_history.iter().filter(|&&s| !s).count();
-                    let debounced_silence = frame_history.len() >= DEBOUNCE_WINDOW
-                        && silent_count >= SILENCE_VOTE_THRESHOLD;
-
-                    if is_speech {
-                        last_awake_activity = Instant::now();
-                        consecutive_speech_frames += 1;
-
-                        if !utterance_active {
-                            if consecutive_speech_frames >= SPEECH_CONFIRMATION_FRAMES {
-                                utterance_active = true;
-                                utterance_started = Instant::now();
-                                dock::set_state(&app, "recording", None);
-                                dock::set_caption(&app, Some("Recording…"));
+                    frames.clear();
+                }
+                for audio in completed {
+                    if !work_current(&state, token) {
+                        break;
+                    }
+                    let result = process_utterance(&app, &state, &audio, token, true, false);
+                    if let Err(error) = result {
+                        report_error(&app, &state, token, &error);
+                    }
+                    last_awake_activity = Instant::now();
+                }
+                if !speech.active
+                    && last_awake_activity.elapsed()
+                        > Duration::from_secs(settings.handsfree_silence_timeout_sec as u64)
+                {
+                    if let Ok(_commit) = state.sessions.commit_guard(token) {
+                        if work_current(&state, token) {
+                            state.handsfree_awake.store(false, Ordering::SeqCst);
+                            speech.take();
+                            frames.clear();
+                            keyword_session = spotter.create_session();
+                            if let Some(ref detector) = silero {
+                                detector.reset();
                             }
-                        }
-                        if utterance_active {
-                            utterance_samples.extend_from_slice(&samples);
-                        }
-                    } else {
-                        consecutive_speech_frames = 0;
-                        // Only reset silent_since when debounced window says
-                        // "mostly speech" (i.e. not confirmed silence). This
-                        // prevents a single 60ms noise blip from resetting the
-                        // entire 500ms countdown.
-                        if !debounced_silence {
-                            silent_since = Instant::now();
-                        }
-                        if utterance_active {
-                            utterance_samples.extend_from_slice(&samples);
-                            let silence_reached = silent_since.elapsed() >= SILENCE_TIMEOUT;
-                            let max_reached = utterance_started.elapsed() >= MAX_UTTERANCE_DURATION;
-
-                            if silence_reached || max_reached {
-                                if utterance_samples.len() >= MIN_UTTERANCE_SAMPLES {
-                                    dock::set_state(&app, "transcribing", None);
-                                    dock::set_caption(&app, Some("Processing…"));
-                                    let audio = std::mem::take(&mut utterance_samples);
-                                    let _ = process_utterance_on_worker(&app, audio, false, true);
-                                    last_awake_activity = Instant::now();
-                                    if state.handsfree_awake.load(Ordering::SeqCst) {
-                                        dock::set_state(&app, "listening", None);
-                                        dock::set_caption(&app, Some("Listening…"));
-                                    }
-                                } else {
-                                    // Short noise spike (under 0.4s): discard and return to listening cleanly
-                                    if state.handsfree_awake.load(Ordering::SeqCst) {
-                                        dock::set_state(&app, "listening", None);
-                                        dock::set_caption(&app, Some("Listening…"));
-                                    }
-                                }
-                                utterance_active = false;
-                                utterance_samples.clear();
-                                silent_since = Instant::now();
-                                frame_history.clear();
-                            }
-                        } else {
-                            // Check inactivity timeout
-                            let timeout_sec = state
-                                .settings
-                                .lock()
-                                .map(|s| s.handsfree_silence_timeout_sec as u64)
-                                .unwrap_or(30);
-
-                            if last_awake_activity.elapsed() > Duration::from_secs(timeout_sec) {
-                                log::info!("handsfree inactivity timeout ({}s); going to sleep", timeout_sec);
-                                state.handsfree_awake.store(false, Ordering::SeqCst);
-                                session = spotter.create_session();
-                                dock::set_state(&app, "hidden", None);
-                                dock::set_caption(&app, Some("Handsfree: Sleeping (Say 'Hey Dictate')"));
-                                play_sound(&state, crate::audio::SoundEvent::Inserted);
-                            }
+                            restore_dock(&app, &state);
                         }
                     }
                 }
-
-                std::thread::sleep(poll_interval);
             }
-            log::info!("handsfree background loop exited");
-        })
-        .map_err(|e| format!("failed to spawn handsfree thread: {e}"))?;
-
+        });
+    if let Err(error) = worker {
+        if started_capture && !state.user_dictation_active.load(Ordering::SeqCst) {
+            let _ = state.recorder.cancel();
+        }
+        return Err(format!("failed to start handsfree worker: {error}"));
+    }
+    state.handsfree_active.store(true, Ordering::SeqCst);
+    if ready_tx.send(()).is_err() {
+        state.handsfree_active.store(false, Ordering::SeqCst);
+        if started_capture {
+            let _ = state.recorder.cancel();
+        }
+        return Err("handsfree worker exited during startup".into());
+    }
+    if !state.user_dictation_active.load(Ordering::SeqCst) {
+        restore_dock(app, state);
+    }
     Ok(())
 }
 
-/// Stops the Handsfree listening service.
-pub fn stop_handsfree(app: &AppHandle, state: &AppState) {
+pub(crate) fn stop_handsfree_locked(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    state.sessions.restart_handsfree();
     state.handsfree_active.store(false, Ordering::SeqCst);
     state.handsfree_awake.store(false, Ordering::SeqCst);
-    // Never stop the recorder out from under a live user dictation session:
-    // handsfree may have been toggled off while the user is mid-dictation
-    // (started via hotkey/hold-to-talk), and stopping here would submit half
-    // of the user's utterance as a transcript.
-    let user_session_open = state.user_dictation_active.load(Ordering::SeqCst);
-    if !state.continuous.load(Ordering::SeqCst)
-        && !state.is_streaming_active()
-        && !user_session_open
-    {
-        let _ = state.recorder.stop();
+    if !state.user_dictation_active.load(Ordering::SeqCst) {
+        cancel_capture(state)?;
+        restore_dock(app, state);
     }
-    dock::set_caption(app, None);
-    dock::set_state(app, "hidden", None);
+    Ok(())
+}
+
+#[cfg(test)]
+mod session_regressions {
+    use super::*;
+
+    #[test]
+    fn microphone_test_needs_only_audio_and_does_not_return_recognized_actions() {
+        let result = microphone_test_result(&vec![0.2; 16_000]);
+        assert_eq!(result.text, "Microphone detected audio");
+        assert_eq!(result.duration_ms, 1000);
+        assert!(microphone_test_result(&[0.0; 160]).text.is_empty());
+    }
+
+    #[test]
+    fn prepared_url_action_preserves_path_extension_and_query_case() {
+        use opendictate_core::text::VoiceAction;
+        let url = "https://Example.com/file.json?Token=AbC&key=a.b!";
+        for punctuation in [false, true] {
+            let prepared = prepare_transcript(
+                &format!("OPEN URL {url}"),
+                punctuation,
+                &["JSON".into()],
+                true,
+            );
+            assert_eq!(prepared.action, Some(VoiceAction::OpenUrl(url.into())));
+        }
+    }
+
+    #[test]
+    fn prepared_prompt_payload_is_not_spoken_punctuation_or_prose() {
+        use opendictate_core::text::VoiceAction;
+        let payload = "Explain period comma and question mark in file.json?";
+        let prepared = prepare_transcript(&format!("ASK {payload}"), true, &[], true);
+        assert_eq!(
+            prepared.action,
+            Some(VoiceAction::PromptAndSend(payload.into()))
+        );
+    }
+
+    #[test]
+    fn prepared_snippet_preserves_original_mixed_case_suffix() {
+        let prepared = prepare_transcript(
+            "Insert Snippet SiG KeepCase and file.json?Token=AbC",
+            true,
+            &[],
+            true,
+        );
+        assert_eq!(
+            prepared.snippet,
+            Some(SnippetCommand {
+                name: "SiG".into(),
+                tail: "KeepCase and file.json?Token=AbC".into()
+            })
+        );
+    }
+
+    #[test]
+    fn prepared_snippet_alias_keeps_unicode_and_literal_payload_words() {
+        let prepared =
+            prepare_transcript("PASTE SNIPPET MySig KeepCase Café period?", true, &[], true);
+        assert_eq!(
+            prepared.snippet,
+            Some(SnippetCommand {
+                name: "MySig".into(),
+                tail: "KeepCase Café period?".into()
+            })
+        );
+    }
+
+    #[test]
+    fn disabling_voice_actions_keeps_commands_out_of_the_action_dispatcher() {
+        let prepared =
+            prepare_transcript("OPEN URL https://example.com/file.json", true, &[], false);
+        assert!(prepared.action.is_none());
+        assert!(prepared.snippet.is_none());
+    }
+
+    #[test]
+    fn hotwords_preserve_phrase_boundaries_without_fake_score_tokens() {
+        assert_eq!(
+            dictionary_hotwords(&["New York".into(), "GitHub".into()]),
+            Some("New York\nGitHub".into())
+        );
+    }
+
+    #[test]
+    fn common_cleanup_preserves_canonical_dictionary_case() {
+        assert_eq!(
+            prepare_transcript("github is great", false, &["GitHub".into()], true).text,
+            "GitHub is great"
+        );
+    }
+
+    #[test]
+    fn common_cleanup_maps_punctuation_before_dictionary() {
+        assert_eq!(
+            prepare_transcript("hello comma github", true, &["GitHub".into()], true).text,
+            "Hello, GitHub"
+        );
+    }
 }

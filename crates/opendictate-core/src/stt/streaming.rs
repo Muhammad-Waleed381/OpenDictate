@@ -20,12 +20,15 @@ const MAX_STT_THREADS: usize = 8;
 /// app.
 pub struct StreamingRecognizer {
     recognizer: OnlineRecognizer,
+    hotword_tokenizer: Option<super::hotwords::HotwordTokenizer>,
     /// Provider the recognizer actually came up on (after fallback).
     pub provider: &'static str,
 }
 
 pub struct StreamingSession {
     stream: OnlineStream,
+    finished: std::sync::atomic::AtomicBool,
+    hotwords: Option<String>,
     /// When the current utterance started (for duration reporting).
     pub started_at: std::time::Instant,
 }
@@ -81,10 +84,7 @@ impl StreamingRecognizer {
         let find = |needle: &str| -> Result<String> {
             let mut matches: Vec<_> = std::fs::read_dir(model_dir)
                 .map_err(|e| {
-                    CoreError::Transcription(format!(
-                        "failed to read {}: {e}",
-                        model_dir.display()
-                    ))
+                    CoreError::Transcription(format!("failed to read {}: {e}", model_dir.display()))
                 })?
                 .flatten()
                 .filter(|e| {
@@ -153,7 +153,11 @@ impl StreamingRecognizer {
             }
         };
 
-        let config = OnlineRecognizerConfig {
+        let hotword_tokenizer =
+            super::hotwords::online_supports_hotwords(model_dir, is_nemo_ctc, model_type)
+                .then(|| super::hotwords::HotwordTokenizer::load(model_dir))
+                .flatten();
+        let mut config = OnlineRecognizerConfig {
             model_config,
             decoding_method: Some("greedy_search".to_string()),
             enable_endpoint: true,
@@ -163,6 +167,14 @@ impl StreamingRecognizer {
             hotwords_score: 1.5,
             ..Default::default()
         };
+
+        if let Some(tokenizer) = &hotword_tokenizer {
+            config.decoding_method = Some("modified_beam_search".into());
+            config.model_config.modeling_unit = Some("bpe".into());
+            config.model_config.bpe_vocab = Some(tokenizer.path.to_string_lossy().into_owned());
+            config.hotwords_score = 3.0;
+            config.max_active_paths = 4;
+        }
 
         let recognizer = OnlineRecognizer::create(&config).ok_or_else(|| {
             CoreError::Transcription(format!(
@@ -199,17 +211,24 @@ impl StreamingRecognizer {
 
         Ok(Self {
             recognizer,
+            hotword_tokenizer,
             provider: provider.as_str(),
         })
     }
 
     pub fn create_session(&self, hotwords: Option<&str>) -> StreamingSession {
-        let stream = match hotwords.filter(|h| !h.trim().is_empty()) {
+        let native_hotwords = self
+            .hotword_tokenizer
+            .as_ref()
+            .and_then(|tokenizer| hotwords.and_then(|words| tokenizer.prepare(words)));
+        let stream = match native_hotwords.as_deref() {
             Some(words) => self.recognizer.create_stream_with_hotwords(words),
             None => self.recognizer.create_stream(),
         };
         StreamingSession {
             stream,
+            finished: std::sync::atomic::AtomicBool::new(false),
+            hotwords: hotwords.map(str::to_string),
             started_at: std::time::Instant::now(),
         }
     }
@@ -252,6 +271,22 @@ impl StreamingRecognizer {
         while self.recognizer.is_ready(&session.stream) {
             self.recognizer.decode(&session.stream);
         }
+    }
+
+    /// Flushes the final acoustic context and marks input complete. Safe to
+    /// call twice; `reset` creates a new stream after a completed utterance.
+    pub fn finish(&self, session: &StreamingSession) {
+        if session
+            .finished
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        session
+            .stream
+            .accept_waveform(SAMPLE_RATE as i32, &vec![0.0; SAMPLE_RATE as usize]);
+        session.stream.input_finished();
+        self.drain(session);
     }
 
     /// Measures this machine's decode speed against a fixed synthetic
@@ -298,14 +333,49 @@ impl StreamingRecognizer {
     /// utterance clock. The capture watermark is owned by the caller and is
     /// NOT reset here.
     pub fn reset(&self, session: &mut StreamingSession) {
-        self.recognizer.reset(&session.stream);
-        session.started_at = std::time::Instant::now();
+        if session.finished.load(std::sync::atomic::Ordering::SeqCst) {
+            *session = self.create_session(session.hotwords.as_deref());
+        } else {
+            self.recognizer.reset(&session.stream);
+            session.started_at = std::time::Instant::now();
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires installed streaming model assets"]
+    fn installed_streaming_hotwords_and_finish_are_native_safe() {
+        use crate::stt::models;
+        for id in [
+            models::CAPTION_MODEL_ID,
+            models::PARAKEET_STREAMING_MODEL_ID,
+            models::FASTCONFORMER_STREAMING_80MS_MODEL_ID,
+        ] {
+            if !models::is_model_installed(id) {
+                continue;
+            }
+            let dir = models::model_dir_for(id);
+            let hint = (id != models::CAPTION_MODEL_ID).then_some("nemo_transducer");
+            let recognizer = StreamingRecognizer::new_for(&dir, hint).unwrap();
+            assert_eq!(
+                recognizer.hotword_tokenizer.is_some(),
+                id == models::CAPTION_MODEL_ID
+            );
+            let mut session = recognizer.create_session(Some("open dictate"));
+            recognizer.accept(&session, &vec![0.0; 1600]);
+            recognizer.finish(&session);
+            let final_text = recognizer.result(&session);
+            recognizer.finish(&session);
+            assert_eq!(recognizer.result(&session), final_text);
+            recognizer.reset(&mut session);
+            recognizer.accept(&session, &vec![0.0; 1600]);
+            recognizer.finish(&session);
+        }
+    }
 
     /// Runs the streaming recognizer over a wav file with chunked input,
     /// simulating a live capture loop. Requires an installed streaming model
@@ -316,7 +386,9 @@ mod tests {
         let home = std::env::var("HOME").expect("HOME set");
         let model_dir = std::env::var("OPENDICTATE_TEST_MODEL_DIR").unwrap_or_else(|_| {
             std::path::Path::new(&home)
-                .join(".local/share/opendictate/models/parakeet-unified-en-0.6b-int8-streaming-560ms")
+                .join(
+                    ".local/share/opendictate/models/parakeet-unified-en-0.6b-int8-streaming-560ms",
+                )
                 .to_string_lossy()
                 .into_owned()
         });
@@ -369,7 +441,7 @@ mod tests {
     /// skips silently otherwise; pair with `--features gpu-shared`.
     #[test]
     fn cuda_request_falls_back_to_cpu_without_gpu() {
-        use super::super::provider::{Provider, resolve};
+        use super::super::provider::{resolve, Provider};
         let dir = crate::stt::models::caption_model_dir();
         if !crate::stt::models::is_caption_model_ready() {
             eprintln!("skipping: caption model not installed");

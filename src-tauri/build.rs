@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=OPENDICTATE_LINUX_RPATH");
     // Linux GPU builds: the shared sherpa-onnx/onnxruntime libraries install
     // to a fixed directory via bundle.linux.deb.files, and CI exports this
     // env var so the binary carries a matching rpath. Unset everywhere else

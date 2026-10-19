@@ -20,6 +20,9 @@ const micLabel = (mic: string | null, mics: api.MicDevice[]): string => {
 export function MicTest() {
   const mics = useStore((s) => s.mics);
   const mic = useStore((s) => s.mic);
+  const recording = useStore((s) => s.recording);
+  const busy = useStore((s) => s.recordingBusy);
+  const recordingMode = useStore((s) => s.recordingMode);
   const [testing, setTesting] = useState(false);
   const [noAudioHint, setNoAudioHint] = useState(false);
   const [peak, setPeak] = useState(0);
@@ -27,37 +30,32 @@ export function MicTest() {
   const [error, setError] = useState<string | null>(null);
   const peakRef = useRef(0);
 
+  useEffect(() => {
+    if (recordingMode !== "test" && !busy) setTesting(false);
+  }, [recordingMode, busy]);
+
   const handleMicChange = async (name: string | null) => {
-    if (!name) return;
+    if (!name || useStore.getState().recording || useStore.getState().recordingBusy) return;
     try {
       await api.setMic(name);
       useStore.getState().setMic(name);
       toast.success(`Microphone: ${micLabel(name, mics)}`);
-      if (testing) {
-        // Restarting the test with a new device: reset the peak meter and
-        // verdict so the result reflects the NEW mic, not the previous one.
-        peakRef.current = 0;
-        setPeak(0);
-        setVerdict(null);
-        setNoAudioHint(false);
-        await api.cancelRecording().catch(() => {});
-        await api.startRecording("test");
-      }
     } catch (e) {
       toast.error(`Microphone switch failed: ${String(e)}`);
     }
   };
 
   const handleStart = async () => {
+    if (useStore.getState().recording || useStore.getState().recordingBusy) return;
     peakRef.current = 0;
     setPeak(0);
     setVerdict(null);
     setNoAudioHint(false);
     setError(null);
     setTesting(true);
+    testingRef.current = true;
     try {
-      await api.cancelRecording().catch(() => {});
-      await api.startRecording("test");
+      if (!await useStore.getState().startRecording("test")) setTesting(false);
     } catch (e) {
       setTesting(false);
       setError(String(e));
@@ -65,11 +63,11 @@ export function MicTest() {
   };
 
   const handleStop = async () => {
+    if (useStore.getState().recordingBusy) return;
+    if (useStore.getState().recordingMode !== "test") { setTesting(false); return; }
     try {
-      await api.stopRecording();
-    } catch (e) {
-      setError(String(e));
-    } finally {
+      const result = await useStore.getState().stopRecording();
+      if (!result) return;
       const quiet = peakRef.current <= 0.05;
       setTesting(false);
       setVerdict(quiet ? "quiet" : "working");
@@ -77,6 +75,9 @@ export function MicTest() {
       // No audio at all: surface the platform-specific hint (macOS mic
       // permission is the most common cause and was previously unreachable).
       setNoAudioHint(quiet);
+    } catch (e) {
+      setError(String(e));
+      setTesting(useStore.getState().recordingMode === "test");
     }
   };
 
@@ -97,8 +98,8 @@ export function MicTest() {
 
   useEffect(() => {
     return () => {
-      if (testingRef.current) {
-        api.cancelRecording().catch(() => {});
+      if (testingRef.current && useStore.getState().recordingMode === "test") {
+        useStore.getState().cancelRecording().catch(() => {});
       }
     };
   }, []);
@@ -109,7 +110,7 @@ export function MicTest() {
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1.5">
         <label className="text-xs font-bold text-muted-foreground uppercase">Microphone Device</label>
-        <Select value={mic ?? ""} onValueChange={handleMicChange}>
+        <Select value={mic ?? ""} onValueChange={handleMicChange} disabled={recording || busy}>
           <SelectTrigger className="w-full">
             <SelectValue>{micLabel(mic, mics)}</SelectValue>
           </SelectTrigger>
@@ -137,6 +138,7 @@ export function MicTest() {
           onClick={testing ? handleStop : handleStart}
           variant={testing ? "outline" : "default"}
           size="sm"
+          disabled={busy || (!testing && recording)}
         >
           {testing ? "■ Stop" : "● Start"}
         </Button>
@@ -149,6 +151,7 @@ export function MicTest() {
             <span
               key={i}
               className={`flex-1 transition-colors duration-75 ${lit ? "bg-primary" : "bg-muted"}`}
+              style={{ height: "100%" }}
             />
           );
         })}

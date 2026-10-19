@@ -7,22 +7,20 @@
 //! When the PulseAudio server is unreachable, callers fall back to the
 //! cpal/ALSA path.
 //!
-//! Capture uses a threaded mainloop exactly like `pa_simple`: an internal
-//! thread continuously polls the pulse mainloop and a small read callback
-//! merely signals that data is ready. The capture thread holds the mainloop
-//! lock to drain samples with `pa_stream_peek`/`pa_stream_drop`. This is the
-//! most robust arrangement — a caller-driven mainloop that is only polled on
-//! demand can miss the shared-ring-buffer wakeup and never receive audio.
+//! Capture uses PulseAudio's threaded mainloop for server I/O while the
+//! capture thread drains samples under its lock. Short bounded polling waits
+//! release that lock so callbacks progress and cancellation does not depend
+//! on receiving another server callback.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use libpulse_sys as capi;
 
-use crate::audio::capture::{SAMPLE_RATE, SharedBuffer};
+use crate::audio::capture::{SharedBuffer, SAMPLE_RATE};
 use crate::error::CoreError;
 use crate::Result;
 
@@ -123,7 +121,8 @@ pub fn list_sources() -> Option<Vec<PulseSource>> {
                 capi::pa_mainloop_free(mainloop);
                 return None;
             }
-            capi::pa_mainloop_iterate(mainloop, 1, &mut rv);
+            capi::pa_mainloop_iterate(mainloop, 0, &mut rv);
+            std::thread::sleep(Duration::from_millis(5));
         }
 
         let (tx, rx) = mpsc::channel();
@@ -148,16 +147,19 @@ pub fn list_sources() -> Option<Vec<PulseSource>> {
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut sources = Vec::new();
         while !done.load(Ordering::SeqCst) && Instant::now() < deadline {
-            capi::pa_mainloop_iterate(mainloop, 1, &mut rv);
+            capi::pa_mainloop_iterate(mainloop, 0, &mut rv);
+            std::thread::sleep(Duration::from_millis(5));
             while let Ok(source) = rx.try_recv() {
                 sources.push(source);
             }
         }
+        // Cancel callbacks before releasing their userdata, including timeout paths.
+        capi::pa_operation_cancel(operation);
         capi::pa_operation_unref(operation);
-        drop(Box::from_raw(list_state));
         capi::pa_context_disconnect(context);
         capi::pa_context_unref(context);
         capi::pa_mainloop_free(mainloop);
+        drop(Box::from_raw(list_state));
         Some(sources)
     }
 }
@@ -195,10 +197,13 @@ extern "C" fn read_cb(_: *mut capi::pa_stream, _nbytes: usize, userdata: *mut c_
 /// and used on the capture thread.
 fn setup_capture(
     source: &str,
-    _stop_signal: &Arc<AtomicBool>,
-    buffer: &Arc<Mutex<SharedBuffer>>,
+    stop_signal: &Arc<AtomicBool>,
+    _buffer: &Arc<Mutex<SharedBuffer>>,
     started_at: &Arc<Mutex<Option<Instant>>>,
 ) -> std::result::Result<Capture, String> {
+    if stop_signal.load(Ordering::SeqCst) {
+        return Err("pulse setup cancelled".into());
+    }
     unsafe {
         let mainloop = capi::pa_threaded_mainloop_new();
         if mainloop.is_null() {
@@ -215,10 +220,8 @@ fn setup_capture(
             return Err("failed to create pulse context".to_string());
         }
         capi::pa_context_set_state_callback(context, Some(notify_cb), mainloop as *mut c_void);
-        // Hold the lock across connect/start so the internal thread cannot
-        // dispatch any callback until we first enter `wait`: dispatch always
-        // runs with the mutex held, and `signal` is a bare broadcast with no
-        // memory, so a callback fired outside our wait loops would be lost.
+        // Hold the lock across connect/start, then release it between bounded
+        // state polls so the internal mainloop can dispatch callbacks.
         capi::pa_threaded_mainloop_lock(mainloop);
         if capi::pa_context_connect(context, std::ptr::null(), 0, std::ptr::null()) < 0 {
             capi::pa_threaded_mainloop_unlock(mainloop);
@@ -246,7 +249,7 @@ fn setup_capture(
                 capi::pa_threaded_mainloop_free(mainloop);
                 return Err("pulse server did not become ready".to_string());
             }
-            if Instant::now() > deadline {
+            if stop_signal.load(Ordering::SeqCst) || Instant::now() > deadline {
                 capi::pa_threaded_mainloop_unlock(mainloop);
                 capi::pa_threaded_mainloop_stop(mainloop);
                 capi::pa_context_disconnect(context);
@@ -254,7 +257,11 @@ fn setup_capture(
                 capi::pa_threaded_mainloop_free(mainloop);
                 return Err("pulse server did not become ready (timeout)".to_string());
             }
-            capi::pa_threaded_mainloop_wait(mainloop);
+            // A condition wait is not woken by an AtomicBool cancellation.
+            // Release the lock so callbacks can progress, then poll boundedly.
+            capi::pa_threaded_mainloop_unlock(mainloop);
+            std::thread::sleep(Duration::from_millis(5));
+            capi::pa_threaded_mainloop_lock(mainloop);
         }
 
         let spec = capi::pa_sample_spec {
@@ -317,8 +324,10 @@ fn setup_capture(
             if state == capi::pa_stream_state_t::Ready {
                 break;
             }
-            if matches!(state, capi::pa_stream_state_t::Failed | capi::pa_stream_state_t::Terminated)
-            {
+            if matches!(
+                state,
+                capi::pa_stream_state_t::Failed | capi::pa_stream_state_t::Terminated
+            ) {
                 capi::pa_threaded_mainloop_unlock(mainloop);
                 capi::pa_threaded_mainloop_stop(mainloop);
                 let _ = capi::pa_stream_disconnect(stream);
@@ -328,7 +337,7 @@ fn setup_capture(
                 capi::pa_threaded_mainloop_free(mainloop);
                 return Err("pulse record stream failed to start".to_string());
             }
-            if Instant::now() > deadline {
+            if stop_signal.load(Ordering::SeqCst) || Instant::now() > deadline {
                 capi::pa_threaded_mainloop_unlock(mainloop);
                 capi::pa_threaded_mainloop_stop(mainloop);
                 let _ = capi::pa_stream_disconnect(stream);
@@ -338,7 +347,11 @@ fn setup_capture(
                 capi::pa_threaded_mainloop_free(mainloop);
                 return Err("pulse record stream timed out while starting".to_string());
             }
-            capi::pa_threaded_mainloop_wait(mainloop);
+            // A condition wait is not woken by an AtomicBool cancellation.
+            // Release the lock so callbacks can progress, then poll boundedly.
+            capi::pa_threaded_mainloop_unlock(mainloop);
+            std::thread::sleep(Duration::from_millis(5));
+            capi::pa_threaded_mainloop_lock(mainloop);
         }
         capi::pa_threaded_mainloop_unlock(mainloop);
 
@@ -347,8 +360,9 @@ fn setup_capture(
         // spawning this thread; resetting it here would re-open the race where
         // a timed-out `spawn_capture` sets stop=true to abort, and this thread
         // immediately un-sets it, wedging `join()` forever.
-        *started_at.lock().map_err(|e| e.to_string())? = Some(Instant::now());
-        buffer.lock().map_err(|e| e.to_string())?.clear();
+        *started_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        // The recorder establishes the session boundary before spawning.
+        // Never clear here: reconnecting must retain already captured audio.
 
         Ok(Capture {
             mainloop,
@@ -364,10 +378,7 @@ fn append_samples(
     _stop_signal: &Arc<AtomicBool>,
     _started_at: &Arc<Mutex<Option<Instant>>>,
 ) {
-    let mut guard = match buffer.try_lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
+    let mut guard = buffer.lock().unwrap_or_else(|e| e.into_inner());
     let new_samples: Vec<f32> = bytes
         .chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
@@ -386,26 +397,24 @@ fn capture_loop(
     stop_signal: &Arc<AtomicBool>,
     buffer: &Arc<Mutex<SharedBuffer>>,
     started_at: &Arc<Mutex<Option<Instant>>>,
-) {
+) -> std::result::Result<(), String> {
+    let mut failure = None;
     unsafe {
-        // Wakes `pa_threaded_mainloop_wait` on an external stop even when the
-        // server delivers no audio (e.g. the source was removed), so the join
-        // in `Recorder::stop` always returns promptly.
-        while !stop_signal.load(Ordering::Relaxed) {
+        loop {
             capi::pa_threaded_mainloop_lock(capture.mainloop);
-            let mut sz = capi::pa_stream_readable_size(capture.stream);
-            while sz == 0 && !stop_signal.load(Ordering::Relaxed) {
-                capi::pa_threaded_mainloop_wait(capture.mainloop);
-                sz = capi::pa_stream_readable_size(capture.stream);
-            }
             loop {
                 let size = capi::pa_stream_readable_size(capture.stream);
-                if size == 0 || size == usize::MAX {
+                if size == usize::MAX {
+                    failure = Some("pulse stream could not be read".to_string());
+                    break;
+                }
+                if size == 0 {
                     break;
                 }
                 let mut data: *const c_void = std::ptr::null();
                 let mut nbytes: usize = 0;
                 if capi::pa_stream_peek(capture.stream, &mut data, &mut nbytes) < 0 {
+                    failure = Some("pulse stream read failed".to_string());
                     break;
                 }
                 if nbytes == 0 {
@@ -422,8 +431,13 @@ fn capture_loop(
             }
             let state = capi::pa_stream_get_state(capture.stream);
             capi::pa_threaded_mainloop_unlock(capture.mainloop);
-            if matches!(state, capi::pa_stream_state_t::Failed | capi::pa_stream_state_t::Terminated)
-            {
+            if matches!(
+                state,
+                capi::pa_stream_state_t::Failed | capi::pa_stream_state_t::Terminated
+            ) {
+                failure = Some("pulse record stream disconnected".to_string());
+            }
+            if failure.is_some() || stop_signal.load(Ordering::SeqCst) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -436,6 +450,7 @@ fn capture_loop(
         capi::pa_context_unref(capture.context);
         capi::pa_threaded_mainloop_free(capture.mainloop);
     }
+    failure.map_or(Ok(()), Err)
 }
 
 /// Spawns a capture thread recording from `source`. Returns once the stream is
@@ -445,6 +460,8 @@ pub(crate) fn spawn_capture(
     stop_signal: Arc<AtomicBool>,
     buffer: Arc<Mutex<SharedBuffer>>,
     started_at: Arc<Mutex<Option<Instant>>>,
+    state: Arc<AtomicU8>,
+    capture_error: Arc<Mutex<Option<String>>>,
 ) -> Result<std::thread::JoinHandle<()>> {
     let source = source.to_string();
     let (tx, rx) = mpsc::sync_channel(1);
@@ -456,8 +473,15 @@ pub(crate) fn spawn_capture(
         .spawn(move || {
             let setup = setup_capture(&source, &stop_signal, &buffer, &started_at);
             let _ = tx.send(setup.is_ok());
-            if let Ok(mut capture) = setup {
-                capture_loop(&mut capture, &stop_signal, &buffer, &started_at);
+            let result = match setup {
+                Ok(mut capture) => capture_loop(&mut capture, &stop_signal, &buffer, &started_at),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = result {
+                log::error!("{error}");
+                *capture_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
+                state.store(crate::audio::capture::STATE_FAILED, Ordering::SeqCst);
+                stop_signal.store(true, Ordering::SeqCst);
             }
         })
         .map_err(|e| CoreError::Audio(format!("failed to spawn pulse capture thread: {e}")))?;
@@ -489,9 +513,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stalled_pulse_setup_observes_cancellation() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "audio::pulse::tests::stalled_pulse_child",
+                "--nocapture",
+            ])
+            .env("OPENDICTATE_TEST_PULSE_STALL", "1")
+            .env(
+                "PULSE_SERVER",
+                format!("tcp:127.0.0.1:{}", listener.local_addr().unwrap().port()),
+            )
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("cancelled Pulse setup did not return within three seconds");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn stalled_pulse_child() {
+        if std::env::var_os("OPENDICTATE_TEST_PULSE_STALL").is_none() {
+            return;
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::clone(&stop);
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            cancel.store(true, Ordering::SeqCst);
+        });
+        assert!(spawn_capture(
+            "test",
+            stop,
+            Arc::new(Mutex::new(SharedBuffer::default())),
+            Arc::new(Mutex::new(None)),
+            Arc::new(AtomicU8::new(1)),
+            Arc::new(Mutex::new(None))
+        )
+        .is_err());
+        canceller.join().unwrap();
+    }
+
+    #[test]
     fn parses_pulse_ids() {
-        assert_eq!(pulse_source_name("pulse:alsa_input.usb-hd.webcam.analog-stereo"),
-            Some("alsa_input.usb-hd.webcam.analog-stereo"));
+        assert_eq!(
+            pulse_source_name("pulse:alsa_input.usb-hd.webcam.analog-stereo"),
+            Some("alsa_input.usb-hd.webcam.analog-stereo")
+        );
         assert_eq!(pulse_source_name("pulse:"), Some(""));
         assert_eq!(pulse_source_name("default"), None);
         assert_eq!(pulse_source_name("HDA Intel PCH"), None);
@@ -503,7 +585,10 @@ mod tests {
             name: "alsa_input.pci-0000_00_1f.3.analog-stereo".to_string(),
             description: "Built-in Audio Analog Stereo".to_string(),
         };
-        assert_eq!(pulse_source_name(&format!("{}{}", PULSE_PREFIX, s.name)), Some(s.name.as_str()));
+        assert_eq!(
+            pulse_source_name(&format!("{}{}", PULSE_PREFIX, s.name)),
+            Some(s.name.as_str())
+        );
         assert_eq!(PULSE_PREFIX, "pulse:");
     }
 
@@ -535,15 +620,19 @@ mod tests {
             Arc::clone(&stop),
             Arc::clone(&buffer),
             Arc::clone(&started_at),
+            Arc::new(AtomicU8::new(1)),
+            Arc::new(Mutex::new(None)),
         )
         .expect("capture should start");
         std::thread::sleep(Duration::from_millis(800));
         stop.store(true, Ordering::SeqCst);
         let _ = handle.join();
         let samples = buffer.lock().unwrap().samples.clone();
-        assert!(!samples.is_empty(), "expected captured samples from {source}");
-        let rms: f32 =
-            (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+        assert!(
+            !samples.is_empty(),
+            "expected captured samples from {source}"
+        );
+        let rms: f32 = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
         assert!(rms > 1e-5, "expected non-silent audio, rms={rms}");
     }
 }

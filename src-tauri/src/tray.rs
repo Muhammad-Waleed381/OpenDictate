@@ -26,7 +26,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             "open" => show_main(app),
             "toggle" => hotkey::toggle_dictation(app),
             "undo" => {
-                let _ = crate::commands::undo_last_insert(app.state());
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = crate::commands::undo_last_insert(app).await {
+                        crate::notify::notify("Undo failed", &e);
+                    }
+                });
             }
             "quit" => app.exit(0),
             _ => {}

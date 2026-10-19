@@ -50,11 +50,9 @@ pub fn polish_text(text: &str, config: &PolishConfig) -> Result<String> {
     match config.provider {
         PolishProvider::Off => Ok(text.to_string()),
         PolishProvider::Groq => polish_with_groq(trimmed, config),
-        PolishProvider::LocalSlm => {
-            // Local SLM placeholder / fallback until ONNX model is provisioned
-            log::info!("Local SLM polish requested; falling back to clean text");
-            Ok(trimmed.to_string())
-        }
+        PolishProvider::LocalSlm => Err(CoreError::Transcription(
+            "Local AI polish is not available yet".into(),
+        )),
     }
 }
 
@@ -64,14 +62,9 @@ fn polish_with_groq(text: &str, config: &PolishConfig) -> Result<String> {
         .groq_api_key
         .as_ref()
         .filter(|k| !k.trim().is_empty())
-        .ok_or_else(|| {
-            CoreError::Transcription("Groq API key is missing or empty".to_string())
-        })?;
+        .ok_or_else(|| CoreError::Transcription("Groq API key is missing or empty".to_string()))?;
 
-    let model = config
-        .groq_model
-        .as_deref()
-        .unwrap_or(DEFAULT_GROQ_MODEL);
+    let model = config.groq_model.as_deref().unwrap_or(DEFAULT_GROQ_MODEL);
 
     let system_prompt = match config.mode {
         PolishMode::Clean => SYSTEM_PROMPT_CLEAN,
@@ -112,30 +105,34 @@ fn polish_with_groq(text: &str, config: &PolishConfig) -> Result<String> {
             CoreError::Transcription(format!("Groq API error: {e}"))
         })?;
 
-    #[derive(Deserialize)]
-    struct GroqChoiceMessage {
-        content: String,
-    }
-
-    #[derive(Deserialize)]
-    struct GroqChoice {
-        message: GroqChoiceMessage,
-    }
-
-    #[derive(Deserialize)]
-    struct GroqResponse {
-        choices: Option<Vec<GroqChoice>>,
-    }
-
     let parsed: GroqResponse = resp.into_body().read_json().map_err(|e| {
         log::warn!("failed to parse Groq response: {e}");
         CoreError::Transcription(format!("invalid Groq response: {e}"))
     })?;
+    completed_polish_output(parsed, text)
+}
 
+#[derive(Deserialize)]
+struct GroqChoiceMessage {
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct GroqChoice {
+    message: GroqChoiceMessage,
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GroqResponse {
+    choices: Option<Vec<GroqChoice>>,
+}
+
+fn completed_polish_output(parsed: GroqResponse, text: &str) -> Result<String> {
     if let Some(choices) = parsed.choices {
         if let Some(first) = choices.into_iter().next() {
             let output = first.message.content.trim().to_string();
-            if !output.is_empty() {
+            if first.finish_reason.as_deref() == Some("stop") && !output.is_empty() {
                 return Ok(output);
             }
         }
@@ -147,6 +144,37 @@ fn polish_with_groq(text: &str, config: &PolishConfig) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_polish_preserves_complete_original() {
+        for reason in [Some("length"), Some("content_filter"), None] {
+            let response = serde_json::from_value(json!({"choices":[{
+                "message":{"content":"Only the beginning"}, "finish_reason":reason
+            }]}))
+            .unwrap();
+            assert_eq!(
+                completed_polish_output(response, "Complete original sentence.").unwrap(),
+                "Complete original sentence."
+            );
+        }
+        let response = serde_json::from_value(json!({"choices":[{
+            "message":{"content":"Complete polished sentence."}, "finish_reason":"stop"
+        }]}))
+        .unwrap();
+        assert_eq!(
+            completed_polish_output(response, "Original").unwrap(),
+            "Complete polished sentence."
+        );
+    }
+
+    #[test]
+    fn unavailable_local_polish_reports_unsupported() {
+        let config = PolishConfig {
+            provider: PolishProvider::LocalSlm,
+            ..Default::default()
+        };
+        assert!(polish_text("original", &config).is_err());
+    }
 
     #[test]
     fn off_provider_returns_original_text() {

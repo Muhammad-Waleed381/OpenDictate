@@ -20,35 +20,32 @@ opt-in support for GPU execution providers via ONNX Runtime.
   dictation — no restart needed. The tiny live-caption zipformer stays on
   CPU deliberately.
 
-## Standard installers: CPU and GPU in one binary
+## Building a GPU installer
 
-Release builds can link against a **shared** sherpa-onnx/onnxruntime that
-includes GPU execution providers. The resulting installer then supports
-both worlds from one download:
+Standard release installers use static CPU libraries. The dispatch-only
+`.github/workflows/gpu-build.yml` builds an experimental Linux `.deb` from a
+CUDA-enabled **shared** sherpa-onnx archive matching the pinned crate version.
+Provide its URL as the workflow's `libs_url` input. The workflow accepts zip,
+tar.gz and tar.bz2 content, packages runtime `.so` libraries under
+`/usr/lib/opendictate`, and builds with the matching runtime search path.
 
-- Machine has an NVIDIA GPU + drivers → `gpu = auto/cuda` engages CUDA.
-- Anything else → provider creation fails and engines fall back to CPU,
-  exactly like the classic build.
-
-Set the repository **variable** `CUDA_LIBS_URL` to a k2-fsa shared-lib
-archive built with `-DSHERPA_ONNX_ENABLE_CUDA=ON` (matching the
-sherpa-onnx version in `crates/opendictate-core/Cargo.toml`, e.g. names
-like `sherpa-onnx-v<ver>-linux-x64-shared-cuda-lib.tar.bz2`) and the next
-tagged Linux/Windows release picks it up automatically.
-
-Size note: those archives bundle CUDA runtime libraries, so GPU-enabled
-installers grow substantially (~hundreds of MB). Leave the variable unset
-for lean CPU-only releases.
-
-### Locally
+Locally, from the repository root:
 
 ```bash
 export SHERPA_ONNX_LIB_DIR=/path/to/extracted/shared-cuda-libs
-npm run tauri build -- --features gpu-shared
+export OPENDICTATE_LINUX_RPATH=/usr/lib/opendictate
+python3 scripts/inject-linux-libs.py
+npm run tauri -- build --bundles deb --features gpu-shared -- --no-default-features
 ```
 
-`.github/workflows/gpu-build.yml` remains as a dispatch-only sandbox for
-testing new lib archives without cutting a release.
+`inject-linux-libs.py` updates `src-tauri/tauri.conf.json` for that local package;
+review that generated mapping before committing configuration changes. Keep
+CPU and shared features mutually exclusive. The explicit `--no-default-features`
+argument is passed to Cargo, disabling the app's default `cpu-static` feature.
+
+GPU archives can be large and must include the dependent runtime libraries.
+Actual acceleration and installer startup still require validation on matching
+GPU hardware; a successful package build does not establish either result.
 
 ## Status / verification matrix
 

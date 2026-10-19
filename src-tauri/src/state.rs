@@ -2,9 +2,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use opendictate_core::audio::capture::AudioRecorder;
+use opendictate_core::audio::vad::SileroVad;
 use opendictate_core::stt::engine::SttEngine;
 use opendictate_core::stt::streaming::{StreamingRecognizer, StreamingSession};
-use opendictate_core::audio::vad::SileroVad;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,7 @@ pub struct SettingsPatch {
     pub language: Option<String>,
     pub stt_model: Option<String>,
     pub insert_mode: Option<String>,
+    pub input_target: Option<String>,
     pub heatmap_color: Option<String>,
     pub vad_sensitivity: Option<f32>,
     pub continuous: Option<bool>,
@@ -49,6 +50,8 @@ pub struct Settings {
     pub stt_model: String,
     #[serde(default = "default_insert_mode")]
     pub insert_mode: String,
+    #[serde(default = "default_input_target")]
+    pub input_target: String,
     #[serde(default = "default_heatmap_color")]
     pub heatmap_color: String,
     #[serde(default = "default_vad_sensitivity")]
@@ -91,6 +94,10 @@ fn default_stt_model() -> String {
 
 fn default_insert_mode() -> String {
     "auto".to_string()
+}
+
+fn default_input_target() -> String {
+    "text".to_string()
 }
 
 fn default_heatmap_color() -> String {
@@ -158,6 +165,7 @@ impl Default for Settings {
             onboarded: false,
             stt_model: default_stt_model(),
             insert_mode: default_insert_mode(),
+            input_target: default_input_target(),
             heatmap_color: default_heatmap_color(),
             vad_sensitivity: default_vad_sensitivity(),
             continuous: false,
@@ -239,6 +247,10 @@ pub struct WordStats {
 }
 
 pub struct AppState {
+    pub sessions: Arc<crate::session::SessionControl>,
+    pub recording_token: Arc<Mutex<Option<crate::session::WorkToken>>>,
+    pub continuous_queue:
+        Arc<Mutex<Option<std::sync::mpsc::SyncSender<crate::dictation::QueuedAudio>>>>,
     pub recorder: Arc<AudioRecorder>,
     pub test_mode: Arc<AtomicBool>,
     pub db: Arc<Mutex<Connection>>,
@@ -275,6 +287,7 @@ pub struct AppState {
 }
 
 pub struct CachedKwsEngine {
+    pub wake_words: String,
     pub spotter: Arc<opendictate_core::stt::kws::Spotter>,
 }
 
@@ -319,6 +332,7 @@ impl AppState {
 /// Live state for streaming ASR: the recognizer, its active session and the
 /// capture-buffer watermark. All access is serialized through the mutex.
 pub struct StreamingPipe {
+    pub token: crate::session::WorkToken,
     pub recognizer: Arc<StreamingRecognizer>,
     pub session: StreamingSession,
     /// Absolute count of samples already fed to the recognizer (total samples

@@ -39,6 +39,7 @@ export interface Settings {
   onboarded: boolean;
   stt_model: string;
   insert_mode: string;
+  input_target: "text" | "terminal";
   heatmap_color: string;
   vad_sensitivity: number;
   continuous: boolean;
@@ -67,6 +68,7 @@ export type SettingsPatch = Partial<
     | "language"
     | "stt_model"
     | "insert_mode"
+    | "input_target"
     | "heatmap_color"
     | "vad_sensitivity"
     | "continuous"
@@ -111,6 +113,9 @@ export interface SnippetEntry {
 export interface TranscriptResult {
   text: string;
   duration_ms: number;
+  injected?: boolean;
+  copied?: boolean;
+  error?: string;
 }
 
 export interface DayWords {
@@ -150,11 +155,13 @@ export interface ModelProgressPayload {
   total: number;
 }
 
-export interface ModelsReadyPayload {}
+export interface ModelsReadyPayload { file?: string }
 
 export interface TranscriptPayload {
   text: string;
   injected: boolean;
+  copied?: boolean;
+  error?: string;
 }
 
 export interface PartialPayload {
@@ -293,6 +300,10 @@ export function pasteClipboard(text: string): Promise<void> {
   return invoke<void>("paste_clipboard", { text });
 }
 
+export function testSnippet(text: string): Promise<void> {
+  return invoke<void>("test_snippet", { text });
+}
+
 export function copyText(text: string): Promise<void> {
   return invoke<void>("copy_text", { text });
 }
@@ -401,4 +412,3 @@ export function onDockPosition(
     cb(event.payload)
   );
 }
-

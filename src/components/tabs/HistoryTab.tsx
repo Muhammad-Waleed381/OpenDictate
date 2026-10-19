@@ -55,12 +55,18 @@ export function HistoryTab() {
 
   const speedStats = useMemo(() => calculateAggregateSpeed(history), [history]);
 
+  const selectedVisibleCount = filtered.filter((entry) => selectedIds.has(entry.id)).length;
+  const allVisibleSelected = filtered.length > 0 && selectedVisibleCount === filtered.length;
+  const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
   const toggleSelectAll = () => {
-    if (selectedIds.size === filtered.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(filtered.map((e) => e.id)));
-    }
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      for (const entry of filtered) {
+        if (allVisibleSelected) next.delete(entry.id);
+        else next.add(entry.id);
+      }
+      return next;
+    });
   };
 
   const toggleSelectOne = (id: number) => {
@@ -126,7 +132,7 @@ export function HistoryTab() {
   const handleInsert = async (text: string) => {
     try {
       await api.pasteClipboard(text);
-      toast.success("Sent to clipboard");
+      toast.success("Inserted into the previous application");
     } catch (e) {
       toast.error(String(e));
     }
@@ -290,7 +296,8 @@ export function HistoryTab() {
                   <input
                     type="checkbox"
                     className="size-4 cursor-pointer accent-primary"
-                    checked={filtered.length > 0 && selectedIds.size === filtered.length}
+                    checked={allVisibleSelected}
+                    ref={(input) => { if (input) input.indeterminate = someVisibleSelected; }}
                     onChange={toggleSelectAll}
                     aria-label="Select all dictations"
                   />
@@ -367,7 +374,7 @@ export function HistoryTab() {
                       <Button size="icon-sm" variant="ghost" title="Edit" onClick={() => beginEdit(entry)}>
                         <Pencil />
                       </Button>
-                      <Button size="icon-sm" variant="ghost" title="Re-insert" onClick={() => handleInsert(entry.text)}>
+                      <Button size="icon-sm" variant="ghost" title="Re-insert — returns to the previous application" onClick={() => handleInsert(entry.text)}>
                         <ClipboardPaste />
                       </Button>
                       <Button size="icon-sm" variant="ghost" title="Copy" onClick={() => handleCopy(entry.text)}>
