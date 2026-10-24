@@ -9,7 +9,20 @@ use crate::state::AppState;
 pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), String> {
     let current = state.hotkey.lock().map(|h| h.clone()).unwrap_or(None);
     if current.as_deref() == Some(key) {
-        return sync_gnome_keybinding(key);
+        // The key is already bound. On GNOME that binding is the
+        // settings-daemon keybinding, so re-syncing it is all that is needed.
+        // Elsewhere the OS shortcut must still be asserted, because a failed
+        // unregister can leave the platform state out of sync with ours.
+        if is_gnome_session() && gnome_schema_available() {
+            // A failed re-sync leaves the previous binding in place, which is
+            // the same key, so the hotkey keeps working.
+            if let Err(error) = sync_gnome_keybinding(key) {
+                log::warn!("gnome keybinding re-sync failed: {error}");
+            }
+            return Ok(());
+        }
+        register_os_shortcut(app, key)?;
+        return Ok(());
     }
 
     // Double-tap gestures bypass the OS hotkey API entirely — see doubletap.rs
@@ -32,30 +45,38 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
     // single global path: the X11 grab would double-fire alongside it and
     // toggle start+stop in one press. Elsewhere (bare X11, other DEs) fall
     // back to the X11 grab.
-    let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.to_lowercase().contains("gnome"))
-        .unwrap_or(false);
+    let is_gnome = is_gnome_session();
     if is_gnome {
-        sync_gnome_keybinding(key)?;
-        log::info!("GNOME session: relying on settings-daemon keybinding (no X11 grab)");
-    } else {
-        app.global_shortcut()
-            .on_shortcut(key, move |app, _shortcut, event| {
-                let hold = app
-                    .try_state::<AppState>()
-                    .and_then(|s| s.settings.lock().ok().map(|st| st.hold_to_talk))
-                    .unwrap_or(false);
-                if hold {
-                    if event.state() == ShortcutState::Pressed {
-                        start_dictation(app);
-                    } else if event.state() == ShortcutState::Released {
-                        stop_dictation(app);
-                    }
-                } else if event.state() == ShortcutState::Pressed {
-                    toggle_dictation(app);
+        // The GNOME binding is only the hotkey when the settings-daemon
+        // schema is actually usable. Otherwise fall back to the OS grab
+        // instead of leaving the user with no hotkey at all.
+        if gnome_schema_available() {
+            match sync_gnome_keybinding(key) {
+                Ok(()) => {
+                    log::info!(
+                        "GNOME session: relying on settings-daemon keybinding (no X11 grab)"
+                    );
                 }
-            })
-            .map_err(|e| format!("failed to register hotkey '{key}': {e}"))?;
+                Err(error) => {
+                    // A failed sync must not leave the user with no hotkey.
+                    // Our settings-daemon slot is removed first so the two
+                    // mechanisms cannot both fire for the same key.
+                    log::warn!(
+                        "GNOME keybinding sync failed ({error}); falling back to the OS hotkey"
+                    );
+                    remove_gnome_keybinding();
+                    register_os_shortcut(app, key)?;
+                }
+            }
+        } else {
+            log::warn!(
+                "GNOME session: settings-daemon keybindings are unavailable; \
+                 falling back to the OS hotkey"
+            );
+            register_os_shortcut(app, key)?;
+        }
+    } else {
+        register_os_shortcut(app, key)?;
 
         // Keep the old gesture armed until the new registration succeeds.
         #[cfg(target_os = "macos")]
@@ -67,7 +88,11 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
             #[cfg(not(target_os = "macos"))]
             let stale_chord = true;
             if stale_chord {
-                let _ = app.global_shortcut().unregister(old.as_str());
+                // A failed unregister leaves both chords live: one press would
+                // fire two actions.
+                if let Err(e) = app.global_shortcut().unregister(old.as_str()) {
+                    log::warn!("could not unregister previous hotkey '{old}': {e}");
+                }
             }
         }
     }
@@ -95,6 +120,53 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
         }
     }
     Ok(())
+}
+
+/// Whether the session is a GNOME one. The settings-daemon keybinding is the
+/// only global path there, because an X11 grab cannot see keys while a native
+/// Wayland window has focus.
+fn is_gnome_session() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .map(|d| d.to_lowercase().contains("gnome"))
+        .unwrap_or(false)
+}
+
+/// Whether the GNOME settings-daemon keybinding schema can actually be used.
+/// A missing `gsettings` binary or schema must not disable the hotkey.
+fn gnome_schema_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        gsettings_get(
+            "org.gnome.settings-daemon.plugins.media-keys",
+            "custom-keybindings",
+        )
+        .is_ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// Binds the hotkey through the OS global-shortcut API.
+fn register_os_shortcut(app: &AppHandle, key: &str) -> Result<(), String> {
+    app.global_shortcut()
+        .on_shortcut(key, move |app, _shortcut, event| {
+            let hold = app
+                .try_state::<AppState>()
+                .and_then(|s| s.settings.lock().ok().map(|st| st.hold_to_talk))
+                .unwrap_or(false);
+            if hold {
+                if event.state() == ShortcutState::Pressed {
+                    start_dictation(app);
+                } else if event.state() == ShortcutState::Released {
+                    stop_dictation(app);
+                }
+            } else if event.state() == ShortcutState::Pressed {
+                toggle_dictation(app);
+            }
+        })
+        .map_err(|e| format!("failed to register hotkey '{key}': {e}"))
 }
 
 /// A single receiver preserves callback order. A mutex acquired by freshly
@@ -186,10 +258,7 @@ const KEYBINDING_PATH: &str =
 
 #[cfg(target_os = "linux")]
 pub fn sync_gnome_keybinding(key: &str) -> Result<(), String> {
-    let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.to_lowercase().contains("gnome"))
-        .unwrap_or(false);
-    if !is_gnome {
+    if !is_gnome_session() {
         return Ok(());
     }
     let executable = crate::autostart::launcher_executable()?;
@@ -200,20 +269,19 @@ pub fn sync_gnome_keybinding(key: &str) -> Result<(), String> {
     let binding =
         gnome_accelerator(key).ok_or_else(|| format!("could not parse hotkey '{key}'"))?;
     let schema = "org.gnome.settings-daemon.plugins.media-keys";
-    let existing = gsettings_get(schema, "custom-keybindings")?;
-    let mut slots = parse_binding_slots(&existing)?;
+    // A missing `gsettings` binary or schema must never disable the hotkey.
+    let existing = match gsettings_get(schema, "custom-keybindings") {
+        Ok(existing) => existing,
+        Err(error) => {
+            log::warn!("gnome keybinding: settings-daemon unavailable ({error}); skipping");
+            return Ok(());
+        }
+    };
+    let mut slots = parse_binding_slots(&existing);
     let ours = normalize_slot(KEYBINDING_PATH);
     if !slots.contains(&ours) {
-        slots.push(ours);
+        slots.push(ours.clone());
     }
-    let slot_list = format!(
-        "[{}]",
-        slots
-            .iter()
-            .map(|s| variant_string(s))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
     let slot_schema = format!("{schema}.custom-keybinding:{KEYBINDING_PATH}");
     gsettings_set(
         &slot_schema,
@@ -222,6 +290,27 @@ pub fn sync_gnome_keybinding(key: &str) -> Result<(), String> {
     )?;
     gsettings_set(&slot_schema, "command", &variant_string(&command))?;
     gsettings_set(&slot_schema, "binding", &variant_string(&binding))?;
+    // Re-read immediately before writing: another application may have
+    // registered a binding since the first read, and replacing the whole
+    // list would silently drop it.
+    let current = gsettings_get(schema, "custom-keybindings").unwrap_or(existing);
+    let mut merged = parse_binding_slots(&current);
+    if !merged.contains(&ours) {
+        merged.push(ours);
+    }
+    for slot in slots {
+        if !merged.contains(&slot) {
+            merged.push(slot);
+        }
+    }
+    let slot_list = format!(
+        "[{}]",
+        merged
+            .iter()
+            .map(|s| variant_string(s))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     gsettings_set(schema, "custom-keybindings", &slot_list)?;
     log::info!("gnome keybinding synced: {binding} -> {command}");
     Ok(())
@@ -232,41 +321,76 @@ pub fn sync_gnome_keybinding(_key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Removes our settings-daemon keybinding slot. Used when the OS hotkey takes
+/// over, so the two mechanisms cannot both fire for the same key.
+#[cfg(target_os = "linux")]
+fn remove_gnome_keybinding() {
+    let schema = "org.gnome.settings-daemon.plugins.media-keys";
+    let Ok(existing) = gsettings_get(schema, "custom-keybindings") else {
+        return;
+    };
+    let ours = normalize_slot(KEYBINDING_PATH);
+    let slots: Vec<String> = parse_binding_slots(&existing)
+        .into_iter()
+        .filter(|slot| *slot != ours)
+        .collect();
+    let slot_list = format!(
+        "[{}]",
+        slots
+            .iter()
+            .map(|s| variant_string(s))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    if let Err(error) = gsettings_set(schema, "custom-keybindings", &slot_list) {
+        log::warn!("could not remove the GNOME keybinding slot: {error}");
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn variant_string(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
 #[cfg(target_os = "linux")]
-fn parse_binding_slots(value: &str) -> Result<Vec<String>, String> {
+/// Parses the `custom-keybindings` array.
+///
+/// A path that cannot be used is skipped rather than fatal: another
+/// application may legitimately register a binding whose name contains
+/// characters this implementation does not accept, and that must never
+/// disable the OpenDictate hotkey.
+fn parse_binding_slots(value: &str) -> Vec<String> {
     let value = value
         .trim()
         .strip_prefix("@as")
         .unwrap_or(value.trim())
         .trim();
-    let body = value
-        .strip_prefix('[')
-        .and_then(|s| s.strip_suffix(']'))
-        .ok_or("invalid GNOME custom-keybindings list")?;
+    let Some(body) = value.strip_prefix('[').and_then(|s| s.strip_suffix(']')) else {
+        log::warn!("ignoring unparsable GNOME custom-keybindings list");
+        return Vec::new();
+    };
     if body.trim().is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
     body.split(',')
-        .map(|item| {
+        .filter_map(|item| {
             let item = item.trim();
             let path = item
                 .strip_prefix('\'')
                 .and_then(|s| s.strip_suffix('\''))
                 .or_else(|| item.strip_prefix('"').and_then(|s| s.strip_suffix('"')))
-                .ok_or("invalid GNOME keybinding path")?;
+                // `gsettings` escapes quotes and backslashes in GVariant
+                // string literals.
+                .map(|path| path.replace("\\'", "'").replace("\\\\", "\\"))?;
             if !path.starts_with('/')
                 || !path
                     .chars()
                     .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-'))
             {
-                return Err("invalid GNOME keybinding path".into());
+                log::warn!("skipping unusable GNOME keybinding path: {path}");
+                return None;
             }
-            Ok(normalize_slot(path))
+            Some(normalize_slot(&path))
         })
         .collect()
 }
@@ -344,20 +468,64 @@ pub fn install_socket_toggle(app: AppHandle, path: std::path::PathBuf) {
             return;
         }
     };
+    // The socket drives microphone capture and text injection, so it must
+    // not be reachable by other local users. `bind` uses the process umask,
+    // which is typically world-accessible.
+    if let Err(e) = restrict_socket_permissions(&path) {
+        log::warn!(
+            "toggle socket: could not restrict permissions on {}: {e}",
+            path.display()
+        );
+    }
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(mut conn) = conn else { continue };
-            use std::io::Read;
-            let mut buf = [0u8; 16];
-            let n = conn.read(&mut buf).unwrap_or(0);
-            match &buf[..n] {
-                b"toggle" => toggle_dictation(&app),
-                b"show" => crate::tray::show_main(&app),
-                _ => {}
+            if let Err(e) = handle_socket_request(&app, &mut conn) {
+                log::warn!("toggle socket: request failed: {e}");
             }
         }
     });
     log::info!("toggle socket armed: {}", path.display());
+}
+
+/// Restricts the toggle socket to its owner.
+#[cfg(unix)]
+fn restrict_socket_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+/// Reads one request from the socket and acts on it. A stream read may return
+/// a short count, so the payload is read until EOF or the buffer is full.
+#[cfg(unix)]
+fn handle_socket_request(
+    app: &AppHandle,
+    conn: &mut std::os::unix::net::UnixStream,
+) -> std::io::Result<()> {
+    use std::io::Read;
+    let mut buf = Vec::with_capacity(16);
+    let mut chunk = [0u8; 16];
+    loop {
+        let n = conn.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() >= 16 {
+            break;
+        }
+    }
+    match buf.as_slice() {
+        b"toggle" => toggle_dictation(app),
+        b"show" => crate::tray::show_main(app),
+        other => {
+            log::warn!(
+                "toggle socket: ignoring unknown request {:?}",
+                String::from_utf8_lossy(other)
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Single-instance guard over the toggle socket. Unix only; other platforms
@@ -371,7 +539,10 @@ pub fn is_another_instance(path: &std::path::Path) -> bool {
         } else {
             b"show"
         };
-        let _ = conn.write_all(message);
+        if let Err(e) = conn.write_all(message) {
+            log::warn!("toggle socket: failed to send request: {e}");
+            return false;
+        }
         true
     } else {
         false
@@ -408,12 +579,31 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn gnome_empty_typed_array_does_not_create_a_bogus_slot() {
-        assert!(parse_binding_slots("@as []").unwrap().is_empty());
-        assert!(parse_binding_slots("[]").unwrap().is_empty());
+        assert!(parse_binding_slots("@as []").is_empty());
+        assert!(parse_binding_slots("[]").is_empty());
         assert_eq!(
-            parse_binding_slots("['/org/other/binding/', '/org/another/']").unwrap(),
+            parse_binding_slots("['/org/other/binding/', '/org/another/']"),
             ["/org/other/binding/", "/org/another/"]
         );
-        assert!(parse_binding_slots("[not-a-path]").is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnome_unusable_foreign_binding_never_disables_the_hotkey() {
+        // A third-party binding whose name contains characters this
+        // implementation does not accept must be skipped, not fatal.
+        assert_eq!(
+            parse_binding_slots(
+                "['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/com.example.App/']"
+            ),
+            Vec::<String>::new()
+        );
+        // The usable bindings around it are still discovered.
+        assert_eq!(
+            parse_binding_slots("['/org/ok/one/', '/org/bad/with.dots/', '/org/ok/two/']"),
+            ["/org/ok/one/", "/org/ok/two/"]
+        );
+        // A malformed list is skipped instead of aborting the whole sync.
+        assert!(parse_binding_slots("[not-a-path]").is_empty());
     }
 }

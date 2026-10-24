@@ -150,6 +150,7 @@ impl Spotter {
             )));
         }
         config.model_config.tokens = Some(tokens_path.to_string_lossy().into_owned());
+        config.model_config.num_threads = super::cpu::optimal_kws_threads();
 
         let vocab = load_vocab(&tokens_path);
 

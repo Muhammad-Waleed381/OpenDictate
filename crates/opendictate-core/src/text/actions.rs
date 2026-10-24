@@ -118,6 +118,24 @@ pub fn to_title_case(input: &str) -> String {
     words.join(" ")
 }
 
+/// Whether a spoken target looks like a URL rather than an application name.
+/// Used to route "go to <x>" correctly: "go to example.com" opens a browser,
+/// "go to chrome" focuses an application.
+fn looks_like_url(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    if value.contains("://") || value.starts_with("www.") {
+        return true;
+    }
+    let host = value.split(['/', '?', '#']).next().unwrap_or("");
+    let Some((name, tld)) = host.rsplit_once('.') else {
+        return false;
+    };
+    !name.is_empty() && tld.len() >= 2 && tld.chars().all(|ch| ch.is_ascii_alphabetic())
+}
+
 /// Parses a transcription text to check if it represents an in-place voice command.
 ///
 /// If it matches a recognized command pattern, returns `Some(VoiceAction)`.
@@ -178,11 +196,17 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
     // Only command words are normalized. Prefix lengths are ASCII byte
     // boundaries checked with `get`, so Unicode payloads remain untouched.
     let original = raw_text.trim();
+    // A command prefix is the word itself; the payload follows a space, any
+    // other whitespace, or a colon. The prefix word is matched
+    // case-insensitively, the payload is not.
     let payload = |prefix: &str| -> Option<&str> {
-        original
-            .get(..prefix.len())
-            .filter(|head| head.eq_ignore_ascii_case(prefix))
-            .and_then(|_| original.get(prefix.len()..))
+        let word = prefix.trim_end();
+        let head = original.get(..word.len())?;
+        if !head.eq_ignore_ascii_case(word) {
+            return None;
+        }
+        let rest = original.get(word.len()..)?;
+        rest.strip_prefix(|ch: char| matches!(ch, ' ' | '\t' | '\n' | '\r' | ':' | ','))
     };
 
     // 2. AI Prompting & Auto-Send: "prompt <text>", "ask <text>"
@@ -198,15 +222,26 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
         }
     }
 
-    // 3. Open Website: "open website <url>", "open url <url>", "go to <url>"
+    // 3. Open Website: "open website <url>", "open url <url>"
     if let Some(rest) = payload("open website ")
         .or_else(|| payload("open site "))
         .or_else(|| payload("open url "))
-        .or_else(|| payload("go to "))
     {
         let url = rest.trim();
         if !url.is_empty() {
             return Some(VoiceAction::OpenUrl(url.to_string()));
+        }
+    }
+
+    // 3b. "go to <x>" opens a URL only when <x> actually looks like one.
+    // Otherwise it is an app switch ("go to chrome").
+    if let Some(rest) = payload("go to ") {
+        let target = rest.trim();
+        if !target.is_empty() {
+            if looks_like_url(target) {
+                return Some(VoiceAction::OpenUrl(target.to_string()));
+            }
+            return Some(VoiceAction::SwitchApp(target.to_string()));
         }
     }
 
@@ -427,6 +462,40 @@ mod tests {
             parse_voice_action("open website github.com"),
             Some(VoiceAction::OpenUrl("github.com".to_string()))
         );
+    }
+
+    #[test]
+    fn go_to_routes_urls_and_applications_correctly() {
+        assert_eq!(
+            parse_voice_action("go to example.com"),
+            Some(VoiceAction::OpenUrl("example.com".to_string()))
+        );
+        assert_eq!(
+            parse_voice_action("go to https://example.com/docs"),
+            Some(VoiceAction::OpenUrl("https://example.com/docs".to_string()))
+        );
+        assert_eq!(
+            parse_voice_action("go to chrome"),
+            Some(VoiceAction::SwitchApp("chrome".to_string()))
+        );
+    }
+
+    #[test]
+    fn command_prefixes_accept_any_whitespace_separator() {
+        assert_eq!(
+            parse_voice_action("prompt\twrite a test"),
+            Some(VoiceAction::PromptAndSend("write a test".to_string()))
+        );
+        assert_eq!(
+            parse_voice_action("ask: explain this"),
+            Some(VoiceAction::PromptAndSend("explain this".to_string()))
+        );
+        assert_eq!(
+            parse_voice_action("switch to\tcursor"),
+            Some(VoiceAction::SwitchApp("cursor".to_string()))
+        );
+        // A prefix that is only a prefix of a word must not match.
+        assert_eq!(parse_voice_action("prompts are great"), None);
     }
 
     #[test]

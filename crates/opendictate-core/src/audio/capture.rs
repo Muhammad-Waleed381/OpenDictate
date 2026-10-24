@@ -36,28 +36,33 @@ unsafe impl Sync for SharedCaptureHandle {}
 /// Shared capture buffer with a monotonic base offset.
 ///
 /// `base` counts the samples that have been dropped from the front of
-/// `samples` — either drained to enforce `MAX_RECORDING_SAMPLES` or discarded
+/// `samples` — either evicted to enforce `MAX_RECORDING_SAMPLES` or discarded
 /// by `clear_buffer()`. Consumers track an *absolute* watermark (total samples
 /// ever appended) which maps to a buffer index as `watermark - base`, so
-/// watermarks stay valid across front-drains and buffer clears.
+/// watermarks stay valid across front-evictions and buffer clears.
 #[derive(Default)]
 pub(crate) struct SharedBuffer {
-    pub(crate) samples: Vec<f32>,
+    /// Live samples, oldest first. A deque keeps the front eviction that
+    /// enforces `MAX_RECORDING_SAMPLES` O(1); a `Vec` drain would memmove up
+    /// to 7.68 MB while the realtime capture callback holds this buffer.
+    pub(crate) samples: std::collections::VecDeque<f32>,
     pub(crate) base: u64,
 }
 
 impl SharedBuffer {
-    /// Appends samples, draining from the front when the recording cap would
-    /// be exceeded. Advances `base` by the number of drained samples.
+    /// Appends samples, evicting from the front when the recording cap would
+    /// be exceeded. Advances `base` by the number of evicted samples.
     pub(crate) fn push(&mut self, new_samples: &[f32]) {
         let to_add = new_samples.len();
         if self.samples.len() + to_add > MAX_RECORDING_SAMPLES {
             let excess = (self.samples.len() + to_add).saturating_sub(MAX_RECORDING_SAMPLES);
             let drain_len = excess.min(self.samples.len());
-            self.samples.drain(0..drain_len);
+            for _ in 0..drain_len {
+                self.samples.pop_front();
+            }
             self.base += drain_len as u64;
         }
-        self.samples.extend_from_slice(new_samples);
+        self.samples.extend(new_samples.iter().copied());
     }
 
     /// Drops samples while retaining absolute consumer positions.
@@ -68,7 +73,12 @@ impl SharedBuffer {
 
     fn drain(&mut self) -> Vec<f32> {
         self.base += self.samples.len() as u64;
-        std::mem::take(&mut self.samples)
+        self.samples.drain(..).collect()
+    }
+
+    /// Copies the samples from `start` (a buffer index) to the end.
+    pub(crate) fn tail_from(&self, start: usize) -> Vec<f32> {
+        self.samples.iter().skip(start).copied().collect()
     }
 }
 
@@ -226,9 +236,12 @@ impl AudioRecorder {
             Arc::clone(&self.capture_error),
         )
         .inspect_err(|_| {
-            if self.buffered_samples() == 0 {
-                self.state.store(STATE_IDLE, Ordering::SeqCst);
-            }
+            // The producer publishes `STATE_FAILED` and a readable error. Keep
+            // that machine-readable state: overwriting it with `STATE_IDLE`
+            // would make a failed session indistinguishable from one that
+            // never started, and would make the next start discard the audio
+            // the failed session was supposed to retain.
+            self.state.store(STATE_FAILED, Ordering::SeqCst);
         })?;
         *self.stream.0.lock().unwrap_or_else(|e| e.into_inner()) = CaptureHandle::Pulse(handle);
         log::info!("pulse recording started: {source}");
@@ -276,10 +289,14 @@ impl AudioRecorder {
         if samples.is_empty() {
             return 0.0;
         }
-        let start = samples.len().saturating_sub(SAMPLE_RATE as usize / 10);
-        let window = &samples[start..];
-        let sum_sq: f32 = window.iter().map(|&s| s * s).sum();
-        (sum_sq / window.len() as f32).sqrt()
+        // The most recent 100 ms, newest samples last. Iterated in reverse so
+        // no window copy is needed on the metering path.
+        let count = (SAMPLE_RATE as usize / 10).min(samples.len());
+        let mut sum_sq = 0.0f32;
+        for sample in samples.iter().rev().take(count) {
+            sum_sq += sample * sample;
+        }
+        (sum_sq / count as f32).sqrt()
     }
 
     /// Returns every sample appended since the given watermark and advances
@@ -296,7 +313,7 @@ impl AudioRecorder {
         let buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
         let end = buffer.base + buffer.samples.len() as u64;
         let start = (*watermark).min(end).saturating_sub(buffer.base) as usize;
-        let out = buffer.samples[start..].to_vec();
+        let out = buffer.tail_from(start);
         *watermark = end;
         out
     }
@@ -475,7 +492,7 @@ impl AudioRecorder {
         let mut buffer = self.buffer.lock().unwrap_or_else(|e| e.into_inner());
         let end = buffer.base + buffer.samples.len() as u64;
         let start = (*watermark).min(end).saturating_sub(buffer.base) as usize;
-        let out = buffer.samples[start..].to_vec();
+        let out = buffer.tail_from(start);
         *watermark = end;
         buffer.clear();
         Ok(out)
@@ -541,6 +558,11 @@ fn convert_to_mono<T: cpal::Sample>(data: &[T], channels: usize) -> Vec<f32>
 where
     f32: cpal::FromSample<T>,
 {
+    // `chunks_exact(0)` panics and the division yields NaN. A device that
+    // reports no channels produces no frames at all.
+    if channels == 0 {
+        return Vec::new();
+    }
     data.chunks_exact(channels)
         .map(|frame| {
             frame

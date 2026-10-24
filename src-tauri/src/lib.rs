@@ -6,6 +6,7 @@ mod dictation;
 mod dock;
 #[cfg(target_os = "macos")]
 mod doubletap;
+mod focus;
 mod hotkey;
 mod inject;
 mod notify;
@@ -153,6 +154,9 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             hotkey::install_socket_toggle(handle.clone(), socket_path);
             dock::init(handle);
+            // The dock must never keep the activation or the keyboard focus
+            // away from the application the user is working in.
+            focus::start_watchdog(handle);
 
             if settings.handsfree_mode {
                 let state = handle.state::<AppState>();
@@ -185,6 +189,9 @@ pub fn run() {
             let handle = handle.clone();
             std::thread::spawn(move || {
                 let state = dictation::state_from_app(&handle);
+                // Pre-warm the currently configured model and VAD in background
+                dictation::warmup_current_model(&state);
+
                 if !opendictate_core::stt::models::is_caption_model_ready() {
                     log::info!("fetching caption model in background");
                     let _ = opendictate_core::stt::models::ensure_model(

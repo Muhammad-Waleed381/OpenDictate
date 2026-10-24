@@ -48,8 +48,15 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
         )
         .is_ok();
     // Old releases recorded that a reset happened, but not which history
-    // rows belonged to it. Preserve their totals and conservatively exclude
-    // existing rows from subsequent adjustments; new inserts are tracked.
+    // rows belonged to it. Their post-reset totals are kept as they are; the
+    // rows that produced them cannot be identified, so they are excluded from
+    // *future* adjustments (an edit or delete of such a row must not change
+    // the preserved totals). Newly inserted rows are tracked normally.
+    //
+    // A consequence of that ambiguity: on a legacy database the aggregates
+    // stay frozen at the reset boundary, so deleting a row that was already
+    // counted leaves the day's total unchanged. That is deliberate — the
+    // alternative would silently rewrite totals the user explicitly reset.
     if stats_cleared {
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value)
@@ -66,6 +73,9 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
         )
         .optional()?
         .is_some();
+    // The backfill recomputes `daily_stats` from history, so it must not run
+    // when a reset already preserved the aggregates: that would resurrect the
+    // totals the user cleared.
     if !stats_cleared && (backfilled == 0 || !word_count_migrated) {
         let tx = conn.unchecked_transaction()?;
         tx.execute("DELETE FROM daily_stats", [])?;
@@ -432,6 +442,46 @@ mod tests {
         assert_eq!(day_words(&conn, &day), (2, 1));
         delete_history(&conn, 2).unwrap();
         assert_eq!(day_words(&conn, &day), (0, 0));
+    }
+
+    #[test]
+    fn legacy_reset_freezes_the_aggregates_at_the_reset_boundary() {
+        // A legacy database recorded that a reset happened but not which
+        // history rows belonged to it. The preserved totals must not be
+        // rewritten by later edits or deletes of pre-existing rows.
+        let conn = Connection::open_in_memory().unwrap();
+        stats_tables(&conn);
+        insert_history(
+            &conn,
+            &HistoryEntry {
+                id: 0,
+                text: "old words before the reset".into(),
+                created_at: "83".into(),
+                duration_ms: 1000,
+                source: "dictate".into(),
+            },
+        )
+        .unwrap();
+        // The legacy shape: the reset cleared the aggregates and recorded only
+        // the marker, without a history boundary.
+        conn.execute("DELETE FROM daily_stats", []).unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('stats_cleared', '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value)
+             SELECT 'stats_reset_history_id', CAST(COALESCE(MAX(id), 0) AS TEXT) FROM history",
+            [],
+        )
+        .unwrap();
+
+        // The pre-existing row no longer contributes to the aggregates.
+        update_history(&conn, 1, "changed").unwrap();
+        delete_history(&conn, 1).unwrap();
+        assert_eq!(word_stats(&conn).unwrap(), Vec::<(String, i64)>::new());
     }
 
     #[test]

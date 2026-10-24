@@ -137,6 +137,11 @@ export function DockButton() {
       <button
         type="button"
         onClick={toggle}
+        // Do not let the click move the keyboard focus into the overlay.
+        // The dock lives on every workspace, and a window that holds the
+        // focus keeps it across workspace switches, so the focus would stay
+        // on the workspace the user just left.
+        onMouseDown={(event) => event.preventDefault()}
         disabled={busy || isProcessing}
         className={`relative z-10 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 ${live ? "bg-black/90" : "bg-white/90"} ${tint}`}
         aria-label={canStop ? "Stop recording" : "Start recording"}

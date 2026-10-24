@@ -34,7 +34,10 @@ def extract(archive, destination):
                     raise ValueError(f'unsupported archive entry: {entry.name}')
                 # Validate immediately before extracting: an earlier symlink
                 # must not redirect a later member outside the destination.
-                tar.extract(entry, root)
+                # The 'data' filter is requested explicitly: on Python < 3.12
+                # the default is 'fully_trusted', which would allow a member
+                # to be written through a symlink created by an earlier one.
+                tar.extract(entry, root, filter='data')
 
 
 if __name__ == '__main__':

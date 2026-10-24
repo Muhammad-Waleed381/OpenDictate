@@ -1,3 +1,4 @@
+pub mod cpu;
 mod download;
 pub mod engine;
 mod hotwords;

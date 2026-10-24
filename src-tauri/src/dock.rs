@@ -46,10 +46,7 @@ pub(crate) fn compute_coordinates(
             ox + (w.saturating_sub(win_w) as f64 - margin).max(0.0) as i32,
             oy + margin.max(0.0) as i32,
         ),
-        "top_left" => (
-            ox + margin.max(0.0) as i32,
-            oy + margin.max(0.0) as i32,
-        ),
+        "top_left" => (ox + margin.max(0.0) as i32, oy + margin.max(0.0) as i32),
         _ => (
             ox + (w.saturating_sub(win_w) as f64 - margin).max(0.0) as i32,
             oy + (h.saturating_sub(win_h) as f64 - margin).max(0.0) as i32,
@@ -57,13 +54,19 @@ pub(crate) fn compute_coordinates(
     }
 }
 
-fn calculate_position(win: &WebviewWindow, width: u32, height: u32, position: &str) -> PhysicalPosition<i32> {
+fn calculate_position(
+    win: &WebviewWindow,
+    width: u32,
+    height: u32,
+    position: &str,
+) -> PhysicalPosition<i32> {
     let default = PhysicalPosition { x: 100, y: 16 };
     let Some(monitor) = win
         .current_monitor()
         .ok()
         .flatten()
-        .or_else(|| win.primary_monitor().ok().flatten()) else {
+        .or_else(|| win.primary_monitor().ok().flatten())
+    else {
         return default;
     };
     let scale = monitor.scale_factor();
@@ -91,11 +94,59 @@ pub fn reposition(app: &AppHandle) {
 pub fn init(app: &AppHandle) {
     if let Some(win) = window(app) {
         let _ = win.set_always_on_top(true);
-        let _ = win.show();
+        #[cfg(target_os = "linux")]
+        make_non_focusable(app);
+        show_if_hidden(&win);
     }
     #[cfg(target_os = "linux")]
     shape_input(app);
     enforce(app);
+}
+
+/// Shows the dock only when it is actually hidden.
+///
+/// On macOS `show()` maps to `makeKeyAndOrderFront:`, which *activates* the
+/// owning application. The dock is redrawn on every caption frame, so
+/// re-showing it would repeatedly activate OpenDictate and take the key
+/// window away from the application the user is working in. Because the
+/// dock cannot become the key window, macOS then left the previously focused
+/// application holding it — and since a space switch only moves the key
+/// window when the frontmost application changes, `Ctrl+W` and `Alt+F4`
+/// closed the application on the space the user had left.
+fn show_if_hidden(win: &WebviewWindow) {
+    match win.is_visible() {
+        Ok(true) => {}
+        _ => {
+            let _ = win.show();
+        }
+    }
+}
+
+/// Keeps the dock out of the window manager's focus handling.
+///
+/// The dock lives on every workspace (`gtk_window_stick()`), and a sticky
+/// window that holds the keyboard focus keeps it across workspace switches:
+/// the focus would not follow the user to the new workspace, so `Ctrl+W` and
+/// `Alt+F4` would close the application the user had left behind. The dock
+/// must therefore never be given the keyboard focus.
+#[cfg(target_os = "linux")]
+fn make_non_focusable(app: &AppHandle) {
+    use gtk::prelude::*;
+
+    let Some(win) = window(app) else { return };
+    let Ok(vbox) = win.default_vbox() else { return };
+
+    let mut widget: Option<gtk::Widget> = Some(vbox.upcast());
+    while let Some(current) = widget {
+        if let Ok(gtk_window) = current.clone().downcast::<gtk::Window>() {
+            // Never take the focus when the window is mapped, and never
+            // accept it from the window manager.
+            gtk_window.set_focus_on_map(false);
+            gtk_window.set_accept_focus(false);
+            return;
+        }
+        widget = current.parent();
+    }
 }
 
 /// Restricts the dock's input region to the bottom strip where the content
@@ -151,14 +202,19 @@ fn apply_dock_size(app: &AppHandle) {
     if let Some(win) = window(app) {
         let width = current_width();
         let _ = win.set_always_on_top(true);
-        let _ = win.show();
+        show_if_hidden(&win);
         let size = win.outer_size().ok().unwrap_or(PhysicalSize {
             width,
             height: DOCK_SIZE as u32,
         });
         let dock_position = app
             .try_state::<crate::state::AppState>()
-            .and_then(|s| s.settings.lock().ok().map(|settings| settings.dock_position.clone()))
+            .and_then(|s| {
+                s.settings
+                    .lock()
+                    .ok()
+                    .map(|settings| settings.dock_position.clone())
+            })
             .unwrap_or_else(|| "bottom_right".to_string());
         let target = calculate_position(&win, size.width, size.height, &dock_position);
         let placed = win
@@ -196,7 +252,7 @@ fn emit_dock_event(app: &AppHandle, event: &str, payload: serde_json::Value) {
 /// always has the on-screen mic control).
 pub fn set_caption(app: &AppHandle, text: Option<&str>) {
     let text = text.map(str::trim).filter(|t| !t.is_empty());
-    
+
     // Deduplicate consecutive identical caption calls to avoid flooding WebKit with eval calls
     if let Ok(mut last) = LAST_CAPTION.lock() {
         let text_owned = text.map(|s| s.to_string());
@@ -237,6 +293,7 @@ pub fn ensure_on_main(app: &AppHandle) {
     #[cfg(target_os = "linux")]
     {
         stick_to_all_workspaces(app);
+        make_non_focusable(app);
         shape_input(app);
     }
     ensure(app);
@@ -255,11 +312,7 @@ fn enforce(app: &AppHandle) {
                 width: CAPTION_STRIP_WIDTH,
                 height: DOCK_SIZE as u32,
             });
-            let monitor = win
-                .current_monitor()
-                .ok()
-                .flatten()
-                .map(|m| *m.size());
+            let monitor = win.current_monitor().ok().flatten().map(|m| *m.size());
             let pos = win.outer_position().ok();
             log::info!("dock window: size={size:?} pos={pos:?} monitor={monitor:?}");
         }
@@ -289,10 +342,7 @@ pub fn set_state(app: &AppHandle, status: &str, message: Option<&str>) {
         "message": message,
     });
     emit_dock_event(app, "overlay-state", payload.clone());
-    let _ = app.emit(
-        "overlay-state",
-        payload,
-    );
+    let _ = app.emit("overlay-state", payload);
     crate::tray::apply_state_icon(app, status);
 }
 
@@ -362,7 +412,8 @@ mod tests {
 
         // Secondary monitor placed to the left at ox=-1920, oy=0
         let (ox_l, oy_l, w_l, h_l) = (-1920, 0, 1920, 1032);
-        let (xl, yl) = compute_coordinates(ox_l, oy_l, w_l, h_l, win_w, win_h, margin, "bottom_right");
+        let (xl, yl) =
+            compute_coordinates(ox_l, oy_l, w_l, h_l, win_w, win_h, margin, "bottom_right");
         assert_eq!(xl, -1920 + (1920 - 210 - 16));
         assert_eq!(yl, 987);
     }
@@ -385,4 +436,3 @@ mod tests {
         assert_eq!(y2, 1080 - 29 - 16);
     }
 }
-

@@ -16,6 +16,7 @@ export interface ModelInfo {
   name: string;
   kind: "stt" | "vad" | "caption" | "kws";
   engine_key: string | null;
+  company?: string | null;
   size_bytes: number;
   disk_bytes: number;
   installed: boolean;
@@ -162,6 +163,7 @@ export interface TranscriptPayload {
   injected: boolean;
   copied?: boolean;
   error?: string;
+  duration_ms?: number;
 }
 
 export interface PartialPayload {

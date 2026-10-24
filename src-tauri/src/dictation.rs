@@ -198,6 +198,14 @@ pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String
     if !test {
         notify::notify("Dictation on", "Recording — use your hotkey to stop");
         play_sound(state, crate::audio::SoundEvent::Listening);
+        let worker_app = app.clone();
+        std::thread::Builder::new()
+            .name("opendictate-eager-warmup".into())
+            .spawn(move || {
+                let state = state_from_app(&worker_app);
+                warmup_current_model(&state);
+            })
+            .ok();
     }
     spawn_level_emitter(app, state, token);
     if !test && models::is_caption_model_ready() {
@@ -208,6 +216,10 @@ pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String
         "recording-changed",
         serde_json::json!({ "recording": true }),
     );
+    // Starting from the dock's microphone button activates OpenDictate on
+    // macOS. Hand the activation straight back so the application the user
+    // is working in keeps the key window.
+    crate::focus::ensure_external_focus(app);
     Ok(())
 }
 
@@ -315,6 +327,9 @@ fn stop_session(
     if let Err(error) = &result {
         report_error(app, state, token, error);
     }
+    // The session is over: hand the activation back to the application the
+    // user is working in, in case the dock took it when the session started.
+    crate::focus::ensure_external_focus(app);
     result
 }
 
@@ -510,6 +525,21 @@ fn spawn_continuous_loop(
             format!("failed to start continuous capture: {e}")
         })?;
     Ok(())
+}
+
+pub fn warmup_current_model(state: &AppState) {
+    let model_id = selected_model_id(state);
+    if !models::is_model_installed(&model_id) {
+        return;
+    }
+    if models::is_streaming_model(&model_id) {
+        let _ = warmup_streaming(state);
+    } else {
+        let _ = load_engine(state);
+    }
+    if models::is_vad_ready() {
+        let _ = run_vad(state, &[0.0f32; 1600]);
+    }
 }
 
 pub fn warmup_streaming(state: &AppState) -> Result<Arc<StreamingRecognizer>, String> {
@@ -1017,6 +1047,10 @@ pub fn load_engine(state: &AppState) -> Result<Arc<SttEngine>, String> {
         ModelKind::Whisper
     } else if models::is_transducer_model(&model_id) {
         ModelKind::NemoTransducer
+    } else if models::is_omnilingual_model(&model_id) {
+        ModelKind::OmnilingualCtc
+    } else if models::is_cohere_model(&model_id) {
+        ModelKind::CohereTranscribe
     } else {
         ModelKind::NemoCtc
     };
@@ -1064,6 +1098,10 @@ fn handle_voice_action_or_snippet(
     let label = match action {
         Some(VoiceAction::Undo) => {
             inject::undo_last_insert()?;
+            // The insertion has been undone: the UI must not offer another
+            // Undo for it, or a second press would remove an earlier
+            // insertion.
+            *state.last_inserted.lock().map_err(|e| e.to_string())? = None;
             "Undo".to_string()
         }
         Some(VoiceAction::DeleteWord) => {
@@ -1215,7 +1253,12 @@ fn handle_snippet_command_locked(
     if let Err(error) = inject::inject_text(app, &text, &mode) {
         let _ = app.emit(
             "transcript",
-            serde_json::json!({ "text": text, "injected": false, "error": error }),
+            serde_json::json!({
+                "text": text,
+                "injected": false,
+                "error": error,
+                "duration_ms": 0,
+            }),
         );
         return Err(format!("Failed to insert snippet: {error}"));
     }
@@ -1225,7 +1268,12 @@ fn handle_snippet_command_locked(
     }
     let _ = app.emit(
         "transcript",
-        serde_json::json!({ "text": text, "injected": inserted, "copied": !inserted }),
+        serde_json::json!({
+            "text": text,
+            "injected": inserted,
+            "copied": !inserted,
+            "duration_ms": 0,
+        }),
     );
     show_completed(
         app,
@@ -1327,7 +1375,12 @@ fn commit_text_locked(
     if let Err(error) = inject::inject_text(app, text, &mode) {
         let _ = app.emit(
             "transcript",
-            serde_json::json!({ "text": text, "injected": false, "error": error }),
+            serde_json::json!({
+                "text": text,
+                "injected": false,
+                "error": error,
+                "duration_ms": duration_ms,
+            }),
         );
         return Err(format!("Failed to insert text (saved in History): {error}"));
     }
@@ -1337,7 +1390,12 @@ fn commit_text_locked(
     }
     let _ = app.emit(
         "transcript",
-        serde_json::json!({ "text": text, "injected": inserted, "copied": !inserted }),
+        serde_json::json!({
+            "text": text,
+            "injected": inserted,
+            "copied": !inserted,
+            "duration_ms": duration_ms,
+        }),
     );
     if finish || !continuous {
         let label = if inserted {
@@ -1707,5 +1765,41 @@ mod session_regressions {
             prepare_transcript("hello comma github", true, &["GitHub".into()], true).text,
             "Hello, GitHub"
         );
+    }
+
+    #[test]
+    fn warmup_current_model_handles_missing_safely() {
+        let state = AppState {
+            sessions: Arc::new(crate::session::SessionControl::default()),
+            recording_token: Arc::new(std::sync::Mutex::new(None)),
+            continuous_queue: Arc::new(std::sync::Mutex::new(None)),
+            recorder: Arc::new(opendictate_core::audio::capture::AudioRecorder::new()),
+            test_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            db: Arc::new(std::sync::Mutex::new(rusqlite::Connection::open_in_memory().unwrap())),
+            settings: Arc::new(std::sync::Mutex::new(crate::state::Settings {
+                stt_model: "nonexistent-model-id".into(),
+                ..Default::default()
+            })),
+            hotkey: Arc::new(std::sync::Mutex::new(None)),
+            continuous: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stream: Arc::new(std::sync::Mutex::new(None)),
+            stream_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_inserted: Arc::new(std::sync::Mutex::new(None)),
+            stt_engine: Arc::new(std::sync::Mutex::new(None)),
+            streaming_engine: Arc::new(std::sync::Mutex::new(None)),
+            caption_engine: Arc::new(std::sync::Mutex::new(None)),
+            caption_stream: Arc::new(std::sync::Mutex::new(None)),
+            caption_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            kws_engine: Arc::new(std::sync::Mutex::new(None)),
+            handsfree_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            handsfree_awake: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            user_dictation_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            streaming_rtf_x100: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            gpu_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            vad: Arc::new(std::sync::Mutex::new(None)),
+            active_downloads: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        };
+        warmup_current_model(&state);
+        assert!(state.stt_engine.lock().unwrap().is_none());
     }
 }

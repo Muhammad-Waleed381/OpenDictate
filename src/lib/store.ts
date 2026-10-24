@@ -42,6 +42,7 @@ interface OpenDictateStore {
   setModels: (models: api.ModelsStatus) => void;
   setCatalog: (catalog: api.ModelInfo[]) => void;
   setSettings: (settings: api.Settings) => void;
+  patchSettings: (patch: Partial<api.Settings>) => void;
   setHistory: (history: api.HistoryEntry[]) => void;
   setDictionary: (dictionary: api.DictEntry[]) => void;
   setSnippets: (snippets: api.SnippetEntry[]) => void;
@@ -99,6 +100,17 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
   setCatalog: (catalog) => set({ catalog }),
   setSettings: (settings) =>
     set((state) => ({ settings, settingsRevision: state.settingsRevision + 1 })),
+  // Merges a single change into the settings that are current *at write
+  // time*. Writing a whole snapshot back would revert a change another
+  // handler made while this one was in flight.
+  patchSettings: (patch) =>
+    set((state) => {
+      if (!state.settings) return state;
+      return {
+        settings: { ...state.settings, ...patch },
+        settingsRevision: state.settingsRevision + 1,
+      };
+    }),
   setHistory: (history) => set({ history }),
   setDictionary: (dictionary) => set({ dictionary }),
   setSnippets: (snippets) => set({ snippets }),
@@ -119,9 +131,11 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
       if (get().recordingRevision === revision) get().setRecording(true);
       return get().recording;
     } catch (error) {
-      if (get().recordingOperation === operation && get().recordingRevision === revision) {
-        set({ recordingMode: null });
-      }
+      // Always clear the mode on a failed start. A native event that landed
+      // while the start was in flight bumps the revision, and skipping the
+      // reset would leave `recordingMode` latched on "test" — which keeps the
+      // Record button and the microphone test permanently disabled.
+      if (get().recordingOperation === operation) set({ recordingMode: null });
       throw error;
     } finally {
       if (get().recordingOperation === operation) set({ recordingBusy: false });
@@ -265,7 +279,9 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
     try {
       // Resolves after extraction and required dependencies, not at 100% bytes.
       await api.ensureModel(id);
-      await get().refreshModelState();
+      // A failed status refresh must not turn a successful installation into
+      // a reported failure: the model is on disk either way.
+      await get().refreshModelState().catch(() => {});
     } finally {
       get().finishModel(id);
       // VAD may be installed as a dependency of this model.
@@ -275,6 +291,10 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
 
   cancelModel: async (id) => {
     if (get().cancellingModels.includes(id)) return;
+    // Only an in-flight installation can be cancelled. A dependency such as
+    // the VAD model is not registered separately, so cancelling it would
+    // never be acknowledged and the "cancelling" state would never clear.
+    if (!get().modelDownloads.includes(id)) return;
     set((state) => ({ cancellingModels: [...state.cancellingModels, id] }));
     try {
       await api.cancelModelDownload(id);

@@ -62,9 +62,12 @@ function useOpenDictateEvents() {
         store.refreshModelState().catch(() => {});
       }),
       api.onHistoryUpdated(() =>
-        api.getHistory().then((history) => useStore.setState({ history })),
+        api
+          .getHistory()
+          .then((history) => useStore.setState({ history }))
+          .catch(() => {}),
       ),
-      api.onHistoryUpdated(() => store.refreshStats()),
+      api.onHistoryUpdated(() => store.refreshStats().catch(() => {})),
       api.onPartial((payload) => store.setPartial(payload.text)),
       api.onRecordingChanged((payload) =>
         store.setRecording(payload.recording)
@@ -166,7 +169,11 @@ export function MainApp() {
 
   useEffect(() => {
     const unlistenPromise = api.onTranscript((payload) => {
-      useStore.setState({ lastResult: { ...payload, duration_ms: 0 } });
+      // The event is the authoritative outcome of an insertion, so it also
+      // carries the recording duration.
+      useStore.setState({
+        lastResult: { ...payload, duration_ms: payload.duration_ms ?? 0 },
+      });
     });
     return () => {
       unlistenPromise.then((fn) => fn()).catch(() => {});

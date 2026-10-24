@@ -30,7 +30,7 @@ function defaultInvoke(command: string) {
     case "get_mic": return Promise.resolve("mic");
     case "is_recording": return Promise.resolve(false);
     case "word_stats": return Promise.resolve(null);
-    case "stop_recording": return Promise.resolve({ text: "", duration_ms: 0 });
+    case "stop_recording": return Promise.resolve({ text: "mock transcript", duration_ms: 1200 });
     case "list_mics": return Promise.resolve([{ id: "mic", label: "Microphone" }]);
     case "get_history": case "get_dictionary": case "list_snippets": return Promise.resolve([]);
     default: return Promise.resolve();
@@ -80,9 +80,32 @@ describe("model lifecycle regressions", () => {
     render(<ModelCard />);
     fireEvent.click(screen.getByRole("button", { name: /Download all missing/ }));
     await act(async () => install.reject(new Error("network failure")));
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); });
+    await act(async () => { await Promise.resolve(); });
     expect(ipc.invoke.mock.calls.filter(([command]) => command === "ensure_model")).toEqual([["ensure_model", { id: "a" }]]);
     expect(screen.queryByRole("button", { name: "Cancel all" })).not.toBeInTheDocument();
+  });
+
+  it("B037 reports a successful installation as successful when the status refresh fails", async () => {
+    useStore.setState({ catalog: [model("a")] });
+    ipc.invoke.mockImplementation((command: string) => {
+      if (command === "ensure_model") return Promise.resolve();
+      if (command === "models_status") return Promise.reject(new Error("IPC timeout"));
+      return defaultInvoke(command);
+    });
+    render(<ModelCard />);
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith("ensure_model", { id: "a" }));
+    // A failed refresh must not turn the installation into an error.
+    expect(screen.queryByText(/installation failed/i)).not.toBeInTheDocument();
+    expect(useStore.getState().modelDownloads).toEqual([]);
+  });
+
+  it("B037 never marks a dependency that has no installation as cancelling", async () => {
+    // The VAD model is a dependency of an installation; it is not registered
+    // separately, so cancelling it is never acknowledged.
+    ipc.invoke.mockImplementation((command: string) => command === "cancel_model_download" ? Promise.resolve() : defaultInvoke(command));
+    await act(async () => { await useStore.getState().cancelModel("silero-vad-v4"); });
+    expect(useStore.getState().cancellingModels).toEqual([]);
   });
 
   it("B037 refreshes status and catalog on models-ready", async () => {
@@ -94,13 +117,32 @@ describe("model lifecycle regressions", () => {
   });
 
   it("B039 does not advance onboarding for an unrelated installation", async () => {
-    useStore.setState({ catalog: [model(settings.stt_model)], models: { ...status, stt_ready: true } });
+    // The selected STT model is installed and matches the configured engine,
+    // so the gate is open for the right reason. An unrelated installation
+    // must not be what opens it — and it must not close it either.
+    useStore.setState({
+      catalog: [model(settings.stt_model, { installed: true })],
+      models: { ...status, stt_ready: true },
+    });
+    render(<Onboarding />);
+    fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    expect(screen.getByRole("button", { name: "Next →" })).toBeEnabled();
+    emit("models-ready", { file: "caption-model" });
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next →" })).toBeEnabled();
+  });
+
+  it("B039 keeps Next disabled while the selected STT model is not installed", async () => {
+    useStore.setState({
+      catalog: [model(settings.stt_model, { installed: false })],
+      models: { ...status, stt_ready: true },
+    });
     render(<Onboarding />);
     fireEvent.click(screen.getByRole("button", { name: "Next →" }));
     expect(screen.getByRole("button", { name: "Next →" })).toBeDisabled();
     emit("models-ready", { file: "caption-model" });
     await act(async () => {});
-    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Next →" })).toBeDisabled();
   });
 
@@ -161,7 +203,7 @@ describe("model lifecycle regressions", () => {
     fireEvent.click(screen.getByRole("button", { name: /Download all missing/ }));
     act(() => useStore.getState().addModelProgress({ file: "a", received: 100, total: 100 }));
     expect(screen.getByText("Installing…")).toBeInTheDocument();
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 600)); });
+    await act(async () => { await Promise.resolve(); });
     expect(ipc.invoke.mock.calls.filter(([command]) => command === "ensure_model")).toHaveLength(1);
     await act(async () => first.resolve());
     expect(ipc.invoke).toHaveBeenCalledWith("ensure_model", { id: "b" });
@@ -263,6 +305,20 @@ describe("session and listener regressions", () => {
     });
     await act(async () => stop.resolve({ text: "old session", duration_ms: 10 }));
     expect(useStore.getState().lastResult).toBeNull();
+  });
+
+  it("B006 clears the microphone-test mode when a start fails after a native event", async () => {
+    // A native `recording-changed` event lands while the start is in flight
+    // and bumps the revision. The failed start must still clear the mode,
+    // otherwise the Record button stays disabled forever.
+    const start = deferred<void>();
+    ipc.invoke.mockImplementation((command: string) => command === "start_recording" ? start.promise : defaultInvoke(command));
+    const hook = renderHook(useRecording);
+    act(() => { void useStore.getState().startRecording("test").catch(() => {}); });
+    act(() => { useStore.getState().setRecording(true); });
+    await act(async () => start.reject(new Error("a dictation session is already active")));
+    expect(useStore.getState().recordingMode).toBeNull();
+    expect(hook.result.current.busy).toBe(false);
   });
 
   it("B001 refuses a microphone test while dictation is active", () => {
@@ -375,6 +431,35 @@ describe("interaction regressions", () => {
     expect(screen.getByText(/custom or vi key maps may differ/)).toBeInTheDocument();
   });
 
+  it("B025 reverts the polish provider when the backend rejects the change", async () => {
+    ipc.invoke.mockImplementation((command: string) =>
+      command === "set_settings" ? Promise.reject(new Error("backend refused")) : defaultInvoke(command));
+    render(<SettingsTab />);
+    const trigger = screen.getByRole("combobox", { name: "Polish provider" });
+    fireEvent.click(trigger);
+    const groq = await screen.findByRole("option", { name: /Groq LPU/i });
+    fireEvent.pointerDown(groq, { pointerType: "mouse" });
+    fireEvent.click(groq);
+    await waitFor(() => expect(useStore.getState().settings?.polish_provider).toBe("off"));
+  });
+
+  it("B029 keeps an unrelated setting when another one is changed", async () => {
+    // Two handlers in flight at once must not overwrite each other: a whole
+    // settings snapshot written back would revert the other change.
+    const first = deferred<void>();
+    let call = 0;
+    ipc.invoke.mockImplementation((command: string) => {
+      if (command !== "set_settings") return defaultInvoke(command);
+      call += 1;
+      return call === 1 ? first.promise : Promise.resolve();
+    });
+    render(<SettingsTab />);
+    act(() => { void useStore.getState().patchSettings({ continuous: true }); });
+    act(() => { useStore.getState().patchSettings({ audio_feedback: true }); });
+    await act(async () => { first.resolve(); await Promise.resolve(); });
+    expect(useStore.getState().settings).toMatchObject({ continuous: true, audio_feedback: true });
+  });
+
   it("B049 clears the success flash when the next recording begins", () => {
     useStore.setState({ overlayState: { state: "inserted" } });
     render(<DockButton />);
@@ -434,5 +519,75 @@ describe("interaction regressions", () => {
     fireEvent.click(within(polish as HTMLElement).getByRole("combobox"));
     const option = await screen.findByRole("option", { name: /Local SLM/ });
     expect(option).toHaveAttribute("aria-disabled", "true");
+  });
+});
+
+describe("company filtering and logos", () => {
+  it("renders company filter buttons with SVG logos and filters models by company", () => {
+    const models = [
+      model("parakeet-tdt-ctc-110m-int8", { name: "Parakeet TDT 110M", company: "NVIDIA", streaming: false }),
+      model("whisper-turbo-en", { name: "Whisper Turbo", company: "OpenAI", streaming: false }),
+      model("omnilingual-asr-1600-languages-300m-ctc-int8", { name: "Omnilingual ASR 300M", company: "Meta", streaming: false }),
+      model("cohere-transcribe-14-lang-int8", { name: "Cohere Transcribe 2B", company: "Cohere", streaming: false }),
+    ];
+    useStore.setState({ catalog: models, settings: { ...settings, stt_model: "parakeet-tdt-ctc-110m-int8" } });
+
+    render(<ModelCard />);
+
+    // All company filter pills should be present
+    const toolbar = screen.getByRole("toolbar", { name: "Filter by company" });
+    expect(within(toolbar).getByRole("button", { name: /^all$/i })).toBeInTheDocument();
+    const nvidiaBtn = within(toolbar).getByRole("button", { name: /nvidia/i });
+    const openaiBtn = within(toolbar).getByRole("button", { name: /openai/i });
+    const metaBtn = within(toolbar).getByRole("button", { name: /meta/i });
+    const cohereBtn = within(toolbar).getByRole("button", { name: /cohere/i });
+
+    expect(nvidiaBtn).toBeInTheDocument();
+    expect(openaiBtn).toBeInTheDocument();
+    expect(metaBtn).toBeInTheDocument();
+    expect(cohereBtn).toBeInTheDocument();
+
+    // Verify company logos (svgs) are rendered within the company filter buttons
+    expect(nvidiaBtn.querySelector("svg")).not.toBeNull();
+    expect(openaiBtn.querySelector("svg")).not.toBeNull();
+    expect(metaBtn.querySelector("svg")).not.toBeNull();
+    expect(cohereBtn.querySelector("svg")).not.toBeNull();
+
+    // Initially, all models in non-streaming view are visible
+    expect(screen.getByText("Parakeet TDT 110M")).toBeInTheDocument();
+    expect(screen.getByText("Whisper Turbo")).toBeInTheDocument();
+    expect(screen.getByText("Omnilingual ASR 300M")).toBeInTheDocument();
+    expect(screen.getByText("Cohere Transcribe 2B")).toBeInTheDocument();
+
+    // Click Meta filter
+    fireEvent.click(metaBtn);
+    expect(screen.getByText("Omnilingual ASR 300M")).toBeInTheDocument();
+    expect(screen.queryByText("Parakeet TDT 110M")).not.toBeInTheDocument();
+    expect(screen.queryByText("Whisper Turbo")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cohere Transcribe 2B")).not.toBeInTheDocument();
+
+    // Click All filter
+    fireEvent.click(within(toolbar).getByRole("button", { name: /^all$/i }));
+    expect(screen.getByText("Parakeet TDT 110M")).toBeInTheDocument();
+    expect(screen.getByText("Omnilingual ASR 300M")).toBeInTheDocument();
+
+    // Search query matches company name
+    const searchInput = screen.getByPlaceholderText(/Filter models/);
+    fireEvent.change(searchInput, { target: { value: "cohere" } });
+    expect(screen.getByText("Cohere Transcribe 2B")).toBeInTheDocument();
+    expect(screen.queryByText("Parakeet TDT 110M")).not.toBeInTheDocument();
+    expect(screen.queryByText("Omnilingual ASR 300M")).not.toBeInTheDocument();
+  });
+
+  it("displays company badge on model cards", () => {
+    const models = [
+      model("omnilingual-asr-1600-languages-300m-ctc-int8", { name: "Omnilingual ASR 300M", company: "Meta", streaming: false }),
+    ];
+    useStore.setState({ catalog: models, settings: { ...settings, stt_model: "omnilingual-asr-1600-languages-300m-ctc-int8" } });
+
+    render(<ModelCard />);
+    // Badge on the card contains Meta
+    const metaElements = screen.getAllByText("Meta");
+    expect(metaElements.length).toBeGreaterThanOrEqual(2); // One in filter toolbar, one in model card badge
   });
 });

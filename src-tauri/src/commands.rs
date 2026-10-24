@@ -216,7 +216,10 @@ pub async fn reset_settings(app: AppHandle) -> Result<crate::state::Settings, St
 
 #[tauri::command]
 pub async fn remove_model(id: String, app: AppHandle) -> Result<(), String> {
-    use std::sync::{atomic::AtomicBool, Arc};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
     let downloads = Arc::clone(&app.state::<AppState>().active_downloads);
     let owner = Arc::new(AtomicBool::new(false));
     {
@@ -229,8 +232,12 @@ pub async fn remove_model(id: String, app: AppHandle) -> Result<(), String> {
         active.insert(id.clone(), Arc::clone(&owner));
     }
     let worker_id = id.clone();
+    let worker_cancel = Arc::clone(&owner);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        models::remove_model(&worker_id).map_err(|e| e.to_string())
+        // The removal waits for any in-flight operation on the same model.
+        // A cancellation must abort that wait instead of blocking forever.
+        let cancelled = || worker_cancel.load(Ordering::SeqCst);
+        models::remove_model_with_cancel(&worker_id, &cancelled).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("remove model worker failed: {e}"))
@@ -241,17 +248,12 @@ pub async fn remove_model(id: String, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn warmup_model(engine_key: String, app: AppHandle) -> Result<(), String> {
-    let is_streaming = engine_key.contains("streaming");
+pub fn warmup_model(_engine_key: String, app: AppHandle) -> Result<(), String> {
     std::thread::Builder::new()
         .name("opendictate-warmup".to_string())
         .spawn(move || {
             let state = dictation::state_from_app(&app);
-            if is_streaming {
-                let _ = dictation::warmup_streaming(&state);
-            } else {
-                let _ = dictation::load_engine(&state);
-            }
+            dictation::warmup_current_model(&state);
         })
         .map_err(|e| format!("failed to start warm-up thread: {e}"))?;
     Ok(())

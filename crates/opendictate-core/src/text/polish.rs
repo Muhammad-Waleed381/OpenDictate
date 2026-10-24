@@ -49,7 +49,10 @@ pub fn polish_text(text: &str, config: &PolishConfig) -> Result<String> {
 
     match config.provider {
         PolishProvider::Off => Ok(text.to_string()),
-        PolishProvider::Groq => polish_with_groq(trimmed, config),
+        // The request payload is trimmed, but the fallback keeps the original
+        // text: a failed or incomplete polish must be a no-op on the complete
+        // transcript, including its leading/trailing whitespace.
+        PolishProvider::Groq => polish_with_groq(trimmed, text, config),
         PolishProvider::LocalSlm => Err(CoreError::Transcription(
             "Local AI polish is not available yet".into(),
         )),
@@ -57,7 +60,7 @@ pub fn polish_text(text: &str, config: &PolishConfig) -> Result<String> {
 }
 
 /// Calls Groq's high-speed LPU API to polish text.
-fn polish_with_groq(text: &str, config: &PolishConfig) -> Result<String> {
+fn polish_with_groq(payload: &str, original: &str, config: &PolishConfig) -> Result<String> {
     let api_key = config
         .groq_api_key
         .as_ref()
@@ -82,7 +85,7 @@ fn polish_with_groq(text: &str, config: &PolishConfig) -> Result<String> {
             },
             {
                 "role": "user",
-                "content": text
+                "content": payload
             }
         ]
     });
@@ -90,8 +93,11 @@ fn polish_with_groq(text: &str, config: &PolishConfig) -> Result<String> {
     // Generous global timeout: Groq completions with up to 1024 output tokens
     // regularly exceed 4 s under load, and every timeout means the polish is
     // silently skipped (callers fall back to raw text).
+    // `http_status_as_error(false)` keeps non-2xx responses as responses so
+    // the provider's own error body can be surfaced to the user.
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(15)))
+        .http_status_as_error(false)
         .build()
         .new_agent();
 
@@ -105,11 +111,28 @@ fn polish_with_groq(text: &str, config: &PolishConfig) -> Result<String> {
             CoreError::Transcription(format!("Groq API error: {e}"))
         })?;
 
-    let parsed: GroqResponse = resp.into_body().read_json().map_err(|e| {
+    let status = resp.status();
+    let raw = resp.into_body().read_to_string().map_err(|e| {
+        log::warn!("failed to read Groq response: {e}");
+        CoreError::Transcription(format!("invalid Groq response: {e}"))
+    })?;
+    if !status.is_success() {
+        // Forward the provider's message (invalid key, rate limit, ...) so
+        // the user sees something actionable instead of a bare status code.
+        let detail = raw.trim();
+        log::warn!("Groq API returned {status}: {detail}");
+        return Err(CoreError::Transcription(if detail.is_empty() {
+            format!("Groq API error: http status {status}")
+        } else {
+            format!("Groq API error: http status {status}: {detail}")
+        }));
+    }
+
+    let parsed: GroqResponse = serde_json::from_str(&raw).map_err(|e| {
         log::warn!("failed to parse Groq response: {e}");
         CoreError::Transcription(format!("invalid Groq response: {e}"))
     })?;
-    completed_polish_output(parsed, text)
+    completed_polish_output(parsed, original)
 }
 
 #[derive(Deserialize)]
@@ -128,12 +151,27 @@ struct GroqResponse {
     choices: Option<Vec<GroqChoice>>,
 }
 
+/// Finish reasons that mean the provider stopped normally and the response is
+/// complete. `length` and `content_filter` mean it was cut short.
+const COMPLETE_FINISH_REASONS: [&str; 3] = ["stop", "eos", "stop_sequence"];
+
 fn completed_polish_output(parsed: GroqResponse, text: &str) -> Result<String> {
     if let Some(choices) = parsed.choices {
         if let Some(first) = choices.into_iter().next() {
             let output = first.message.content.trim().to_string();
-            if first.finish_reason.as_deref() == Some("stop") && !output.is_empty() {
+            let complete = first
+                .finish_reason
+                .as_deref()
+                .is_some_and(|reason| COMPLETE_FINISH_REASONS.contains(&reason));
+            if complete && !output.is_empty() {
                 return Ok(output);
+            }
+            if let Some(reason) = first.finish_reason.as_deref() {
+                if !COMPLETE_FINISH_REASONS.contains(&reason) {
+                    log::warn!("discarding incomplete Groq polish (finish_reason={reason})");
+                }
+            } else {
+                log::warn!("discarding Groq polish without a completion marker");
             }
         }
     }
@@ -164,6 +202,34 @@ mod tests {
         assert_eq!(
             completed_polish_output(response, "Original").unwrap(),
             "Complete polished sentence."
+        );
+    }
+
+    #[test]
+    fn alternative_completion_markers_are_accepted() {
+        for reason in ["stop", "eos", "stop_sequence"] {
+            let response = serde_json::from_value(json!({"choices":[{
+                "message":{"content":"Complete polished sentence."}, "finish_reason":reason
+            }]}))
+            .unwrap();
+            assert_eq!(
+                completed_polish_output(response, "Original").unwrap(),
+                "Complete polished sentence.",
+                "finish_reason {reason} marks a complete response"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_polish_keeps_the_untrimmed_original() {
+        // The provider is off, so the text must come back byte for byte.
+        let config = PolishConfig {
+            provider: PolishProvider::Off,
+            ..Default::default()
+        };
+        assert_eq!(
+            polish_text("  padded transcript  ", &config).unwrap(),
+            "  padded transcript  "
         );
     }
 

@@ -40,6 +40,21 @@ fn tokenize(value: &str) -> Vec<Token> {
 
 /// Applies dictionary casing to matching words and phrases without touching
 /// substrings inside unrelated words.
+///
+/// # Symbol rules
+///
+/// A dictionary entry is a *canonical spelling* of what the user wants to see,
+/// so its symbols are restored along with its casing:
+///
+/// * Symbols that sit outside a word (`.` in `.NET`, `™` in `Acme™`) are not
+///   part of a token. The entry therefore matches the bare word and the
+///   symbol is re-attached: `net` becomes `.NET`, `acme` becomes `Acme™`.
+/// * Symbols that are part of a word (`+` and `#`, as in `C++` and `C#`) are
+///   token characters. The entry only matches when the source already
+///   contains them, so a plain `c` is never rewritten into `C++`.
+///
+/// A source that already carries the symbols keeps them: `.net` becomes
+/// `.NET` and `c++` becomes `C++`.
 pub fn correct_dictionary_terms(text: &str, terms: &[String]) -> String {
     #[derive(Clone)]
     struct Term {
@@ -276,6 +291,17 @@ pub fn strip_sound_effects(text: &str) -> String {
                     out.push(ch);
                     out.push_str(&tag);
                     out.push(close_char);
+                } else if out.trim().is_empty() {
+                    // The annotation started the text and was removed. A
+                    // sentence terminator that followed it belonged to the
+                    // annotation's own sentence, so remove it too instead of
+                    // leaving a lone "." behind.
+                    let mut lookahead = chars.clone();
+                    if let Some(next) = lookahead.next() {
+                        if matches!(next, '.' | ',' | ';' | ':' | '!' | '?') {
+                            let _ = chars.next();
+                        }
+                    }
                 }
             }
         } else {
@@ -394,8 +420,8 @@ fn char_dice(a: &str, b: &str) -> f32 {
 }
 
 /// Whether `value` is a single standalone word under the tokenizer rules
-/// (alphanumerics and apostrophes). Used to restrict snippet triggers to
-/// single spoken words.
+/// (alphanumerics, apostrophes, `+` and `#`). Used to restrict snippet
+/// triggers to single spoken words.
 pub fn is_single_word(value: &str) -> bool {
     tokenize(value).len() == 1
 }
@@ -566,6 +592,27 @@ mod tests {
             correct_dictionary_terms(".net and acme™", &terms(&[".NET", "Acme™"])),
             ".NET and Acme™"
         );
+    }
+
+    #[test]
+    fn dictionary_symbol_rules_are_consistent() {
+        // A symbol outside a word is restored from the bare word.
+        assert_eq!(correct_dictionary_terms("net", &terms(&[".NET"])), ".NET");
+        assert_eq!(
+            correct_dictionary_terms("acme", &terms(&["Acme™"])),
+            "Acme™"
+        );
+        // A symbol inside a word is only restored when it was spoken.
+        assert_eq!(correct_dictionary_terms("c", &terms(&["C++"])), "c");
+        assert_eq!(correct_dictionary_terms("c++", &terms(&["C++"])), "C++");
+    }
+
+    #[test]
+    fn removed_annotations_do_not_leave_a_dangling_terminator() {
+        assert_eq!(super::strip_sound_effects("[Music]."), "");
+        assert_eq!(super::strip_sound_effects("(Gun firing)"), "");
+        // A terminator that belongs to the surrounding sentence stays.
+        assert_eq!(super::strip_sound_effects("Hello [Music]."), "Hello .");
     }
 
     #[test]

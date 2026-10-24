@@ -10,8 +10,6 @@ use sherpa_onnx::{
 use super::provider::Provider;
 use crate::error::{CoreError, Result};
 
-const MAX_STT_THREADS: usize = 8;
-
 /// Streaming (online) recognizer backed by sherpa-onnx `OnlineRecognizer`
 /// (NeMo/parakeet unified transducer and FastConformer CTC models).
 ///
@@ -74,12 +72,10 @@ impl StreamingRecognizer {
             )));
         }
 
-        // Online transducers and CTC decoders decode many small chunks sequentially; beyond
-        // ~4 intra-op threads the runtime thrashes hyperthreads and decode
-        // throughput DROPS, so cap well below logical parallelism.
-        let n_threads = std::thread::available_parallelism()
-            .map(|p| ((p.get() / 2).clamp(1, MAX_STT_THREADS)) as i32)
-            .unwrap_or(2);
+        // Online transducers and CTC decoders decode many small chunks sequentially;
+        // optimal_streaming_threads targets physical cores capped at 6 to avoid intra-op
+        // thread synchronization overhead.
+        let n_threads = super::cpu::optimal_streaming_threads();
 
         let find = |needle: &str| -> Result<String> {
             let mut matches: Vec<_> = std::fs::read_dir(model_dir)

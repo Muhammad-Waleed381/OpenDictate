@@ -1,9 +1,34 @@
 //! Only supported native decoder/model/tokenizer combinations receive hotwords.
 //! Sherpa 1.13.4 exits the process for unsupported overloads or modeling units.
 use std::collections::HashSet;
+use std::hash::{BuildHasher, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Upper bound for the vocabulary files read from a model directory. The
+/// files are archive-controlled, so an oversized one must not be read into
+/// memory wholesale.
+const VOCAB_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Splits a `bpe.vocab` line into its symbol and score. Sherpa's own files
+/// use a tab; some releases use a single space. Accept either, preferring the
+/// split whose symbol is a known token.
+fn split_vocab_line<'a>(line: &'a str, vocabulary: &HashSet<String>) -> Option<(&'a str, &'a str)> {
+    if let Some((symbol, score)) = line.split_once('\t') {
+        return Some((symbol, score));
+    }
+    let mut fallback = None;
+    for (index, _) in line.match_indices(' ') {
+        let (symbol, score) = line.split_at(index);
+        let score = score.trim_start();
+        if vocabulary.contains(symbol) {
+            return Some((symbol, score));
+        }
+        fallback.get_or_insert((symbol, score));
+    }
+    fallback
+}
 
 pub(super) struct HotwordTokenizer {
     pub path: PathBuf,
@@ -14,7 +39,7 @@ pub(super) struct HotwordTokenizer {
 impl HotwordTokenizer {
     pub fn load(dir: &Path) -> Option<Self> {
         let tokens_path = dir.join("tokens.txt");
-        if std::fs::metadata(&tokens_path).ok()?.len() > 16 * 1024 * 1024 {
+        if std::fs::metadata(&tokens_path).ok()?.len() > VOCAB_MAX_BYTES {
             return None;
         }
         let tokens = std::fs::read_to_string(tokens_path).ok()?;
@@ -52,10 +77,13 @@ impl HotwordTokenizer {
         // vocabulary for native longest-piece encoding in that case.
         let source_vocab = dir.join("bpe.vocab");
         let content = if source_vocab.exists() {
+            if std::fs::metadata(&source_vocab).ok()?.len() > VOCAB_MAX_BYTES {
+                return None;
+            }
             let text = std::fs::read_to_string(source_vocab).ok()?;
             let mut seen = HashSet::new();
             for line in text.lines().filter(|line| !line.trim().is_empty()) {
-                let (symbol, score) = line.split_once('\t')?;
+                let (symbol, score) = split_vocab_line(line, &vocabulary)?;
                 if !vocabulary.contains(symbol)
                     || !score.parse::<f32>().ok()?.is_finite()
                     || !seen.insert(symbol.to_string())
@@ -78,17 +106,26 @@ impl HotwordTokenizer {
 
         // Each recognizer owns a private snapshot. Model removal/replacement
         // cannot invalidate the tokenizer during recognizer construction.
+        // The name must be unpredictable: a predictable path in the shared
+        // temporary directory could be pre-created by another local user,
+        // which would silently disable the whole native-hotword feature.
         static NEXT_VOCAB: AtomicU64 = AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "opendictate-bpe-{}-{}.vocab",
-            std::process::id(),
-            NEXT_VOCAB.fetch_add(1, Ordering::Relaxed)
-        ));
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .ok()?;
+        let (path, mut file) = (0..8).find_map(|_| {
+            let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+            hasher.write_u64(std::process::id() as u64);
+            hasher.write_u64(NEXT_VOCAB.fetch_add(1, Ordering::Relaxed));
+            let candidate = std::env::temp_dir().join(format!(
+                "opendictate-bpe-{}-{}.vocab",
+                std::process::id(),
+                hasher.finish()
+            ));
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+                .ok()
+                .map(|handle| (candidate, handle))
+        })?;
         if file.write_all(content.as_bytes()).is_err() {
             let _ = std::fs::remove_file(&path);
             return None;
@@ -119,34 +156,37 @@ impl HotwordTokenizer {
     }
 
     pub fn prepare(&self, phrases: &str) -> Option<String> {
-        let phrases: Vec<_> = phrases
-            .lines()
-            .filter_map(|phrase| {
-                // Colons are native score syntax, '/' is a phrase delimiter, NUL
-                // cannot cross the C boundary. Never reinterpret those as data.
-                if phrase
-                    .chars()
-                    .any(|ch| ch.is_control() || matches!(ch, ':' | '/'))
-                {
-                    return None;
-                }
-                let phrase = if self.uppercase {
-                    phrase.to_uppercase()
-                } else {
-                    phrase.to_lowercase()
-                };
-                let words: Vec<_> = phrase.split_whitespace().collect();
-                if words.is_empty()
-                    || words
-                        .iter()
-                        .any(|word| word.len() > 256 || !self.can_encode(word))
-                {
-                    return None;
-                }
-                Some(words.join(" "))
-            })
-            .collect();
-        (!phrases.is_empty()).then(|| phrases.join("\n"))
+        let mut accepted: Vec<String> = Vec::new();
+        for phrase in phrases.lines() {
+            if phrase.trim().is_empty() {
+                continue;
+            }
+            // Colons are native score syntax, '/' is a phrase delimiter, NUL
+            // cannot cross the C boundary. Never reinterpret those as data.
+            if phrase
+                .chars()
+                .any(|ch| ch.is_control() || matches!(ch, ':' | '/'))
+            {
+                log::warn!("hotword phrase rejected: unsupported control or delimiter syntax");
+                continue;
+            }
+            let phrase = if self.uppercase {
+                phrase.to_uppercase()
+            } else {
+                phrase.to_lowercase()
+            };
+            let words: Vec<_> = phrase.split_whitespace().collect();
+            if words.is_empty()
+                || words
+                    .iter()
+                    .any(|word| word.len() > 256 || !self.can_encode(word))
+            {
+                log::warn!("hotword phrase rejected: not encodable by the model vocabulary");
+                continue;
+            }
+            accepted.push(words.join(" "));
+        }
+        (!accepted.is_empty()).then(|| accepted.join("\n"))
     }
 }
 

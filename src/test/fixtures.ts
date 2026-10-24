@@ -15,7 +15,11 @@ export const status: ModelsStatus = {
   gpu_mode: "cpu", gpu_active: false, streaming_rtf_x100: 0,
 };
 export function model(id: string, extra: Partial<ModelInfo> = {}): ModelInfo {
-  return { id, name: id, kind: "stt", engine_key: id, size_bytes: 100,
+  // `engine_key` is the engine *family* in the real catalog ("parakeet",
+  // "whisper", ...), not the model id. The onboarding gate compares it with
+  // `settings.engine`, so a fixture that used the id would never be able to
+  // open the gate.
+  return { id, name: id, kind: "stt", engine_key: "parakeet", company: null, size_bytes: 100,
     disk_bytes: 0, installed: false, available: true, streaming: false, ...extra };
 }
 export function deferred<T>() {

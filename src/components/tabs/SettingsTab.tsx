@@ -211,8 +211,7 @@ export function SettingsTab() {
     setSavingInputTarget(true);
     try {
       await api.setSettings({ input_target: target });
-      const current = useStore.getState().settings;
-      if (current) useStore.getState().setSettings({ ...current, input_target: target });
+      useStore.getState().patchSettings({ input_target: target });
     } catch (e) {
       toast.error(`Input target change failed: ${String(e)}`);
     } finally {
@@ -234,7 +233,7 @@ export function SettingsTab() {
     const current = useStore.getState().settings;
     if (!current) return;
     const request = ++toggleRequest.current;
-    useStore.getState().setSettings({ ...current, [key]: enabled });
+    useStore.getState().patchSettings({ [key]: enabled });
     try {
       await api.setSettings({ [key]: enabled });
     } catch {
@@ -301,7 +300,7 @@ export function SettingsTab() {
   const handleTimeoutChange = async (sec: number) => {
     const current = useStore.getState().settings;
     if (!current) return;
-    useStore.getState().setSettings({ ...current, handsfree_silence_timeout_sec: sec });
+    useStore.getState().patchSettings({ handsfree_silence_timeout_sec: sec });
     try {
       await api.setSettings({ handsfree_silence_timeout_sec: sec });
     } catch (e) {
@@ -313,8 +312,7 @@ export function SettingsTab() {
     if (provider !== "off" && provider !== "groq") return;
     const current = useStore.getState().settings;
     if (!current) return;
-    useStore.getState().setSettings({
-      ...current,
+    useStore.getState().patchSettings({
       polish_provider: provider as "off" | "groq" | "local_slm",
     });
     try {
@@ -323,6 +321,11 @@ export function SettingsTab() {
       });
       toast.success(`Voice Polish set to ${provider}`);
     } catch (e) {
+      // The backend kept the previous provider. Re-read it so the UI does
+      // not claim that cloud polishing is enabled when it is not.
+      const latest = await api.getSettings().catch(() => null);
+      if (latest) useStore.getState().setSettings(latest);
+      else useStore.getState().patchSettings({ polish_provider: current.polish_provider });
       toast.error(`Failed to update Polish provider: ${String(e)}`);
     }
   };
@@ -331,8 +334,7 @@ export function SettingsTab() {
     if (!mode) return;
     const current = useStore.getState().settings;
     if (!current) return;
-    useStore.getState().setSettings({
-      ...current,
+    useStore.getState().patchSettings({
       polish_mode: mode as "clean" | "bullets",
     });
     try {
@@ -340,6 +342,8 @@ export function SettingsTab() {
         polish_mode: mode as "clean" | "bullets",
       });
     } catch (e) {
+      const latest = await api.getSettings().catch(() => null);
+      if (latest) useStore.getState().setSettings(latest);
       toast.error(`Failed to update Polish mode: ${String(e)}`);
     }
   };
@@ -348,13 +352,14 @@ export function SettingsTab() {
     if (!model) return;
     const current = useStore.getState().settings;
     if (!current) return;
-    useStore.getState().setSettings({
-      ...current,
+    useStore.getState().patchSettings({
       groq_model: model,
     });
     try {
       await api.setSettings({ groq_model: model });
     } catch (e) {
+      const latest = await api.getSettings().catch(() => null);
+      if (latest) useStore.getState().setSettings(latest);
       toast.error(`Failed to update Groq model: ${String(e)}`);
     }
   };
@@ -420,7 +425,7 @@ export function SettingsTab() {
     if (!mode) return;
     const current = useStore.getState().settings;
     if (!current) return;
-    useStore.getState().setSettings({ ...current, gpu: mode });
+    useStore.getState().patchSettings({ gpu: mode });
     try {
       await api.setSettings({ gpu: mode });
     } catch {
@@ -435,7 +440,7 @@ export function SettingsTab() {
     const current = useStore.getState().settings;
     if (!current) return;
     const pos = position as api.DockPosition;
-    useStore.getState().setSettings({ ...current, dock_position: pos });
+    useStore.getState().patchSettings({ dock_position: pos });
     try {
       await api.setSettings({ dock_position: pos });
     } catch {
@@ -450,7 +455,7 @@ export function SettingsTab() {
   const handleVolumeChange = (value: number) => {
     const current = useStore.getState().settings;
     if (!current) return;
-    useStore.getState().setSettings({ ...current, audio_feedback_volume: value });
+    useStore.getState().patchSettings({ audio_feedback_volume: value });
     if (volumeTimer.current) window.clearTimeout(volumeTimer.current);
     volumeTimer.current = window.setTimeout(async () => {
       try {
@@ -734,7 +739,7 @@ export function SettingsTab() {
             value={settings?.polish_provider ?? "off"}
             onValueChange={handlePolishProviderChange}
           >
-            <SelectTrigger className="w-48">
+            <SelectTrigger id="polish-provider" className="w-48" aria-label="Polish provider">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

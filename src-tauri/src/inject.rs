@@ -18,6 +18,16 @@ fn uses_terminal_shortcuts(app: &AppHandle) -> Result<bool, String> {
     Ok(settings.input_target == "terminal")
 }
 
+/// Whether a window must be hidden to hand the keyboard focus back to the
+/// user's application.
+///
+/// The dock is a persistent on-screen HUD: hiding it would make the
+/// microphone control disappear. It is also never focusable, so it can never
+/// be the window that holds the focus in the first place.
+pub fn must_hide_for_focus_handoff(label: &str) -> bool {
+    label != "dock"
+}
+
 /// UI insertion first hides OpenDictate so the window manager restores the
 /// previous app. Never send editing keys while any OpenDictate window is focused.
 pub fn with_external_focus<T>(
@@ -25,13 +35,36 @@ pub fn with_external_focus<T>(
     action: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
     let mut hidden = Vec::new();
+    let mut failure: Option<String> = None;
     for window in app.webview_windows().into_values() {
-        if window.is_focused().map_err(|e| e.to_string())? {
-            window
-                .hide()
-                .map_err(|e| format!("could not return focus to the previous app: {e}"))?;
+        // The dock is a persistent HUD: hiding it would make the on-screen
+        // microphone control disappear. It is also never focusable, so it
+        // cannot be the window that needs handing the focus back.
+        if !must_hide_for_focus_handoff(window.label()) {
+            continue;
+        }
+        let focused = match window.is_focused() {
+            Ok(focused) => focused,
+            Err(e) => {
+                failure = Some(e.to_string());
+                break;
+            }
+        };
+        if focused {
+            if let Err(e) = window.hide() {
+                failure = Some(format!("could not return focus to the previous app: {e}"));
+                break;
+            }
             hidden.push(window);
         }
+    }
+    if let Some(error) = failure {
+        // Restore every window that was already hidden before giving up.
+        for window in hidden {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        return Err(error);
     }
     if !hidden.is_empty() {
         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -132,7 +165,10 @@ fn write_clipboard_tool(program: &str, args: &[&str], text: &str) -> bool {
             }
         }
     };
-    succeeded && writer.join().unwrap_or(false)
+    // Always join: the writer terminates once the pipe is closed, and
+    // detaching it would leak a thread on every failed write.
+    let written = writer.join().unwrap_or(false);
+    succeeded && written
 }
 
 pub fn clean_text(text: &str) -> String {
@@ -198,6 +234,14 @@ mod tests {
     }
 
     #[test]
+    fn the_dock_is_never_hidden_for_the_focus_handoff() {
+        // The dock is a persistent HUD. Hiding it would make the on-screen
+        // microphone control disappear mid-session.
+        assert!(!must_hide_for_focus_handoff("dock"));
+        assert!(must_hide_for_focus_handoff("main"));
+    }
+
+    #[test]
     fn app_names_are_data_not_script_source() {
         let name = "app\"; $(touch sentinel); #";
         let mac = mac_app_command(name);
@@ -223,6 +267,47 @@ mod tests {
             .unwrap();
         let pattern: String = serde_json::from_str(encoded).unwrap();
         assert_eq!(pattern, "^App\\[1\\]\"; exec bad$");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn window_matchers_receive_a_literal_name() {
+        // `wmctrl -a` and `xdotool search --class` match a regular expression.
+        // A spoken name must never be able to match an unrelated window.
+        assert_eq!(literal_regex("chrome"), "chrome");
+        assert_eq!(literal_regex(".*"), "\\.\\*");
+        assert_eq!(literal_regex("a+b"), "a\\+b");
+        assert_eq!(literal_regex("app[1]"), "app\\[1\\]");
+        // The escaped form still matches the intended name literally.
+        let pattern = literal_regex("Terminal");
+        let regex = regex_lite_matches(&pattern, "Terminal");
+        assert!(regex);
+        assert!(!regex_lite_matches(&pattern, "XTerm"));
+    }
+
+    /// A tiny matcher for the literal-regex subset the escaper produces:
+    /// everything except the escaped metacharacters is literal.
+    #[cfg(target_os = "linux")]
+    fn regex_lite_matches(pattern: &str, text: &str) -> bool {
+        let mut pattern_chars = pattern.chars().peekable();
+        let mut text_chars = text.chars();
+        while let Some(ch) = pattern_chars.next() {
+            if ch == '\\' {
+                let Some(escaped) = pattern_chars.next() else {
+                    return false;
+                };
+                match text_chars.next() {
+                    Some(actual) if actual == escaped => {}
+                    _ => return false,
+                }
+            } else {
+                match text_chars.next() {
+                    Some(actual) if actual == ch => {}
+                    _ => return false,
+                }
+            }
+        }
+        text_chars.next().is_none()
     }
 
     #[cfg(target_os = "linux")]
@@ -684,29 +769,50 @@ pub fn switch_to_app(app_name: &str) -> Result<(), String> {
     };
 
     for target in candidates {
+        // `wmctrl -a` and `xdotool search --class` match their argument as a
+        // regular expression. The name comes from a spoken command, so it
+        // must be escaped: an unescaped name could focus an unrelated
+        // window, and the next dictated insertion would land there.
+        let literal = literal_regex(target);
         // 1. Try wmctrl (standard on X11 / Xwayland)
-        if run("wmctrl", &["-x", "-a", target]).is_ok() {
+        if run("wmctrl", &["-x", "-a", &literal]).is_ok() {
             return Ok(());
         }
         // 2. Try xdotool
-        if run("xdotool", &["search", "--class", target, "windowactivate"]).is_ok() {
+        if run(
+            "xdotool",
+            &["search", "--class", &literal, "windowactivate"],
+        )
+        .is_ok()
+        {
             return Ok(());
         }
         // 3. Try swaymsg (Wayland Sway/Hyprland)
         if run("swaymsg", &[&sway_app_criteria(target), "focus"]).is_ok() {
             return Ok(());
         }
-        // 4. Try gtk-launch
+        // 4. Try gtk-launch (runs the `Exec=` line of a matching .desktop
+        //    entry; the name is passed as a single argument, never a shell
+        //    string).
         if run("gtk-launch", &[target]).is_ok() {
-            return Ok(());
-        }
-        // 5. Try direct spawn
-        if std::process::Command::new(target).spawn().is_ok() {
             return Ok(());
         }
     }
 
     Err(format!("could not find or focus application '{app_name}'"))
+}
+
+/// Escapes a name for use as a literal regular expression.
+#[cfg(target_os = "linux")]
+fn literal_regex(target: &str) -> String {
+    let mut literal = String::with_capacity(target.len());
+    for ch in target.chars() {
+        if ".^$[](){}*+?|\\".contains(ch) {
+            literal.push('\\');
+        }
+        literal.push(ch);
+    }
+    literal
 }
 
 #[cfg(target_os = "linux")]
@@ -766,16 +872,16 @@ fn press_paste(_terminal: bool) -> Result<(), String> {
         .key(modifier, Direction::Press)
         .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(v_key, Direction::Press)
-        .map_err(|e| e.to_string())?;
+    // Release the modifier on every path: a failed key press would
+    // otherwise leave it held and every later keystroke modified.
+    let pressed = enigo.key(v_key, Direction::Press);
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo
-        .key(v_key, Direction::Release)
-        .map_err(|e| e.to_string())?;
+    let released_key = enigo.key(v_key, Direction::Release);
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(modifier, Direction::Release)
+    let released_modifier = enigo.key(modifier, Direction::Release);
+    pressed
+        .and(released_key)
+        .and(released_modifier)
         .map_err(|e| e.to_string())
 }
 
@@ -821,16 +927,16 @@ pub fn undo_last_insert() -> Result<(), String> {
         .key(modifier, Direction::Press)
         .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(z_key, Direction::Press)
-        .map_err(|e| e.to_string())?;
+    // Release the modifier on every path: a failed key press would otherwise
+    // leave it held and every later keystroke would be modified.
+    let pressed = enigo.key(z_key, Direction::Press);
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo
-        .key(z_key, Direction::Release)
-        .map_err(|e| e.to_string())?;
+    let released_key = enigo.key(z_key, Direction::Release);
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(modifier, Direction::Release)
+    let released_modifier = enigo.key(modifier, Direction::Release);
+    pressed
+        .and(released_key)
+        .and(released_modifier)
         .map_err(|e| e.to_string())
 }
 
@@ -872,12 +978,11 @@ pub fn press_delete_word() -> Result<(), String> {
     enigo
         .key(modifier, Direction::Press)
         .map_err(|e| e.to_string())?;
-    enigo
-        .key(Key::Backspace, Direction::Click)
-        .map_err(|e| e.to_string())?;
-    enigo
-        .key(modifier, Direction::Release)
-        .map_err(|e| e.to_string())
+    // Every exit path must release the modifier, otherwise a failed click
+    // leaves it held and every later keystroke is modified.
+    let clicked = enigo.key(Key::Backspace, Direction::Click);
+    let released = enigo.key(modifier, Direction::Release);
+    clicked.and(released).map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -905,19 +1010,17 @@ pub fn press_delete_line(app: &AppHandle) -> Result<(), String> {
         enigo
             .key(Key::Meta, Direction::Press)
             .map_err(|e| e.to_string())?;
-        enigo
-            .key(Key::LeftArrow, Direction::Click)
-            .map_err(|e| e.to_string())?;
+        // Every exit path must release Meta, otherwise a failed click leaves
+        // the Command key held and every later keystroke is Cmd-modified.
+        let selected = enigo.key(Key::LeftArrow, Direction::Click);
+        let released_meta = enigo.key(Key::Meta, Direction::Release);
+        selected.and(released_meta).map_err(|e| e.to_string())?;
         enigo
             .key(Key::Shift, Direction::Press)
             .map_err(|e| e.to_string())?;
         let selected = enigo.key(Key::RightArrow, Direction::Click);
         let released_shift = enigo.key(Key::Shift, Direction::Release);
-        let released_meta = enigo.key(Key::Meta, Direction::Release);
-        selected
-            .and(released_shift)
-            .and(released_meta)
-            .map_err(|e| e.to_string())?;
+        selected.and(released_shift).map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "windows")]
     {
@@ -964,16 +1067,16 @@ pub fn press_clear_all() -> Result<(), String> {
         .key(modifier, Direction::Press)
         .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(a_key, Direction::Press)
-        .map_err(|e| e.to_string())?;
+    // Release the modifier on every path: a failed key press would
+    // otherwise leave it held and every later keystroke modified.
+    let pressed = enigo.key(a_key, Direction::Press);
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo
-        .key(a_key, Direction::Release)
-        .map_err(|e| e.to_string())?;
+    let released_key = enigo.key(a_key, Direction::Release);
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(modifier, Direction::Release)
+    let released_modifier = enigo.key(modifier, Direction::Release);
+    pressed
+        .and(released_key)
+        .and(released_modifier)
         .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
     enigo
@@ -1014,16 +1117,14 @@ pub fn press_interrupt() -> Result<(), String> {
         .key(Key::Control, Direction::Press)
         .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(c_key, Direction::Press)
-        .map_err(|e| e.to_string())?;
-    std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo
-        .key(c_key, Direction::Release)
-        .map_err(|e| e.to_string())?;
-    std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(Key::Control, Direction::Release)
+    // Every exit path must release Control, otherwise a failed key press
+    // leaves it held and every later keystroke is Ctrl-modified.
+    let pressed = enigo.key(c_key, Direction::Press);
+    let released_key = enigo.key(c_key, Direction::Release);
+    let released_control = enigo.key(Key::Control, Direction::Release);
+    pressed
+        .and(released_key)
+        .and(released_control)
         .map_err(|e| e.to_string())
 }
 
@@ -1039,12 +1140,10 @@ pub fn press_next_tab() -> Result<(), String> {
     enigo
         .key(modifier, Direction::Press)
         .map_err(|e| e.to_string())?;
-    enigo
-        .key(Key::Tab, Direction::Click)
-        .map_err(|e| e.to_string())?;
-    enigo
-        .key(modifier, Direction::Release)
-        .map_err(|e| e.to_string())
+    // Release the modifier on every path.
+    let clicked = enigo.key(Key::Tab, Direction::Click);
+    let released = enigo.key(modifier, Direction::Release);
+    clicked.and(released).map_err(|e| e.to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1058,14 +1157,13 @@ pub fn press_prev_tab() -> Result<(), String> {
     enigo
         .key(Key::Shift, Direction::Press)
         .map_err(|e| e.to_string())?;
-    enigo
-        .key(Key::Tab, Direction::Click)
-        .map_err(|e| e.to_string())?;
-    enigo
-        .key(Key::Shift, Direction::Release)
-        .map_err(|e| e.to_string())?;
-    enigo
-        .key(Key::Control, Direction::Release)
+    // Release both modifiers on every path.
+    let clicked = enigo.key(Key::Tab, Direction::Click);
+    let released_shift = enigo.key(Key::Shift, Direction::Release);
+    let released_control = enigo.key(Key::Control, Direction::Release);
+    clicked
+        .and(released_shift)
+        .and(released_control)
         .map_err(|e| e.to_string())
 }
 
@@ -1097,16 +1195,16 @@ pub fn press_new_tab() -> Result<(), String> {
         .key(modifier, Direction::Press)
         .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(t_key, Direction::Press)
-        .map_err(|e| e.to_string())?;
+    // Release the modifier on every path: a failed key press would
+    // otherwise leave it held and every later keystroke modified.
+    let pressed = enigo.key(t_key, Direction::Press);
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo
-        .key(t_key, Direction::Release)
-        .map_err(|e| e.to_string())?;
+    let released_key = enigo.key(t_key, Direction::Release);
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(modifier, Direction::Release)
+    let released_modifier = enigo.key(modifier, Direction::Release);
+    pressed
+        .and(released_key)
+        .and(released_modifier)
         .map_err(|e| e.to_string())
 }
 
@@ -1138,16 +1236,16 @@ pub fn press_close_tab() -> Result<(), String> {
         .key(modifier, Direction::Press)
         .map_err(|e| e.to_string())?;
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(w_key, Direction::Press)
-        .map_err(|e| e.to_string())?;
+    // Release the modifier on every path: a failed key press would
+    // otherwise leave it held and every later keystroke modified.
+    let pressed = enigo.key(w_key, Direction::Press);
     std::thread::sleep(std::time::Duration::from_millis(35));
-    enigo
-        .key(w_key, Direction::Release)
-        .map_err(|e| e.to_string())?;
+    let released_key = enigo.key(w_key, Direction::Release);
     std::thread::sleep(std::time::Duration::from_millis(25));
-    enigo
-        .key(modifier, Direction::Release)
+    let released_modifier = enigo.key(modifier, Direction::Release);
+    pressed
+        .and(released_key)
+        .and(released_modifier)
         .map_err(|e| e.to_string())
 }
 

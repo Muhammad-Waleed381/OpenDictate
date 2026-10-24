@@ -42,6 +42,54 @@ const SECTION_LABELS: Record<"streaming" | "non-streaming", string> = {
   "non-streaming": "Highest accuracy",
 };
 
+export function NvidiaLogo({ className = "size-3.5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M8.948 7.37c-.368.188-.8.472-1.28.852C6.46 9.176 5.37 10.74 5.37 12.35c0 1.25.688 2.378 1.83 3.013.25.138.48.232.7.286-.34-.53-.526-1.16-.526-1.832 0-1.895 1.54-3.435 3.435-3.435.534 0 1.036.126 1.487.345.545-.584.97-1.33 1.233-2.18-.846-.66-2.92-1.428-4.59-1.178zm6.54 3.738c-.378.89-1.002 1.62-1.78 2.096.347.45.556 1.01.556 1.62 0 1.44-1.17 2.61-2.61 2.61-.43 0-.834-.108-1.19-.294.49.262 1.05.414 1.65.414 1.89 0 3.43-1.54 3.43-3.43 0-1.13-.55-2.13-1.39-2.75l1.33-.266zm-4.71-6.14c-4.47.53-8.03 4.23-8.32 8.87-.29 4.63 2.76 8.78 7.23 9.87 4.46 1.08 9.07-1.14 10.96-5.27-2.6 3.49-7.01 4.79-11.02 3.25-4-1.54-6.3-5.74-5.46-9.98.84-4.25 4.64-7.37 8.97-7.42 1.23-.01 2.45.24 3.58.74-1.74-.29-4.32-.32-5.94.27v-.33z" />
+    </svg>
+  );
+}
+
+export function OpenAiLogo({ className = "size-3.5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 8.937a4.485 4.485 0 0 1 2.366-1.973V12.6a.766.766 0 0 0 .388.677l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 8.937zm16.597 3.855l-5.833-3.387L15.119 8.24a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.666zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 10.27V7.934a.08.08 0 0 1 .033-.061l4.84-2.796a4.5 4.5 0 0 1 6.669 4.689v.004zM8.308 14.898L6.289 13.73a.076.076 0 0 1-.038-.057V8.09a4.5 4.5 0 0 1 7.37-3.454l-.142.08L8.7 7.475a.79.79 0 0 0-.392.681zm1.096-3.465l3.447-1.988 3.445 1.988v3.978l-3.445 1.988-3.447-1.988z" />
+    </svg>
+  );
+}
+
+export function MetaLogo({ className = "size-3.5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 9.09c-.93-1.54-2.37-2.49-4.04-2.49-3.22 0-5.96 2.87-5.96 6.4 0 3.51 2.74 6.4 5.96 6.4 1.75 0 3.24-1.04 4.04-2.49.8 1.45 2.29 2.49 4.04 2.49 3.22 0 5.96-2.89 5.96-6.4 0-3.53-2.74-6.4-5.96-6.4-1.67 0-3.11.95-4.04 2.49zm-4.04 8.01c-2.02 0-3.7-1.87-3.7-4.1 0-2.22 1.68-4.1 3.7-4.1 1.71 0 3.19 1.34 3.65 3.14-.38 1.48-1.67 3.06-3.65 3.06zm8.08 0c-1.98 0-3.27-1.58-3.65-3.06.46-1.8 1.94-3.14 3.65-3.14 2.02 0 3.7 1.88 3.7 4.1 0 2.23-1.68 4.1-3.7 4.1z" />
+    </svg>
+  );
+}
+
+export function CohereLogo({ className = "size-3.5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 2C6.477 2 2 6.477 2 12c0 2.414.856 4.629 2.285 6.365l.08.093A9.957 9.957 0 0 0 12 22c5.523 0 10-4.477 10-10S17.523 2 12 2zm-4.8 5.6a4.4 4.4 0 0 1 7.218 3.398c-.01 1.847-1.157 3.447-2.83 4.015A4.402 4.402 0 0 1 7.2 11.2a4.38 4.38 0 0 1 0-3.6z" />
+      <circle cx="12" cy="12" r="3.2" />
+    </svg>
+  );
+}
+
+export function CompanyLogo({ company, className = "size-3.5" }: { company: string; className?: string }) {
+  const norm = company.trim().toLowerCase();
+  if (norm.includes("nvidia")) return <NvidiaLogo className={className} />;
+  if (norm.includes("openai") || norm.includes("whisper")) return <OpenAiLogo className={className} />;
+  if (norm.includes("meta")) return <MetaLogo className={className} />;
+  if (norm.includes("cohere")) return <CohereLogo className={className} />;
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4" />
+      <path d="M12 8h.01" />
+    </svg>
+  );
+}
+
 export function ModelCard() {
   const catalog = useStore((s) => s.catalog);
   const settings = useStore((s) => s.settings);
@@ -58,6 +106,7 @@ export function ModelCard() {
   const cancelAllRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
   const [view, setView] = useState<"streaming" | "non-streaming">(() => {
     const active = catalog.find((m) => m.id === settings?.stt_model);
     return active?.streaming ? "streaming" : "non-streaming";
@@ -193,13 +242,34 @@ export function ModelCard() {
   const captionBusy = captionModel ? isModelDownloading(captionModel.id) : false;
   const captionCancelling = captionModel ? isModelCancelling(captionModel.id) : false;
   const q = searchQuery.trim().toLowerCase();
-  const tabModels = sttModels.filter((m) => m.streaming === (view === "streaming"));
+
+  const COMPANY_ORDER = ["NVIDIA", "OpenAI", "Meta", "Cohere", "Next-gen Kaldi", "Silero"];
+  const availableCompanies = Array.from(
+    new Set(
+      sttModels
+        .map((m) => m.company)
+        .filter((c): c is string => Boolean(c))
+    )
+  ).sort((a, b) => {
+    const ia = COMPANY_ORDER.indexOf(a);
+    const ib = COMPANY_ORDER.indexOf(b);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a.localeCompare(b);
+  });
+
+  const tabModels = sttModels
+    .filter((m) => m.streaming === (view === "streaming"))
+    .filter((m) => (selectedCompany ? m.company === selectedCompany : true));
+
   const visibleModels = q
     ? tabModels.filter(
         (m) =>
           m.name.toLowerCase().includes(q) ||
           m.id.toLowerCase().includes(q) ||
-          (m.engine_key ?? "").toLowerCase().includes(q)
+          (m.engine_key ?? "").toLowerCase().includes(q) ||
+          (m.company ?? "").toLowerCase().includes(q)
       )
     : tabModels;
   const missingCount = visibleModels.filter((m) => m.available && !m.installed).length;
@@ -207,11 +277,13 @@ export function ModelCard() {
   const otherTabMatches = q
     ? sttModels
         .filter((m) => m.streaming === (otherTab === "streaming"))
+        .filter((m) => (selectedCompany ? m.company === selectedCompany : true))
         .filter(
           (m) =>
             m.name.toLowerCase().includes(q) ||
             m.id.toLowerCase().includes(q) ||
-            (m.engine_key ?? "").toLowerCase().includes(q)
+            (m.engine_key ?? "").toLowerCase().includes(q) ||
+            (m.company ?? "").toLowerCase().includes(q)
         ).length
     : 0;
 
@@ -235,6 +307,40 @@ export function ModelCard() {
           </button>
         )}
       </div>
+
+      {availableCompanies.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5" role="toolbar" aria-label="Filter by company">
+          <button
+            type="button"
+            onClick={() => setSelectedCompany(null)}
+            className={`inline-flex items-center gap-1.5 border px-2.5 py-1 text-xs font-bold tracking-wider uppercase transition-colors cursor-pointer ${
+              selectedCompany === null
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-card text-foreground hover:bg-accent"
+            }`}
+          >
+            All
+          </button>
+          {availableCompanies.map((comp) => {
+            const isSelected = selectedCompany === comp;
+            return (
+              <button
+                key={comp}
+                type="button"
+                onClick={() => setSelectedCompany(isSelected ? null : comp)}
+                className={`inline-flex items-center gap-1.5 border px-2.5 py-1 text-xs font-bold tracking-wider uppercase transition-colors cursor-pointer ${
+                  isSelected
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-card text-foreground hover:bg-accent"
+                }`}
+              >
+                <CompanyLogo company={comp} className="size-3.5 shrink-0" />
+                <span>{comp}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <div className="flex border-2 border-border">
         {(["streaming", "non-streaming"] as const).map((tab) => (
@@ -297,6 +403,18 @@ export function ModelCard() {
                       <span className="text-sm font-bold tracking-wide uppercase">
                         {model.name}
                       </span>
+                      {model.company && (
+                        <span
+                          className={`inline-flex items-center gap-1 border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
+                            isActive
+                              ? "border-primary-foreground/40 bg-primary-foreground/15 text-primary-foreground"
+                              : "border-border bg-muted/60 text-foreground"
+                          }`}
+                        >
+                          <CompanyLogo company={model.company} className="size-3 shrink-0" />
+                          <span>{model.company}</span>
+                        </span>
+                      )}
                       {model.id === "nemo-streaming-fastconformer-ctc-en-80ms" && (
                         <span className="border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-500 uppercase tracking-wider">
                           ★ Recommended (Streaming Speed)

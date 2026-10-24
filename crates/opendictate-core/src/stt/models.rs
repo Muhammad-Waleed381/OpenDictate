@@ -22,6 +22,8 @@ pub const WHISPER_BASE_MODEL_ID: &str = "whisper-base-en";
 pub const WHISPER_SMALL_MODEL_ID: &str = "whisper-small-en";
 pub const WHISPER_TURBO_MODEL_ID: &str = "whisper-turbo-en";
 pub const WHISPER_MEDIUM_MODEL_ID: &str = "whisper-medium-en";
+pub const OMNILINGUAL_ASR_MODEL_ID: &str = "omnilingual-asr-1600-languages-300m-ctc-int8";
+pub const COHERE_TRANSCRIBE_MODEL_ID: &str = "cohere-transcribe-14-lang-int8";
 
 const PARAKEET_INT8_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8.tar.bz2";
 const PARAKEET_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000.tar.bz2";
@@ -44,6 +46,8 @@ const WHISPER_BASE_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releas
 const WHISPER_SMALL_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.en.tar.bz2";
 const WHISPER_TURBO_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-turbo.tar.bz2";
 const WHISPER_MEDIUM_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-medium.en.tar.bz2";
+const OMNILINGUAL_ASR_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12.tar.bz2";
+const COHERE_TRANSCRIBE_ARCHIVE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-cohere-transcribe-14-lang-int8-2026-04-01.tar.bz2";
 
 const MODEL_MIN_BYTES: u64 = 1_000_000;
 /// Zipformer streaming decoders/joiners are genuinely small (a few hundred
@@ -61,6 +65,7 @@ pub struct ModelInfo {
     pub name: String,
     pub kind: String,
     pub engine_key: Option<String>,
+    pub company: Option<String>,
     pub size_bytes: u64,
     pub disk_bytes: u64,
     pub installed: bool,
@@ -73,6 +78,7 @@ struct ModelDef {
     name: &'static str,
     kind: &'static str,
     engine_key: Option<&'static str>,
+    company: Option<&'static str>,
     size_bytes: u64,
     url: &'static str,
     available: bool,
@@ -85,6 +91,7 @@ const MODELS: &[ModelDef] = &[
         name: "Parakeet TDT 110M (int8)",
         kind: "stt",
         engine_key: Some("parakeet"),
+        company: Some("NVIDIA"),
         size_bytes: 104_337_827,
         url: PARAKEET_INT8_ARCHIVE,
         available: true,
@@ -95,6 +102,7 @@ const MODELS: &[ModelDef] = &[
         name: "Zipformer EN 20M (captions)",
         kind: "caption",
         engine_key: None,
+        company: Some("Next-gen Kaldi"),
         size_bytes: 29_000_000,
         url: CAPTION_MODEL_ARCHIVE,
         available: true,
@@ -107,6 +115,7 @@ const MODELS: &[ModelDef] = &[
         name: "Silero VAD v4",
         kind: "vad",
         engine_key: None,
+        company: Some("Silero"),
         size_bytes: 1_700_000,
         url: SILERO_VAD_URL,
         available: true,
@@ -117,6 +126,7 @@ const MODELS: &[ModelDef] = &[
         name: "Zipformer 3.3M (Wake Word / KWS)",
         kind: "kws",
         engine_key: None,
+        company: Some("Next-gen Kaldi"),
         size_bytes: 15_800_000,
         url: KWS_MODEL_ARCHIVE,
         available: true,
@@ -127,6 +137,7 @@ const MODELS: &[ModelDef] = &[
         name: "Parakeet Unified 0.6B (Streaming)",
         kind: "stt",
         engine_key: Some("parakeet-streaming"),
+        company: Some("NVIDIA"),
         size_bytes: 501_360_769,
         url: PARAKEET_STREAMING_ARCHIVE,
         available: true,
@@ -137,6 +148,7 @@ const MODELS: &[ModelDef] = &[
         name: "FastConformer 80ms (Streaming)",
         kind: "stt",
         engine_key: Some("fastconformer-streaming"),
+        company: Some("NVIDIA"),
         size_bytes: 125_000_000,
         url: FASTCONFORMER_STREAMING_80MS_ARCHIVE,
         available: true,
@@ -147,6 +159,7 @@ const MODELS: &[ModelDef] = &[
         name: "Whisper Tiny (en)",
         kind: "stt",
         engine_key: Some("whisper"),
+        company: Some("OpenAI"),
         size_bytes: 118_071_777,
         url: WHISPER_TINY_ARCHIVE,
         available: true,
@@ -157,6 +170,7 @@ const MODELS: &[ModelDef] = &[
         name: "Whisper Base (en)",
         kind: "stt",
         engine_key: Some("whisper"),
+        company: Some("OpenAI"),
         size_bytes: 208_576_005,
         url: WHISPER_BASE_ARCHIVE,
         available: true,
@@ -167,6 +181,7 @@ const MODELS: &[ModelDef] = &[
         name: "Parakeet TDT 0.6B (Multilingual)",
         kind: "stt",
         engine_key: Some("parakeet"),
+        company: Some("NVIDIA"),
         size_bytes: 487_170_055,
         url: PARAKEET_TDT_06B_ARCHIVE,
         available: true,
@@ -177,6 +192,7 @@ const MODELS: &[ModelDef] = &[
         name: "Parakeet Unified En 0.6B",
         kind: "stt",
         engine_key: Some("parakeet"),
+        company: Some("NVIDIA"),
         size_bytes: 501_350_460,
         url: PARAKEET_UNIFIED_EN_ARCHIVE,
         available: true,
@@ -187,6 +203,7 @@ const MODELS: &[ModelDef] = &[
         name: "Whisper Turbo (Large v3)",
         kind: "stt",
         engine_key: Some("whisper"),
+        company: Some("OpenAI"),
         size_bytes: 563_790_207,
         url: WHISPER_TURBO_ARCHIVE,
         available: true,
@@ -197,6 +214,7 @@ const MODELS: &[ModelDef] = &[
         name: "Whisper Small (en)",
         kind: "stt",
         engine_key: Some("whisper"),
+        company: Some("OpenAI"),
         size_bytes: 635_693_775,
         url: WHISPER_SMALL_ARCHIVE,
         available: true,
@@ -207,8 +225,31 @@ const MODELS: &[ModelDef] = &[
         name: "Whisper Medium (en)",
         kind: "stt",
         engine_key: Some("whisper"),
+        company: Some("OpenAI"),
         size_bytes: 1_905_872_689,
         url: WHISPER_MEDIUM_ARCHIVE,
+        available: true,
+        streaming: false,
+    },
+    ModelDef {
+        id: OMNILINGUAL_ASR_MODEL_ID,
+        name: "Omnilingual ASR 300M (1600+ Languages)",
+        kind: "stt",
+        engine_key: Some("omnilingual"),
+        company: Some("Meta"),
+        size_bytes: 292_571_207,
+        url: OMNILINGUAL_ASR_ARCHIVE,
+        available: true,
+        streaming: false,
+    },
+    ModelDef {
+        id: COHERE_TRANSCRIBE_MODEL_ID,
+        name: "Cohere Transcribe 2B (int8)",
+        kind: "stt",
+        engine_key: Some("cohere"),
+        company: Some("Cohere"),
+        size_bytes: 1_699_791_751,
+        url: COHERE_TRANSCRIBE_ARCHIVE,
         available: true,
         streaming: false,
     },
@@ -339,6 +380,14 @@ pub fn is_transducer_model(id: &str) -> bool {
     matches!(id, PARAKEET_TDT_06B_MODEL_ID | PARAKEET_UNIFIED_EN_MODEL_ID)
 }
 
+pub fn is_omnilingual_model(id: &str) -> bool {
+    id == OMNILINGUAL_ASR_MODEL_ID
+}
+
+pub fn is_cohere_model(id: &str) -> bool {
+    id == COHERE_TRANSCRIBE_MODEL_ID
+}
+
 fn valid_file_size(path: &Path, min_bytes: u64) -> Option<u64> {
     let metadata = std::fs::metadata(path).ok()?;
     (metadata.is_file() && metadata.len() >= min_bytes).then_some(metadata.len())
@@ -399,33 +448,86 @@ fn is_transducer_ready(id: &str) -> bool {
         && valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
 }
 
+pub fn is_omnilingual_ready(id: &str) -> bool {
+    is_nemo_ctc_ready(id)
+}
+
+pub fn is_cohere_ready(id: &str) -> bool {
+    let dir = model_dir_for(id);
+    if !dir.exists() {
+        return false;
+    }
+    let has_part = |needle: &str| -> bool {
+        if valid_file_size(&dir.join(format!("{needle}.int8.onnx")), MODEL_MIN_BYTES).is_some()
+            || valid_file_size(&dir.join(format!("{needle}.onnx")), MODEL_MIN_BYTES).is_some()
+        {
+            return true;
+        }
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            entries.flatten().any(|e| {
+                let n = e.file_name().to_string_lossy().to_lowercase();
+                n.ends_with(".onnx")
+                    && n.contains(needle)
+                    && valid_file_size(&e.path(), MODEL_MIN_BYTES).is_some()
+            })
+        } else {
+            false
+        }
+    };
+    let has_tokens = valid_file_size(&dir.join("tokens.txt"), TOKENS_MIN_BYTES).is_some()
+        || std::fs::read_dir(&dir).map_or(false, |entries| {
+            entries.flatten().any(|e| {
+                let n = e.file_name().to_string_lossy().to_lowercase();
+                n.contains("tokens")
+                    && n.ends_with(".txt")
+                    && valid_file_size(&e.path(), TOKENS_MIN_BYTES).is_some()
+            })
+        });
+
+    has_part("encoder") && has_part("decoder") && has_tokens
+}
+
 pub fn kws_model_dir() -> PathBuf {
     models_dir().join(KWS_MODEL_ID)
 }
 
+/// The transducer parts a keyword spotter needs. A file whose name mentions
+/// more than one of them is ambiguous and must not be selected for either.
+const KWS_PART_NAMES: [&str; 3] = ["encoder", "decoder", "joiner"];
+
 pub(crate) fn kws_model_file(dir: &Path, needle: &str) -> Option<PathBuf> {
-    let mut candidates: Vec<_> = std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    let name = name.to_lowercase();
-                    name.ends_with(".onnx")
-                        && name.contains(needle)
-                        && valid_file_size(path, STREAMING_PART_MIN_BYTES).is_some()
-                })
-        })
-        .collect();
-    candidates.sort_by_key(|path| {
-        (
-            !path.to_string_lossy().to_lowercase().contains(".int8."),
-            path.clone(),
-        )
-    });
-    candidates.into_iter().next()
+    let mut exact: Vec<PathBuf> = Vec::new();
+    let mut partial: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let name = name.to_lowercase();
+        if !name.ends_with(".onnx") || valid_file_size(&path, STREAMING_PART_MIN_BYTES).is_none() {
+            continue;
+        }
+        if name == format!("{needle}.onnx") {
+            exact.push(path);
+        } else if name.contains(needle)
+            && !KWS_PART_NAMES
+                .iter()
+                .any(|other| *other != needle && name.contains(other))
+        {
+            partial.push(path);
+        }
+    }
+    let by_preference = |mut paths: Vec<PathBuf>| {
+        paths.sort_by_key(|path| {
+            (
+                !path.to_string_lossy().to_lowercase().contains(".int8."),
+                path.clone(),
+            )
+        });
+        paths.into_iter().next()
+    };
+    // The canonical `<part>.onnx` name always wins over a substring match.
+    by_preference(exact).or_else(|| by_preference(partial))
 }
 
 pub(crate) fn valid_tokens_file(path: &Path) -> bool {
@@ -463,6 +565,8 @@ pub fn is_model_installed(id: &str) -> bool {
         | WHISPER_SMALL_MODEL_ID
         | WHISPER_TURBO_MODEL_ID
         | WHISPER_MEDIUM_MODEL_ID => is_whisper_ready(id),
+        OMNILINGUAL_ASR_MODEL_ID => is_omnilingual_ready(id),
+        COHERE_TRANSCRIBE_MODEL_ID => is_cohere_ready(id),
         _ => false,
     }
 }
@@ -471,10 +575,16 @@ fn dir_size(path: &Path, out: &mut u64) {
     if let Ok(rd) = std::fs::read_dir(path) {
         for entry in rd.flatten() {
             let p = entry.path();
-            if p.is_dir() {
-                dir_size(&p, out);
-            } else if let Ok(meta) = std::fs::metadata(&p) {
-                *out += meta.len();
+            // Never follow links: an archive may contain a link that points
+            // outside the model directory.
+            match std::fs::symlink_metadata(&p) {
+                Ok(meta) if meta.is_dir() => dir_size(&p, out),
+                Ok(meta) if meta.is_file() => {
+                    if let Ok(meta) = std::fs::metadata(&p) {
+                        *out += meta.len();
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -508,6 +618,7 @@ pub fn catalog() -> Vec<ModelInfo> {
             name: def.name.to_string(),
             kind: def.kind.to_string(),
             engine_key: def.engine_key.map(|s| s.to_string()),
+            company: def.company.map(|s| s.to_string()),
             size_bytes: def.size_bytes,
             disk_bytes: model_disk_bytes(def.id),
             installed: is_model_installed(def.id),
@@ -515,6 +626,21 @@ pub fn catalog() -> Vec<ModelInfo> {
             streaming: def.streaming,
         })
         .collect()
+}
+
+/// Copies `src` to `dst` without ever writing through a link that already
+/// exists at the destination. A planted symlink would otherwise turn the
+/// install into an arbitrary-file overwrite.
+fn copy_model_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    // `remove_file` unlinks the destination itself and never follows it.
+    let _ = std::fs::remove_file(dst);
+    let mut input = std::fs::File::open(src)?;
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dst)?;
+    std::io::copy(&mut input, &mut output)?;
+    Ok(())
 }
 
 pub fn download_to(url: &str, dest: &Path) -> Result<()> {
@@ -611,7 +737,23 @@ fn download_with_timeout(
     let part_path = dest.with_file_name(part_name);
 
     let mut body = response.into_body().into_reader();
-    let mut file = File::create(&part_path)?;
+    // O_EXCL: never follow a link planted at the part path. A stale part file
+    // from an earlier attempt is removed and the exclusive open is retried.
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&part_path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&part_path)?;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&part_path)?
+        }
+        Err(error) => return Err(error.into()),
+    };
     let mut received = 0u64;
     let mut chunk = [0u8; 64 * 1024];
     let mut last_progress_emit = std::time::Instant::now();
@@ -685,7 +827,7 @@ fn download_with_timeout(
             part_path.display(),
             dest.display()
         );
-        if let Err(copy_err) = std::fs::copy(&part_path, dest) {
+        if let Err(copy_err) = copy_model_file(&part_path, dest) {
             let _ = std::fs::remove_file(&part_path);
             return Err(CoreError::Io(copy_err));
         }
@@ -700,10 +842,13 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     if let Ok(rd) = std::fs::read_dir(dir) {
         for entry in rd.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                collect_files(&path, out);
-            } else {
-                out.push(path);
+            // Never follow links: an archive may contain a link that points
+            // outside the extraction root, and the install selectors must
+            // only ever see regular files inside it.
+            match std::fs::symlink_metadata(&path) {
+                Ok(meta) if meta.is_dir() => collect_files(&path, out),
+                Ok(meta) if meta.is_file() => out.push(path),
+                _ => {}
             }
         }
     }
@@ -737,6 +882,22 @@ fn extract_archive(
         let mut entry = entry.map_err(|e| {
             CoreError::Download(format!("corrupt entry in {}: {e}", archive_path.display()))
         })?;
+        // Never materialise archive-controlled links. `unpack_in` validates the
+        // entry path but not the link target, so a symlink entry could point
+        // outside the extraction root and the post-extraction walkers would
+        // follow it.
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_symlink() || entry_type.is_hard_link() {
+            log::warn!(
+                "skipping link entry in {}: {}",
+                archive_path.display(),
+                entry
+                    .path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "<unknown>".to_string())
+            );
+            continue;
+        }
         entry.unpack_in(dest).map_err(|e| {
             CoreError::Download(format!("failed to unpack entry in {}: {e}", dest.display()))
         })?;
@@ -823,8 +984,8 @@ fn install_stt_model(
                 let model_dir = stt_model_dir();
                 std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
                 let model_name = model.file_name().unwrap_or_default();
-                std::fs::copy(model, model_dir.join(model_name)).map_err(CoreError::Io)?;
-                std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+                copy_model_file(model, &model_dir.join(model_name)).map_err(CoreError::Io)?;
+                copy_model_file(tokens, &model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
                 log::info!(
                     "installed {} + tokens.txt -> {}",
                     model_name.to_string_lossy(),
@@ -925,7 +1086,7 @@ fn install_whisper_model(
         std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
         let move_or_copy = |src: &Path, dst: &Path| -> std::io::Result<()> {
             if std::fs::rename(src, dst).is_err() {
-                std::fs::copy(src, dst)?;
+                copy_model_file(src, dst)?;
             }
             Ok(())
         };
@@ -1014,15 +1175,15 @@ fn install_transducer_model(
 
         let model_dir = model_dir_for(id);
         std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
-        std::fs::copy(encoder, model_dir.join("encoder.onnx")).map_err(CoreError::Io)?;
-        std::fs::copy(decoder, model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
-        std::fs::copy(joiner, model_dir.join("joiner.onnx")).map_err(CoreError::Io)?;
-        std::fs::copy(tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+        copy_model_file(&encoder, &model_dir.join("encoder.onnx")).map_err(CoreError::Io)?;
+        copy_model_file(&decoder, &model_dir.join("decoder.onnx")).map_err(CoreError::Io)?;
+        copy_model_file(&joiner, &model_dir.join("joiner.onnx")).map_err(CoreError::Io)?;
+        copy_model_file(&tokens, &model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
         if let Some(vocab) = files
             .iter()
             .find(|p| p.file_name().is_some_and(|name| name == "bpe.vocab"))
         {
-            std::fs::copy(vocab, model_dir.join("bpe.vocab")).map_err(CoreError::Io)?;
+            copy_model_file(vocab, &model_dir.join("bpe.vocab")).map_err(CoreError::Io)?;
         }
         log::info!("installed {id} -> {}", model_dir.display());
         Ok(())
@@ -1102,8 +1263,109 @@ fn install_nemo_ctc_model(
         let model_dir = model_dir_for(id);
         std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
         let model_name = model.file_name().unwrap_or_default().to_owned();
-        std::fs::copy(&model, model_dir.join(model_name)).map_err(CoreError::Io)?;
-        std::fs::copy(&tokens, model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+        copy_model_file(&model, &model_dir.join(model_name)).map_err(CoreError::Io)?;
+        copy_model_file(&tokens, &model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
+        log::info!("installed {id} -> {}", model_dir.display());
+        Ok(())
+    })();
+
+    clean_after(&archive_path, &extract_dir);
+    if res.is_err() && is_cancelled() {
+        let _ = remove_model_unlocked(id);
+    }
+    res
+}
+
+fn install_cohere_model(
+    id: &str,
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<()> {
+    let def = model_def(id).ok_or_else(|| CoreError::Download(format!("unknown model '{id}'")))?;
+    let base = models_dir();
+    std::fs::create_dir_all(&base).map_err(CoreError::Io)?;
+    let archive_path = base.join(format!("{id}.tar.bz2"));
+    let extract_dir = base.join(format!(".extract-{id}"));
+
+    let res = (|| -> Result<()> {
+        log::info!("downloading {} -> {}", def.url, archive_path.display());
+        download_to_with_progress_cancel(
+            def.url,
+            &archive_path,
+            &mut |received, total| on_progress(id, received, total),
+            is_cancelled,
+        )?;
+        if is_cancelled() {
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
+        }
+        if extract_dir.exists() {
+            std::fs::remove_dir_all(&extract_dir).map_err(CoreError::Io)?;
+        }
+        extract_archive(&archive_path, &extract_dir, is_cancelled)?;
+        if is_cancelled() {
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
+        }
+
+        let mut files = Vec::new();
+        collect_files(&extract_dir, &mut files);
+        let find_part = |needle: &str| {
+            let mut hits: Vec<_> = files
+                .iter()
+                .filter(|p| {
+                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        let lower = n.to_lowercase();
+                        lower.ends_with(".onnx")
+                            && lower.contains(needle)
+                            && valid_file_size(p, MODEL_MIN_BYTES).is_some()
+                    })
+                })
+                .cloned()
+                .collect();
+            hits.sort_by_key(|p| !p.to_string_lossy().to_lowercase().contains(".int8."));
+            hits.first().cloned()
+        };
+
+        let encoder = find_part("encoder");
+        let decoder = find_part("decoder");
+        let tokens = files
+            .iter()
+            .find(|p| {
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    let lower = n.to_lowercase();
+                    lower.contains("tokens") && lower.ends_with(".txt")
+                })
+            })
+            .cloned();
+
+        let (Some(encoder), Some(decoder), Some(tokens)) = (encoder, decoder, tokens) else {
+            return Err(CoreError::Download(format!(
+                "archive {id} has no encoder/decoder/tokens files"
+            )));
+        };
+
+        if is_cancelled() {
+            return Err(CoreError::Download(
+                "download cancelled by user".to_string(),
+            ));
+        }
+
+        let model_dir = model_dir_for(id);
+        std::fs::create_dir_all(&model_dir).map_err(CoreError::Io)?;
+        let move_or_copy = |src: &Path, dst: &Path| -> std::io::Result<()> {
+            if std::fs::rename(src, dst).is_err() {
+                copy_model_file(src, dst)?;
+            }
+            Ok(())
+        };
+        let enc_name = encoder.file_name().unwrap_or_default().to_owned();
+        let dec_name = decoder.file_name().unwrap_or_default().to_owned();
+        move_or_copy(&encoder, &model_dir.join(enc_name)).map_err(CoreError::Io)?;
+        move_or_copy(&decoder, &model_dir.join(dec_name)).map_err(CoreError::Io)?;
+        move_or_copy(&tokens, &model_dir.join("tokens.txt")).map_err(CoreError::Io)?;
         log::info!("installed {id} -> {}", model_dir.display());
         Ok(())
     })();
@@ -1212,28 +1474,46 @@ fn checked_model_path(id: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// How long a caller waits for another operation on the same model to finish
+/// before giving up. Without a bound a stalled install would block a removal
+/// forever and leak the blocking worker thread.
+const MODEL_OPERATION_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 fn with_model_operation<T>(
     id: &str,
     is_cancelled: &dyn Fn() -> bool,
     operation: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
     let path = checked_model_path(id)?;
+    // The cancellation predicate is caller-supplied. Never run it while the
+    // global ownership mutex is held.
+    if is_cancelled() {
+        return Err(CoreError::Download("download cancelled by user".into()));
+    }
     let ownership = MODEL_OPERATIONS.get_or_init(Default::default);
-    let mut active = ownership.active.lock().unwrap_or_else(|e| e.into_inner());
+    let deadline = std::time::Instant::now() + MODEL_OPERATION_WAIT_TIMEOUT;
     loop {
+        let mut active = ownership.active.lock().unwrap_or_else(|e| e.into_inner());
+        if active.insert(path.clone()) {
+            drop(active);
+            break;
+        }
+        // Wait for the current holder, then re-check cancellation with the
+        // lock released.
+        let (guard, _timed_out) = ownership
+            .changed
+            .wait_timeout(active, std::time::Duration::from_millis(50))
+            .unwrap_or_else(|e| e.into_inner());
+        drop(guard);
         if is_cancelled() {
             return Err(CoreError::Download("download cancelled by user".into()));
         }
-        if active.insert(path.clone()) {
-            break;
+        if std::time::Instant::now() >= deadline {
+            return Err(CoreError::Download(format!(
+                "another operation for '{id}' is still in progress"
+            )));
         }
-        active = ownership
-            .changed
-            .wait_timeout(active, std::time::Duration::from_millis(50))
-            .unwrap_or_else(|e| e.into_inner())
-            .0;
     }
-    drop(active);
     let _lease = ModelLease { path, ownership };
     // Another operation may have replaced the path while we waited.
     checked_model_path(id)?;
@@ -1295,12 +1575,24 @@ fn ensure_model_unlocked(
         | WHISPER_SMALL_MODEL_ID
         | WHISPER_TURBO_MODEL_ID
         | WHISPER_MEDIUM_MODEL_ID => install_whisper_model(id, on_progress, is_cancelled),
+        OMNILINGUAL_ASR_MODEL_ID => {
+            install_nemo_ctc_model(id, on_progress, is_cancelled)
+        }
+        COHERE_TRANSCRIBE_MODEL_ID => {
+            install_cohere_model(id, on_progress, is_cancelled)
+        }
         other => Err(CoreError::Download(format!("unknown model '{other}'"))),
     }
 }
 
 pub fn remove_model(id: &str) -> Result<()> {
-    with_model_operation(id, &|| false, || remove_model_unlocked(id))
+    remove_model_with_cancel(id, &|| false)
+}
+
+/// Removes a model, honouring a cancellation signal while waiting for another
+/// operation on the same model to finish.
+pub fn remove_model_with_cancel(id: &str, is_cancelled: &dyn Fn() -> bool) -> Result<()> {
+    with_model_operation(id, is_cancelled, || remove_model_unlocked(id))
 }
 
 fn remove_model_unlocked(id: &str) -> Result<()> {
@@ -1780,6 +2072,24 @@ mod tests {
     }
 
     #[test]
+    fn catalog_includes_omnilingual_and_cohere_with_company() {
+        let catalog = catalog();
+        let omni = catalog.iter().find(|m| m.id == OMNILINGUAL_ASR_MODEL_ID).expect("omnilingual in catalog");
+        assert_eq!(omni.company.as_deref(), Some("Meta"));
+        assert_eq!(omni.engine_key.as_deref(), Some("omnilingual"));
+
+        let cohere = catalog.iter().find(|m| m.id == COHERE_TRANSCRIBE_MODEL_ID).expect("cohere in catalog");
+        assert_eq!(cohere.company.as_deref(), Some("Cohere"));
+        assert_eq!(cohere.engine_key.as_deref(), Some("cohere"));
+
+        let parakeet = catalog.iter().find(|m| m.id == STT_MODEL_ID).expect("parakeet in catalog");
+        assert_eq!(parakeet.company.as_deref(), Some("NVIDIA"));
+
+        let whisper = catalog.iter().find(|m| m.id == WHISPER_TURBO_MODEL_ID).expect("whisper in catalog");
+        assert_eq!(whisper.company.as_deref(), Some("OpenAI"));
+    }
+
+    #[test]
     fn installed_state_matches_disk() {
         let tmp = fixture("installed");
         let model_dir = tmp.join("opendictate").join("models").join(DEFAULT_MODEL);
@@ -1787,16 +2097,39 @@ mod tests {
         std::fs::write(model_dir.join("model.int8.onnx"), vec![0u8; 2_000_000]).unwrap();
         std::fs::write(model_dir.join("tokens.txt"), vec![0u8; 200]).unwrap();
         let _root = TestModelRoot::new(&tmp);
-        let catalog = catalog();
-        let parakeet = catalog.iter().find(|m| m.id == STT_MODEL_ID).unwrap();
+        let initial_catalog = catalog();
+        let parakeet = initial_catalog.iter().find(|m| m.id == STT_MODEL_ID).unwrap();
         assert!(parakeet.installed);
         assert_eq!(parakeet.disk_bytes, 2_000_200);
-        let whisper = catalog
+        let whisper = initial_catalog
             .iter()
             .find(|m| m.id == WHISPER_TINY_MODEL_ID)
             .unwrap();
         assert!(!whisper.installed);
         assert_eq!(whisper.disk_bytes, 0);
+
+        // Omnilingual installed
+        let omni_dir = tmp.join("opendictate").join("models").join(OMNILINGUAL_ASR_MODEL_ID);
+        std::fs::create_dir_all(&omni_dir).unwrap();
+        std::fs::write(omni_dir.join("model.int8.onnx"), vec![0u8; 1_500_000]).unwrap();
+        std::fs::write(omni_dir.join("tokens.txt"), vec![0u8; 150]).unwrap();
+
+        // Cohere installed
+        let cohere_dir = tmp.join("opendictate").join("models").join(COHERE_TRANSCRIBE_MODEL_ID);
+        std::fs::create_dir_all(&cohere_dir).unwrap();
+        std::fs::write(cohere_dir.join("encoder.int8.onnx"), vec![0u8; 1_500_000]).unwrap();
+        std::fs::write(cohere_dir.join("decoder.int8.onnx"), vec![0u8; 1_500_000]).unwrap();
+        std::fs::write(cohere_dir.join("tokens.txt"), vec![0u8; 150]).unwrap();
+
+        let updated_catalog = catalog();
+        let omni = updated_catalog.iter().find(|m| m.id == OMNILINGUAL_ASR_MODEL_ID).unwrap();
+        assert!(omni.installed);
+        assert_eq!(omni.disk_bytes, 1_500_150);
+
+        let cohere = updated_catalog.iter().find(|m| m.id == COHERE_TRANSCRIBE_MODEL_ID).unwrap();
+        assert!(cohere.installed);
+        assert_eq!(cohere.disk_bytes, 3_000_150);
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

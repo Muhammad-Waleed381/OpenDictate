@@ -91,7 +91,14 @@ pub fn list_sources() -> Option<Vec<PulseSource>> {
             return None;
         }
         let api = capi::pa_mainloop_get_api(mainloop);
-        let name = CString::new("opendictate-list").ok()?;
+        // Built before the mainloop so a failure cannot leak it.
+        let name = match CString::new("opendictate-list") {
+            Ok(name) => name,
+            Err(_) => {
+                capi::pa_mainloop_free(mainloop);
+                return None;
+            }
+        };
         let context = capi::pa_context_new(api, name.as_ptr());
         if context.is_null() {
             capi::pa_mainloop_free(mainloop);
@@ -378,14 +385,17 @@ fn append_samples(
     _stop_signal: &Arc<AtomicBool>,
     _started_at: &Arc<Mutex<Option<Instant>>>,
 ) {
-    let mut guard = buffer.lock().unwrap_or_else(|e| e.into_inner());
+    // Convert outside the buffer lock: this runs while the PulseAudio
+    // mainloop lock is held, so the critical section must stay short.
     let new_samples: Vec<f32> = bytes
         .chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect();
 
-    // `SharedBuffer::push` drains from the front when the recording cap is
-    // hit, advancing `base` so consumer watermarks stay valid.
+    // `SharedBuffer::push` evicts from the front when the recording cap is
+    // hit, advancing `base` so consumer watermarks stay valid. The eviction
+    // is O(1) so the audio thread never waits on a multi-megabyte memmove.
+    let mut guard = buffer.lock().unwrap_or_else(|e| e.into_inner());
     guard.push(&new_samples);
 }
 
