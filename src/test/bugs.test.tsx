@@ -55,6 +55,16 @@ beforeEach(() => {
 });
 
 describe("model lifecycle regressions", () => {
+  it("cleans up silero-vad-v4 progress when a model finishes installation", () => {
+    useStore.setState({ catalog: [model("a")] });
+    useStore.getState().addModelProgress({ file: "a", received: 100, total: 100 });
+    useStore.getState().addModelProgress({ file: "silero-vad-v4", received: 50, total: 50 });
+    expect(useStore.getState().modelProgress.length).toBe(2);
+
+    useStore.getState().finishModel("a");
+    expect(useStore.getState().modelProgress).toEqual([]);
+  });
+
   it("B037 retains byte-complete progress until installation is acknowledged", () => {
     useStore.getState().addModelProgress({ file: "a", received: 100, total: 100 });
     expect(useStore.getState().modelProgress).toEqual([expect.objectContaining({ file: "a", received: 100 })]);

@@ -270,7 +270,7 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
   finishModel: (id) => set((state) => ({
     modelDownloads: state.modelDownloads.filter((file) => file !== id),
     cancellingModels: state.cancellingModels.filter((file) => file !== id),
-    modelProgress: state.modelProgress.filter((progress) => progress.file !== id),
+    modelProgress: state.modelProgress.filter((progress) => progress.file !== id && progress.file !== "silero-vad-v4" && progress.file !== "silero_vad"),
   })),
 
   downloadModel: async (id) => {
@@ -285,6 +285,7 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
     } finally {
       get().finishModel(id);
       // VAD may be installed as a dependency of this model.
+      get().removeModelProgress("silero-vad-v4");
       get().removeModelProgress("silero_vad");
     }
   },

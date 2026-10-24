@@ -48,16 +48,19 @@ function useOpenDictateEvents() {
       api.onModelProgress((payload) => store.addModelProgress(payload)),
       api.onModelCancelled((payload) => {
         store.finishModel(payload.file);
+        store.removeModelProgress("silero-vad-v4");
         store.removeModelProgress("silero_vad");
         store.refreshModelState().catch(() => {});
       }),
       api.onModelError((payload) => {
         store.finishModel(payload.file);
+        store.removeModelProgress("silero-vad-v4");
         store.removeModelProgress("silero_vad");
         store.refreshModelState().catch(() => {});
       }),
       api.onModelsReady((payload) => {
         if (payload.file) store.finishModel(payload.file);
+        store.removeModelProgress("silero-vad-v4");
         store.removeModelProgress("silero_vad");
         store.refreshModelState().catch(() => {});
       }),
