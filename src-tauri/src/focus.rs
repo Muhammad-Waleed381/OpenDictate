@@ -32,7 +32,7 @@ use tauri::{AppHandle, Manager};
 #[cfg(target_os = "macos")]
 fn main_window_has_focus(app: &AppHandle) -> bool {
     app.get_webview_window("main")
-        .and_then(|win| win.is_focused())
+        .and_then(|win| win.is_focused().ok())
         .unwrap_or(false)
 }
 

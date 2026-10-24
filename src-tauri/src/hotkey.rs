@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
 use tauri::{AppHandle, Emitter, Manager};
@@ -346,6 +347,9 @@ fn remove_gnome_keybinding() {
         log::warn!("could not remove the GNOME keybinding slot: {error}");
     }
 }
+
+#[cfg(not(target_os = "linux"))]
+fn remove_gnome_keybinding() {}
 
 #[cfg(target_os = "linux")]
 fn variant_string(value: &str) -> String {
