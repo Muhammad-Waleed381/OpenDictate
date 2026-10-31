@@ -206,6 +206,26 @@ pub struct VadConfig {
     pub hangover_frames: usize,
 }
 
+/// 300 ms of audio kept before detected speech.
+const ONSET_PADDING_SAMPLES: usize = 4_800;
+
+/// Where to cut audio that reached `limit`: the quietest 30 ms in its last fifth,
+/// so uninterrupted speech is split between words rather than inside one.
+pub fn quietest_split(samples: &[f32], limit: usize) -> usize {
+    const WINDOW: usize = 480;
+    let start = limit - limit / 5;
+    if limit - start < WINDOW {
+        return limit;
+    }
+    (start..=limit - WINDOW)
+        .step_by(WINDOW / 2)
+        .min_by(|&a, &b| {
+            let energy = |at: usize| samples[at..at + WINDOW].iter().map(|s| s * s).sum::<f32>();
+            energy(a).total_cmp(&energy(b))
+        })
+        .map_or(limit, |at| at + WINDOW / 2)
+}
+
 pub fn default_config() -> VadConfig {
     VadConfig {
         energy_threshold: 0.008,
@@ -271,7 +291,9 @@ pub fn apply_energy_vad_with_config(audio: &[f32], config: &VadConfig) -> VadRes
         .saturating_sub(1)
         .saturating_sub(smoothed.iter().rev().position(|&f| f).unwrap_or(0));
 
-    let start_sample = first_speech * config.frame_size;
+    // Soft consonants start below the threshold; keep the audio just before it,
+    // as the Silero path does.
+    let start_sample = (first_speech * config.frame_size).saturating_sub(ONSET_PADDING_SAMPLES);
     let end_sample = ((last_speech + 1) * config.frame_size).min(audio.len());
     let trimmed_audio = audio[start_sample..end_sample].to_vec();
 
@@ -353,6 +375,15 @@ mod tests {
         assert!(result.speech_duration_ms > 0);
         assert!(result.trimmed_audio.len() < audio.len());
         assert!(result.trimmed_audio.len() >= 16_000);
+    }
+
+    #[test]
+    fn energy_vad_keeps_the_soft_onset_before_the_threshold() {
+        let mut audio = vec![0.0f32; 16_000];
+        audio.extend(vec![0.5f32; 8_000]);
+        let result = apply_energy_vad(&audio);
+        // Speech begins inside frame 33, which starts at sample 15,840.
+        assert_eq!(result.trimmed_audio.len(), 24_000 - (15_840 - ONSET_PADDING_SAMPLES));
     }
 
     #[test]

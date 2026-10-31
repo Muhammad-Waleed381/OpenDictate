@@ -103,23 +103,6 @@ pub fn submit_after_insert(
     Ok(inserted)
 }
 
-/// Where to cut an utterance that reached `limit`: the quietest 30 ms in its last
-/// fifth, so uninterrupted speech is split between words rather than inside one.
-fn quietest_split(samples: &[f32], limit: usize) -> usize {
-    const WINDOW: usize = 480;
-    let start = limit - limit / 5;
-    if limit - start < WINDOW {
-        return limit;
-    }
-    (start..=limit - WINDOW)
-        .step_by(WINDOW / 2)
-        .min_by(|&a, &b| {
-            let energy = |at: usize| samples[at..at + WINDOW].iter().map(|s| s * s).sum::<f32>();
-            energy(a).total_cmp(&energy(b))
-        })
-        .map_or(limit, |at| at + WINDOW / 2)
-}
-
 /// Tracks the samples around a two-observation speech onset.
 pub struct SpeechBuffer {
     samples: Vec<f32>,
@@ -161,7 +144,7 @@ impl SpeechBuffer {
         // keeps the remainder in order instead of dropping the overrun.
         let mut completed = Vec::new();
         while self.samples.len() >= self.limit {
-            let remainder = self.samples.split_off(quietest_split(&self.samples, self.limit));
+            let remainder = self.samples.split_off(opendictate_core::audio::vad::quietest_split(&self.samples, self.limit));
             completed.push(std::mem::replace(&mut self.samples, remainder));
         }
         completed

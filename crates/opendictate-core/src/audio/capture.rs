@@ -414,8 +414,7 @@ impl AudioRecorder {
         let error = Arc::clone(&self.capture_error);
         let native_rate = config.sample_rate.0;
         let channels = config.channels as usize;
-        let mut resample_pos = 0.0_f64;
-        let resample_ratio = SAMPLE_RATE as f64 / native_rate as f64;
+        let mut resampler = Resampler::new(native_rate, SAMPLE_RATE);
         device
             .build_input_stream(
                 config,
@@ -423,20 +422,7 @@ impl AudioRecorder {
                     // Stream destruction stops callbacks. Process a callback already
                     // in flight so stop_since receives the final captured samples.
                     let mono = convert_to_mono(data, channels);
-                    let resampled = if native_rate == SAMPLE_RATE {
-                        mono
-                    } else {
-                        let mut out =
-                            Vec::with_capacity((mono.len() as f64 * resample_ratio) as usize + 1);
-                        while (resample_pos.floor() as usize) < mono.len().saturating_sub(1) {
-                            let idx = resample_pos.floor() as usize;
-                            let frac = (resample_pos - idx as f64) as f32;
-                            out.push(mono[idx] * (1.0 - frac) + mono[idx + 1] * frac);
-                            resample_pos += 1.0 / resample_ratio;
-                        }
-                        resample_pos = (resample_pos - mono.len() as f64).max(0.0);
-                        out
-                    };
+                    let resampled = resampler.process(&mono);
                     buffer
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -554,6 +540,97 @@ impl AudioRecorder {
     }
 }
 
+/// Streaming sample-rate converter whose state spans capture callbacks.
+///
+/// Downsampling first removes what the lower rate cannot represent: left in,
+/// sibilant energy above 8 kHz would fold into the speech band. The position
+/// carries over between buffers, because restarting it would drop samples and
+/// jump phase at every callback.
+struct Resampler {
+    step: f64,
+    position: f64,
+    previous: Option<f32>,
+    taps: Vec<f32>,
+    history: Vec<f32>,
+}
+
+impl Resampler {
+    fn new(from: u32, to: u32) -> Self {
+        let step = from as f64 / to as f64;
+        let taps = if step > 1.0 { low_pass_taps(step) } else { Vec::new() };
+        Self {
+            step,
+            position: 0.0,
+            previous: None,
+            history: vec![0.0; taps.len().saturating_sub(1)],
+            taps,
+        }
+    }
+
+    fn process(&mut self, input: &[f32]) -> Vec<f32> {
+        if self.step == 1.0 || input.is_empty() {
+            return input.to_vec();
+        }
+        let filtered = self.filter(input);
+        // Index 0 is the last sample of the previous buffer, so the interval
+        // between two buffers is interpolated like any other.
+        let mut samples = Vec::with_capacity(filtered.len() + 1);
+        samples.extend(self.previous);
+        samples.extend_from_slice(&filtered);
+        let mut out = Vec::with_capacity((samples.len() as f64 / self.step) as usize + 1);
+        while (self.position as usize) + 1 < samples.len() {
+            let index = self.position as usize;
+            let fraction = (self.position - index as f64) as f32;
+            out.push(samples[index] * (1.0 - fraction) + samples[index + 1] * fraction);
+            self.position += self.step;
+        }
+        self.position -= (samples.len() - 1) as f64;
+        self.previous = samples.last().copied();
+        out
+    }
+
+    fn filter(&mut self, input: &[f32]) -> Vec<f32> {
+        if self.taps.is_empty() {
+            return input.to_vec();
+        }
+        let overlap = self.history.len();
+        let mut joined = std::mem::take(&mut self.history);
+        joined.extend_from_slice(input);
+        let filtered = (0..input.len())
+            .map(|i| {
+                self.taps
+                    .iter()
+                    .zip(&joined[i..])
+                    .map(|(tap, sample)| tap * sample)
+                    .sum()
+            })
+            .collect();
+        self.history = joined[joined.len() - overlap..].to_vec();
+        filtered
+    }
+}
+
+/// Hann-windowed sinc low-pass just under the output Nyquist frequency.
+fn low_pass_taps(step: f64) -> Vec<f32> {
+    let length = ((step * 16.0) as usize | 1).min(255);
+    let middle = (length / 2) as f64;
+    let cutoff = 0.45 / step;
+    let raw: Vec<f64> = (0..length)
+        .map(|i| {
+            let x = i as f64 - middle;
+            let sinc = if x == 0.0 {
+                2.0 * cutoff
+            } else {
+                (2.0 * std::f64::consts::PI * cutoff * x).sin() / (std::f64::consts::PI * x)
+            };
+            let window = 0.5 + 0.5 * (std::f64::consts::PI * x / (middle + 1.0)).cos();
+            sinc * window
+        })
+        .collect();
+    let gain: f64 = raw.iter().sum();
+    raw.iter().map(|tap| (tap / gain) as f32).collect()
+}
+
 fn convert_to_mono<T: cpal::Sample>(data: &[T], channels: usize) -> Vec<f32>
 where
     f32: cpal::FromSample<T>,
@@ -584,6 +661,48 @@ impl Drop for AudioRecorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tone(frequency: f32, rate: u32, seconds: f32) -> Vec<f32> {
+        (0..(rate as f32 * seconds) as usize)
+            .map(|i| (2.0 * std::f32::consts::PI * frequency * i as f32 / rate as f32).sin())
+            .collect()
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn resampling_keeps_speech_and_removes_what_would_alias() {
+        let mut keep = Resampler::new(48_000, 16_000);
+        let speech = keep.process(&tone(1_000.0, 48_000, 1.0));
+        assert!((rms(&speech[200..]) - 0.707).abs() < 0.02, "{}", rms(&speech[200..]));
+        let mut remove = Resampler::new(48_000, 16_000);
+        let sibilant = remove.process(&tone(12_000.0, 48_000, 1.0));
+        assert!(rms(&sibilant[200..]) < 0.02, "{}", rms(&sibilant[200..]));
+    }
+
+    #[test]
+    fn resampling_does_not_depend_on_callback_size() {
+        let input = tone(440.0, 44_100, 1.0);
+        let whole = Resampler::new(44_100, 16_000).process(&input);
+        for size in [80, 256, 1024] {
+            let mut resampler = Resampler::new(44_100, 16_000);
+            let parts: Vec<f32> = input.chunks(size).flat_map(|c| resampler.process(c)).collect();
+            assert_eq!(parts.len(), whole.len(), "buffer {size}");
+            for (a, b) in parts.iter().zip(&whole) {
+                assert!((a - b).abs() < 1e-3, "buffer {size}");
+            }
+        }
+    }
+
+    #[test]
+    fn upsampling_and_matching_rates_keep_the_expected_length() {
+        assert_eq!(Resampler::new(16_000, 16_000).process(&[0.1, 0.2]), vec![0.1, 0.2]);
+        let mut up = Resampler::new(8_000, 16_000);
+        let total: usize = tone(200.0, 8_000, 1.0).chunks(80).map(|c| up.process(c).len()).sum();
+        assert!((total as i64 - 16_000).abs() <= 2, "{total}");
+    }
 
     #[test]
     fn integer_pcm_converts_to_normalized_mono() {

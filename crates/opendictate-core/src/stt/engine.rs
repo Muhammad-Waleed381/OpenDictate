@@ -12,6 +12,34 @@ use crate::error::{CoreError, Result};
 const MIN_AUDIO_SAMPLES: usize = 3_200;
 /// Whisper models require audio chunks strictly under 30 seconds.
 const WHISPER_CHUNK_SAMPLES: usize = 16_000 * 29;
+/// Languages the Cohere model accepts. Sherpa rejects anything else, including
+/// the "auto" that the Language setting defaults to.
+const COHERE_LANGUAGES: &[&str] = &[
+    "ar", "de", "el", "en", "es", "fr", "it", "ja", "ko", "nl", "pl", "pt", "vi", "zh",
+];
+
+fn cohere_language(language: Option<&str>) -> String {
+    match language {
+        Some(code) if COHERE_LANGUAGES.contains(&code) => code.to_string(),
+        Some(code) => {
+            log::warn!("Cohere does not support language '{code}'; using English");
+            "en".to_string()
+        }
+        None => "en".to_string(),
+    }
+}
+
+/// Cuts long audio at quiet moments, so a word is not split across two decodes.
+fn split_at_quiet_points(mut audio: &[f32], limit: usize) -> Vec<&[f32]> {
+    let mut chunks = Vec::new();
+    while audio.len() > limit {
+        let (chunk, rest) = audio.split_at(crate::audio::vad::quietest_split(audio, limit));
+        chunks.push(chunk);
+        audio = rest;
+    }
+    chunks.push(audio);
+    chunks
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelKind {
@@ -282,7 +310,7 @@ impl SttEngine {
                     None
                 };
 
-                let cohere_language = language.clone().or_else(|| Some("en".to_string()));
+                let cohere_language = Some(cohere_language(whisper_language.as_deref()));
 
                 OfflineRecognizerConfig {
                     model_config: OfflineModelConfig {
@@ -369,8 +397,8 @@ impl SttEngine {
         // empirically; sherpa-onnx only *advises* <=30s for offline models).
         // Streaming models feed samples incrementally and are unaffected too.
         if self.kind == ModelKind::Whisper && audio.len() > WHISPER_CHUNK_SAMPLES {
-            let chunks: Vec<&[f32]> = audio
-                .chunks(WHISPER_CHUNK_SAMPLES)
+            let chunks: Vec<&[f32]> = split_at_quiet_points(audio, WHISPER_CHUNK_SAMPLES)
+                .into_iter()
                 .filter(|c| c.len() >= MIN_AUDIO_SAMPLES)
                 .collect();
             let results = self.transcribe_batch_chunks(&chunks, hotwords)?;
@@ -457,6 +485,24 @@ impl SttEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cohere_never_receives_a_language_it_rejects() {
+        assert_eq!(cohere_language(None), "en");
+        assert_eq!(cohere_language(Some("de")), "de");
+        assert_eq!(cohere_language(Some("ur")), "en");
+    }
+
+    #[test]
+    fn long_audio_splits_at_quiet_points_and_keeps_every_sample() {
+        let mut audio = vec![0.5f32; 30_000];
+        audio[9_000..9_480].fill(0.0);
+        let chunks = split_at_quiet_points(&audio, 10_000);
+        assert!((9_000..=9_480).contains(&chunks[0].len()), "{}", chunks[0].len());
+        assert_eq!(chunks.iter().map(|c| c.len()).sum::<usize>(), audio.len());
+        assert!(chunks.iter().all(|c| c.len() <= 10_000));
+    }
+
 
     #[test]
     #[ignore = "requires installed NeMo model assets"]
