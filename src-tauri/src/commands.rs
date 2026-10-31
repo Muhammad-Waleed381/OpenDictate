@@ -868,7 +868,7 @@ pub async fn undo_last_insert(app: AppHandle) -> Result<(), String> {
         let state = app.state::<AppState>();
         let mut last = state.last_inserted.lock().map_err(|e| e.to_string())?;
         undo_when_available(&mut last, || {
-            crate::inject::with_external_focus(&app, crate::inject::undo_last_insert)
+            crate::inject::with_external_focus(&app, || crate::inject::undo_in_target(&app))
         })
     })
     .await

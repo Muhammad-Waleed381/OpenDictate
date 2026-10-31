@@ -707,7 +707,8 @@ export function SettingsTab() {
               <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
                 <li><code className="text-foreground font-semibold">"go to sleep"</code> / <code className="text-foreground font-semibold">"stop listening"</code></li>
                 <li><code className="text-foreground font-semibold">"insert snippet &lt;name&gt;"</code>: Expands saved snippet</li>
-                <li><code className="text-foreground font-semibold">"git status"</code> / <code className="text-foreground font-semibold">"clear terminal"</code></li>
+                <li><code className="text-foreground font-semibold">"git status"</code> / <code className="text-foreground font-semibold">"clear terminal"</code>: Run at once in the Terminal input target</li>
+                <li><code className="text-foreground font-semibold">"git push"</code> / <code className="text-foreground font-semibold">"git pull"</code>: Typed only — say "send" to run</li>
               </ul>
             </div>
           </div>

@@ -1137,6 +1137,36 @@ pub fn load_engine(state: &AppState) -> Result<Arc<SttEngine>, String> {
     Ok(engine)
 }
 
+/// Whether a spoken terminal command also presses Enter. Only read-only commands
+/// run at once, and only in the Terminal input target: a misheard "git push"
+/// must not change a repository, and Enter means something else in a document.
+/// Otherwise the command is only typed, and saying "send" runs it.
+fn terminal_command_runs_at_once(command: &str, terminal_target: bool) -> bool {
+    terminal_target && matches!(command, "git status" | "git diff" | "git log" | "clear")
+}
+
+/// Actions delivered as keystrokes to whichever window holds the focus.
+fn sends_editing_keys(action: &opendictate_core::text::VoiceAction) -> bool {
+    use opendictate_core::text::VoiceAction::*;
+    matches!(
+        action,
+        Undo | DeleteWord
+            | DeleteLine
+            | ClearAll
+            | NewLine
+            | NewParagraph
+            | Tab
+            | Submit
+            | Interrupt
+            | NextTab
+            | PrevTab
+            | NewTab
+            | CloseTab
+            | ScrollDown
+            | ScrollUp
+    )
+}
+
 fn handle_voice_action_or_snippet(
     app: &AppHandle,
     state: &AppState,
@@ -1157,9 +1187,14 @@ fn handle_voice_action_or_snippet(
         return Ok(result);
     }
     let action = prepared.action.clone();
+    if action.as_ref().is_some_and(sends_editing_keys) {
+        // These keystrokes would edit OpenDictate's own fields, for example
+        // "clear all" while the Settings window is focused.
+        inject::require_external_focus(app)?;
+    }
     let label = match action {
         Some(VoiceAction::Undo) => {
-            inject::undo_last_insert()?;
+            inject::undo_in_target(app)?;
             // The insertion has been undone: the UI must not offer another
             // Undo for it, or a second press would remove an earlier
             // insertion.
@@ -1167,7 +1202,7 @@ fn handle_voice_action_or_snippet(
             "Undo".to_string()
         }
         Some(VoiceAction::DeleteWord) => {
-            inject::press_delete_word()?;
+            inject::delete_word_in_target(app)?;
             "Delete Word".to_string()
         }
         Some(VoiceAction::DeleteLine) => {
@@ -1175,7 +1210,7 @@ fn handle_voice_action_or_snippet(
             "Delete Line".to_string()
         }
         Some(VoiceAction::ClearAll) => {
-            inject::press_clear_all()?;
+            inject::clear_all_in_target(app)?;
             "Clear All".to_string()
         }
         Some(VoiceAction::NewLine) => {
@@ -1202,6 +1237,12 @@ fn handle_voice_action_or_snippet(
         ) => {
             commit_text_locked(app, state, &phrase, 0, token, false, true)?;
             return Ok(Some(phrase));
+        }
+        Some(VoiceAction::TerminalCommand(text))
+            if !terminal_command_runs_at_once(&text, inject::uses_terminal_shortcuts(app)?) =>
+        {
+            commit_text_locked(app, state, &text, 0, token, false, true)?;
+            return Ok(Some(text));
         }
         Some(VoiceAction::PromptAndSend(text) | VoiceAction::TerminalCommand(text)) => {
             let inserted = submit_after_insert(
@@ -1845,6 +1886,25 @@ mod session_regressions {
         assert!(is_explicit_app_switch("open app chrome"));
         assert!(!is_explicit_app_switch("Open calculator"));
         assert!(!is_explicit_app_switch("Go to market"));
+    }
+
+    #[test]
+    fn only_read_only_commands_run_at_once_and_only_in_a_terminal() {
+        assert!(terminal_command_runs_at_once("git status", true));
+        assert!(terminal_command_runs_at_once("clear", true));
+        assert!(!terminal_command_runs_at_once("git push", true));
+        assert!(!terminal_command_runs_at_once("git pull", true));
+        assert!(!terminal_command_runs_at_once("git status", false));
+    }
+
+    #[test]
+    fn keystroke_actions_are_guarded_but_app_and_browser_actions_are_not() {
+        use opendictate_core::text::VoiceAction;
+        assert!(sends_editing_keys(&VoiceAction::ClearAll));
+        assert!(sends_editing_keys(&VoiceAction::Undo));
+        assert!(!sends_editing_keys(&VoiceAction::SwitchApp("code".into())));
+        assert!(!sends_editing_keys(&VoiceAction::OpenUrl("a.io".into())));
+        assert!(!sends_editing_keys(&VoiceAction::Sleep));
     }
 
     #[test]

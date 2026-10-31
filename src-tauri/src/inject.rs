@@ -12,10 +12,45 @@ pub fn inject_text(app: &AppHandle, text: &str, mode: &str) -> Result<(), String
     press_paste(terminal)
 }
 
-fn uses_terminal_shortcuts(app: &AppHandle) -> Result<bool, String> {
+pub fn uses_terminal_shortcuts(app: &AppHandle) -> Result<bool, String> {
     let state = app.state::<crate::state::AppState>();
     let settings = state.settings.lock().map_err(|e| e.to_string())?;
     Ok(settings.input_target == "terminal")
+}
+
+const TERMINAL_UNDO_UNSUPPORTED: &str =
+    "Undo is off for the Terminal input target because Ctrl+Z would suspend the running program. Say \"delete line\" instead.";
+
+fn undo_for_target(terminal: bool) -> Result<(), String> {
+    if terminal {
+        Err(TERMINAL_UNDO_UNSUPPORTED.into())
+    } else {
+        undo_last_insert()
+    }
+}
+
+/// Undoes an insertion with the shortcut that is safe for the input target.
+pub fn undo_in_target(app: &AppHandle) -> Result<(), String> {
+    undo_for_target(uses_terminal_shortcuts(app)?)
+}
+
+/// Ctrl+Backspace is not word deletion in a shell; readline uses Ctrl+W.
+pub fn delete_word_in_target(app: &AppHandle) -> Result<(), String> {
+    if uses_terminal_shortcuts(app)? {
+        press_shell_delete_word()
+    } else {
+        press_delete_word()
+    }
+}
+
+/// Select-all then Backspace does not clear a shell prompt: Ctrl+A only moves
+/// the cursor there. The whole input in a shell is the current line.
+pub fn clear_all_in_target(app: &AppHandle) -> Result<(), String> {
+    if uses_terminal_shortcuts(app)? {
+        press_delete_line(app)
+    } else {
+        press_clear_all()
+    }
 }
 
 /// Whether a window must be hidden to hand the keyboard focus back to the
@@ -79,7 +114,7 @@ pub fn with_external_focus<T>(
     result
 }
 
-fn require_external_focus(app: &AppHandle) -> Result<(), String> {
+pub fn require_external_focus(app: &AppHandle) -> Result<(), String> {
     for window in app.webview_windows().into_values() {
         ensure_external_focus(
             window
@@ -234,6 +269,14 @@ mod tests {
     }
 
     #[test]
+    fn terminal_undo_never_sends_the_suspend_shortcut() {
+        assert_eq!(
+            undo_for_target(true).unwrap_err(),
+            TERMINAL_UNDO_UNSUPPORTED
+        );
+    }
+
+    #[test]
     fn the_dock_is_never_hidden_for_the_focus_handoff() {
         // The dock is a persistent HUD. Hiding it would make the on-screen
         // microphone control disappear mid-session.
@@ -272,7 +315,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn window_matchers_receive_a_literal_name() {
-        // `wmctrl -a` and `xdotool search --class` match a regular expression.
+        // `xdotool search --class` matches a regular expression.
         // A spoken name must never be able to match an unrelated window.
         assert_eq!(literal_regex("chrome"), "chrome");
         assert_eq!(literal_regex(".*"), "\\.\\*");
@@ -659,6 +702,11 @@ pub fn press_delete_word() -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
+fn press_shell_delete_word() -> Result<(), String> {
+    linux_key(&[("ctrl", uinput::KEY_LEFTCTRL)], ("w", uinput::KEY_W))
+}
+
+#[cfg(target_os = "linux")]
 fn delete_line_chords(terminal: bool) -> Vec<LinuxChord> {
     if terminal {
         // Readline shells (Bash/Zsh): beginning-of-line then kill-to-end,
@@ -769,13 +817,15 @@ pub fn switch_to_app(app_name: &str) -> Result<(), String> {
     };
 
     for target in candidates {
-        // `wmctrl -a` and `xdotool search --class` match their argument as a
-        // regular expression. The name comes from a spoken command, so it
-        // must be escaped: an unescaped name could focus an unrelated
-        // window, and the next dictated insertion would land there.
+        // `xdotool search --class` matches its argument as a regular
+        // expression. The name comes from a spoken command, so it must be
+        // escaped: an unescaped name could focus an unrelated window, and the
+        // next dictated insertion would land there.
         let literal = literal_regex(target);
-        // 1. Try wmctrl (standard on X11 / Xwayland)
-        if run("wmctrl", &["-x", "-a", &literal]).is_ok() {
+        // 1. Try wmctrl (standard on X11 / Xwayland). It compares plain
+        //    substrings, so an escaped name like `org\.gnome\.Nautilus`
+        //    would never match.
+        if run("wmctrl", &["-x", "-a", target]).is_ok() {
             return Ok(());
         }
         // 2. Try xdotool
@@ -986,6 +1036,24 @@ pub fn press_delete_word() -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "linux"))]
+fn press_shell_delete_word() -> Result<(), String> {
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("failed to init input backend: {e}"))?;
+    #[cfg(target_os = "windows")]
+    let w_key = Key::W;
+    #[cfg(not(target_os = "windows"))]
+    let w_key = Key::Unicode('w');
+    enigo
+        .key(Key::Control, Direction::Press)
+        .map_err(|e| e.to_string())?;
+    // Release the modifier on every path.
+    let clicked = enigo.key(w_key, Direction::Click);
+    let released = enigo.key(Key::Control, Direction::Release);
+    clicked.and(released).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
 pub fn press_delete_line(app: &AppHandle) -> Result<(), String> {
     use enigo::{Direction, Enigo, Key, Keyboard, Settings};
     let mut enigo = Enigo::new(&Settings::default())
@@ -1015,12 +1083,19 @@ pub fn press_delete_line(app: &AppHandle) -> Result<(), String> {
         let selected = enigo.key(Key::LeftArrow, Direction::Click);
         let released_meta = enigo.key(Key::Meta, Direction::Release);
         selected.and(released_meta).map_err(|e| e.to_string())?;
+        // Cmd+Shift+Right selects to the end of the line. Shift+Right alone
+        // would select one character, so only that character was deleted.
         enigo
-            .key(Key::Shift, Direction::Press)
+            .key(Key::Meta, Direction::Press)
             .map_err(|e| e.to_string())?;
-        let selected = enigo.key(Key::RightArrow, Direction::Click);
+        let pressed_shift = enigo.key(Key::Shift, Direction::Press);
+        let selected = pressed_shift.and_then(|_| enigo.key(Key::RightArrow, Direction::Click));
         let released_shift = enigo.key(Key::Shift, Direction::Release);
-        selected.and(released_shift).map_err(|e| e.to_string())?;
+        let released_meta = enigo.key(Key::Meta, Direction::Release);
+        selected
+            .and(released_shift)
+            .and(released_meta)
+            .map_err(|e| e.to_string())?;
     }
     #[cfg(target_os = "windows")]
     {
