@@ -61,8 +61,9 @@ pub enum VoiceAction {
 
 /// Helper to convert a string to camelCase.
 pub fn to_camel_case(input: &str) -> String {
+    let input = input.replace(['\'', '\u{2019}'], "");
     let words: Vec<&str> = input
-        .split(|c: char| c.is_whitespace() || c == '_' || c == '-')
+        .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .collect();
 
@@ -93,8 +94,9 @@ pub fn to_camel_case(input: &str) -> String {
 
 /// Helper to convert a string to snake_case.
 pub fn to_snake_case(input: &str) -> String {
+    let input = input.replace(['\'', '\u{2019}'], "");
     let words: Vec<String> = input
-        .split(|c: char| c.is_whitespace() || c == '_' || c == '-')
+        .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .map(|w| w.to_lowercase())
         .collect();
@@ -136,16 +138,121 @@ fn looks_like_url(value: &str) -> bool {
     !name.is_empty() && tld.len() >= 2 && tld.chars().all(|ch| ch.is_ascii_alphabetic())
 }
 
+/// Sentence punctuation the recognizer appends to a spoken value.
+const SENTENCE_PUNCTUATION: &[char] = &['.', ',', '!', '?', ';', ':', '\u{2026}'];
+
+/// Applications that "open x", "focus x" and "go to x" can name. Those verbs
+/// also begin ordinary sentences, so they only act on a name known here; any
+/// other application is reached with the unambiguous "switch to" or "open app".
+const KNOWN_APPS: &[&str] = &[
+    "brave", "browser", "chrome", "code", "console", "cursor", "discord", "edge", "figma",
+    "file manager", "files", "finder", "firefox", "google chrome", "notion", "obsidian", "safari",
+    "slack", "spotify", "teams", "telegram", "terminal", "visual studio code", "vs code", "vscode",
+    "whatsapp", "zoom",
+];
+
+fn is_known_app(target: &str) -> bool {
+    KNOWN_APPS.contains(&command_key(target).as_str())
+}
+
+/// First words that show a "<verb> <rest>" transcript is ordinary prose, such
+/// as "open the door" or "go to bed", rather than an application name.
+const NOT_APP_NAME: &[&str] = &[
+    "a", "about", "all", "an", "and", "any", "at", "bed", "but", "church", "for", "from", "her",
+    "here", "him", "his", "home", "if", "in", "it", "me", "my", "of", "on", "or", "our", "out",
+    "school", "see", "sleep", "some", "that", "the", "their", "them", "there", "these", "this",
+    "those", "to", "up", "us", "when", "with", "work", "you", "your",
+];
+const NOT_CASE_PHRASE: &[&str] = &[
+    "and",
+    "are",
+    "characters",
+    "for",
+    "in",
+    "is",
+    "letter",
+    "letters",
+    "means",
+    "names",
+    "naming",
+    "or",
+    "variables",
+    "versus",
+    "vs",
+    "was",
+    "with",
+];
+
+fn first_word_is_any(value: &str, words: &[&str]) -> bool {
+    value
+        .split_whitespace()
+        .next()
+        .map(|word| {
+            word.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .is_some_and(|word| words.contains(&word.as_str()))
+}
+
+/// A spoken value without the sentence punctuation the recognizer appended.
+fn spoken_value(rest: &str) -> &str {
+    rest.trim()
+        .trim_end_matches(SENTENCE_PUNCTUATION)
+        .trim_end()
+}
+
+/// Application names are at most a few words ("visual studio code").
+fn is_app_target(target: &str) -> bool {
+    !target.is_empty()
+        && target.split_whitespace().count() <= 3
+        && !first_word_is_any(target, NOT_APP_NAME)
+}
+
+/// Turns a spoken URL into its written form: "example dot com slash docs"
+/// becomes "example.com/docs". Only sentence punctuation is removed from a URL
+/// that was already written out, because `!` and `?` can be part of one. A
+/// spoken value that is still not a URL returns `None`.
+fn normalize_spoken_url(rest: &str) -> Option<String> {
+    let value = rest
+        .trim()
+        .trim_end_matches(['.', ',', ';', '\u{2026}'])
+        .trim_end();
+    if value.is_empty() {
+        return None;
+    }
+    if !value.contains(char::is_whitespace) {
+        return Some(value.to_string());
+    }
+    let joined: String = value
+        .split_whitespace()
+        .map(|word| match word.to_lowercase().as_str() {
+            "dot" => ".",
+            "slash" => "/",
+            "dash" | "hyphen" => "-",
+            _ => word,
+        })
+        .collect();
+    looks_like_url(&joined).then_some(joined)
+}
+
+/// The form of a transcript used to compare it with whole-utterance commands
+/// and wake phrases: lowercase, no surrounding punctuation, and single spaces.
+/// Recognizers differ in how they write these ("Scroll-down.", "NEW LINE").
+pub fn command_key(raw: &str) -> String {
+    raw.trim_matches(|c: char| !c.is_alphanumeric())
+        .replace('-', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 /// Parses a transcription text to check if it represents an in-place voice command.
 ///
 /// If it matches a recognized command pattern, returns `Some(VoiceAction)`.
 /// If it is normal speech, returns `None`.
 pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
-    let cleaned = raw_text
-        .trim()
-        .trim_end_matches(|c: char| c == '.' || c == '!' || c == '?' || c == ',')
-        .trim()
-        .to_lowercase();
+    let cleaned = command_key(raw_text);
 
     if cleaned.is_empty() {
         return None;
@@ -157,7 +264,7 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
         "delete last word" | "delete word" | "erase word" => return Some(VoiceAction::DeleteWord),
         "delete last line" | "delete line" | "clear line" => return Some(VoiceAction::DeleteLine),
         "clear all" | "delete all" | "select all and delete" => return Some(VoiceAction::ClearAll),
-        "new line" | "press enter" | "hit enter" | "line break" => {
+        "new line" | "newline" | "press enter" | "hit enter" | "line break" => {
             return Some(VoiceAction::NewLine)
         }
         "new paragraph" | "next paragraph" => return Some(VoiceAction::NewParagraph),
@@ -195,7 +302,9 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
 
     // Only command words are normalized. Prefix lengths are ASCII byte
     // boundaries checked with `get`, so Unicode payloads remain untouched.
-    let original = raw_text.trim();
+    let original = raw_text
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .trim_end();
     // A command prefix is the word itself; the payload follows a space, any
     // other whitespace, or a colon. The prefix word is matched
     // case-insensitively, the payload is not.
@@ -209,12 +318,25 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
         rest.strip_prefix(|ch: char| matches!(ch, ' ' | '\t' | '\n' | '\r' | ':' | ','))
     };
 
-    // 2. AI Prompting & Auto-Send: "prompt <text>", "ask <text>"
-    if let Some(rest) = payload("prompt ")
-        .or_else(|| payload("ask "))
-        .or_else(|| payload("tell claude "))
-        .or_else(|| payload("tell cursor "))
-        .or_else(|| payload("tell codex "))
+    // Prefix commands are phrases that do not begin ordinary sentences. One-word
+    // openers such as "ask", "search" or "open" are not enough on their own: no
+    // list of exceptions can tell "ask the model why" from a request.
+
+    // 2. AI Prompting & Auto-Send: "send prompt <text>", "ask claude <text>"
+    if let Some(rest) = [
+        "send prompt ",
+        "prompt and send ",
+        "tell claude ",
+        "tell cursor ",
+        "tell codex ",
+        "tell chatgpt ",
+        "ask claude ",
+        "ask cursor ",
+        "ask codex ",
+        "ask chatgpt ",
+    ]
+    .iter()
+    .find_map(|prefix| payload(prefix))
     {
         let prompt_text = rest.trim();
         if !prompt_text.is_empty() {
@@ -227,84 +349,66 @@ pub fn parse_voice_action(raw_text: &str) -> Option<VoiceAction> {
         .or_else(|| payload("open site "))
         .or_else(|| payload("open url "))
     {
-        let url = rest.trim();
-        if !url.is_empty() {
-            return Some(VoiceAction::OpenUrl(url.to_string()));
+        return normalize_spoken_url(rest).map(VoiceAction::OpenUrl);
+    }
+
+    // 3b. "go to <x>" and "open <x>" open a URL when <x> looks like one, and
+    // otherwise focus an application they know by name.
+    if let Some(rest) = payload("go to ").or_else(|| payload("open ")) {
+        if let Some(url) = normalize_spoken_url(rest).filter(|url| looks_like_url(url)) {
+            return Some(VoiceAction::OpenUrl(url));
         }
     }
 
-    // 3b. "go to <x>" opens a URL only when <x> actually looks like one.
-    // Otherwise it is an app switch ("go to chrome").
-    if let Some(rest) = payload("go to ") {
-        let target = rest.trim();
-        if !target.is_empty() {
-            if looks_like_url(target) {
-                return Some(VoiceAction::OpenUrl(target.to_string()));
-            }
-            return Some(VoiceAction::SwitchApp(target.to_string()));
-        }
-    }
-
-    // 4. Web Search: "search for <query>", "google <query>", "search <query>"
-    if let Some(rest) = payload("search for ")
-        .or_else(|| payload("google "))
-        .or_else(|| payload("search "))
-    {
-        let query = rest.trim();
+    // 4. Web Search: "search for <query>", "google for <query>"
+    if let Some(rest) = payload("search for ").or_else(|| payload("google for ")) {
+        let query = spoken_value(rest);
         if !query.is_empty() {
             return Some(VoiceAction::WebSearch(query.to_string()));
         }
     }
 
-    // 5. App Switching: "switch to <app>", "open <app>", "focus <app>"
-    if let Some(rest) = payload("switch to ")
-        .or_else(|| payload("open app "))
-        .or_else(|| payload("focus "))
+    // 5. App Switching: "switch to <app>", "open app <app>" name any application.
+    if let Some(rest) = payload("switch to ").or_else(|| payload("open app ")) {
+        let target = spoken_value(rest);
+        return is_app_target(target).then(|| VoiceAction::SwitchApp(target.to_string()));
+    }
+    if let Some(rest) = payload("go to ")
         .or_else(|| payload("open "))
+        .or_else(|| payload("focus "))
     {
-        let target = rest.trim();
-        if !target.is_empty() {
-            return Some(VoiceAction::SwitchApp(target.to_string()));
-        }
+        let target = spoken_value(rest);
+        return is_known_app(target).then(|| VoiceAction::SwitchApp(target.to_string()));
     }
 
-    // 6. Prefix commands: "all caps <phrase>", "uppercase <phrase>"
-    if let Some(rest) = payload("all caps ").or_else(|| payload("uppercase ")) {
-        let phrase = rest.trim();
-        if !phrase.is_empty() {
-            return Some(VoiceAction::AllCaps(phrase.to_uppercase()));
-        }
+    let case_phrase = |prefix: &str| -> Option<&str> {
+        payload(prefix)
+            .map(spoken_value)
+            .filter(|phrase| !phrase.is_empty() && !first_word_is_any(phrase, NOT_CASE_PHRASE))
+    };
+
+    // 6. Prefix commands: "all caps <phrase>"
+    if let Some(phrase) = case_phrase("all caps ") {
+        return Some(VoiceAction::AllCaps(phrase.to_uppercase()));
     }
 
     // 7. Prefix commands: "camel case <phrase>"
-    if let Some(rest) = payload("camel case ") {
-        let phrase = rest.trim();
-        if !phrase.is_empty() {
-            return Some(VoiceAction::CamelCase(to_camel_case(phrase)));
-        }
+    if let Some(phrase) = case_phrase("camel case ") {
+        return Some(VoiceAction::CamelCase(to_camel_case(phrase)));
     }
 
     // 8. Prefix commands: "snake case <phrase>"
-    if let Some(rest) = payload("snake case ") {
-        let phrase = rest.trim();
-        if !phrase.is_empty() {
-            return Some(VoiceAction::SnakeCase(to_snake_case(phrase)));
-        }
+    if let Some(phrase) = case_phrase("snake case ") {
+        return Some(VoiceAction::SnakeCase(to_snake_case(phrase)));
     }
 
     // 9. Prefix commands: "title case <phrase>"
-    if let Some(rest) = payload("title case ") {
-        let phrase = rest.trim();
-        if !phrase.is_empty() {
-            return Some(VoiceAction::TitleCase(to_title_case(phrase)));
-        }
+    if let Some(phrase) = case_phrase("title case ") {
+        return Some(VoiceAction::TitleCase(to_title_case(phrase)));
     }
 
     // 10. Prefix commands: "insert snippet <name>", "paste snippet <name>"
-    if let Some(rest) = payload("insert snippet ")
-        .or_else(|| payload("paste snippet "))
-        .or_else(|| payload("snippet "))
-    {
+    if let Some(rest) = payload("insert snippet ").or_else(|| payload("paste snippet ")) {
         let name = rest.trim();
         if !name.is_empty() {
             return Some(VoiceAction::InsertSnippet(name.to_string()));
@@ -327,7 +431,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            parse_voice_action("ASK Explain İ and Café?"),
+            parse_voice_action("ASK CLAUDE Explain İ and Café?"),
             Some(VoiceAction::PromptAndSend("Explain İ and Café?".into()))
         );
         assert_eq!(
@@ -402,7 +506,7 @@ mod tests {
             Some(VoiceAction::InsertSnippet("email signature".to_string()))
         );
         assert_eq!(
-            parse_voice_action("snippet meeting notes"),
+            parse_voice_action("paste snippet meeting notes"),
             Some(VoiceAction::InsertSnippet("meeting notes".to_string()))
         );
     }
@@ -410,7 +514,7 @@ mod tests {
     #[test]
     fn parses_ai_prompt_and_send() {
         assert_eq!(
-            parse_voice_action("prompt write a test for my api"),
+            parse_voice_action("send prompt write a test for my api"),
             Some(VoiceAction::PromptAndSend(
                 "write a test for my api".to_string()
             ))
@@ -455,7 +559,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            parse_voice_action("google rust tokio tutorial"),
+            parse_voice_action("google for rust tokio tutorial"),
             Some(VoiceAction::WebSearch("rust tokio tutorial".to_string()))
         );
         assert_eq!(
@@ -483,11 +587,11 @@ mod tests {
     #[test]
     fn command_prefixes_accept_any_whitespace_separator() {
         assert_eq!(
-            parse_voice_action("prompt\twrite a test"),
+            parse_voice_action("send prompt\twrite a test"),
             Some(VoiceAction::PromptAndSend("write a test".to_string()))
         );
         assert_eq!(
-            parse_voice_action("ask: explain this"),
+            parse_voice_action("ask claude: explain this"),
             Some(VoiceAction::PromptAndSend("explain this".to_string()))
         );
         assert_eq!(
@@ -508,6 +612,126 @@ mod tests {
             parse_voice_action("clear terminal"),
             Some(VoiceAction::TerminalCommand("clear".to_string()))
         );
+    }
+
+    #[test]
+    fn recognizer_punctuation_does_not_break_commands() {
+        assert_eq!(
+            parse_voice_action("Scroll-down."),
+            Some(VoiceAction::ScrollDown)
+        );
+        assert_eq!(
+            parse_voice_action("\"Undo\u{2026}\""),
+            Some(VoiceAction::Undo)
+        );
+        assert_eq!(parse_voice_action("Newline."), Some(VoiceAction::NewLine));
+        assert_eq!(
+            parse_voice_action("Switch to Chrome."),
+            Some(VoiceAction::SwitchApp("Chrome".into()))
+        );
+        assert_eq!(
+            parse_voice_action("Search for rust tutorials."),
+            Some(VoiceAction::WebSearch("rust tutorials".into()))
+        );
+        assert_eq!(
+            parse_voice_action("Camel case, get user's data."),
+            Some(VoiceAction::CamelCase("getUsersData".into()))
+        );
+        assert_eq!(
+            parse_voice_action("Snake case total, active users."),
+            Some(VoiceAction::SnakeCase("total_active_users".into()))
+        );
+        assert_eq!(
+            parse_voice_action("All caps warning message."),
+            Some(VoiceAction::AllCaps("WARNING MESSAGE".into()))
+        );
+        // Separate sentences are not one command.
+        assert_eq!(parse_voice_action("Delete. All."), None);
+    }
+
+    #[test]
+    fn spoken_and_punctuated_urls_open_as_urls() {
+        for spoken in [
+            "Go to example.com.",
+            "Go to example dot com.",
+            "open website example dot com",
+        ] {
+            assert_eq!(
+                parse_voice_action(spoken),
+                Some(VoiceAction::OpenUrl("example.com".into())),
+                "{spoken}"
+            );
+        }
+        assert_eq!(
+            parse_voice_action("open site docs dot rs slash tokio"),
+            Some(VoiceAction::OpenUrl("docs.rs/tokio".into()))
+        );
+        assert_eq!(parse_voice_action("open website my favorite place"), None);
+    }
+
+    #[test]
+    fn ordinary_sentences_are_not_commands() {
+        for prose in [
+            "Ask him to call me tomorrow.",
+            "Ask the team about it.",
+            "Prompt engineering is hard.",
+            "Open the door.",
+            "Open Chrome and check all of the email.",
+            "Focus on the task at hand.",
+            "Go to bed early.",
+            "Go to sleep now.",
+            "Go to the store and buy milk.",
+            "Google is a large company.",
+            "Search results were good.",
+            "Camel case is a naming convention.",
+            "Uppercase letters are hard to read.",
+            "Switch to the next slide.",
+            "Ask the model why.",
+            "Prompt him to answer.",
+            "Search engines changed everything.",
+            "Google announced a new phone.",
+            "Open your books.",
+            "Focus groups disagreed.",
+            "Go to market early.",
+            "Uppercase is hard to read.",
+        ] {
+            assert_eq!(parse_voice_action(prose), None, "{prose}");
+        }
+    }
+
+    #[test]
+    fn unambiguous_phrases_run_and_open_reaches_urls_and_known_apps() {
+        assert_eq!(
+            parse_voice_action("Prompt and send fix the test"),
+            Some(VoiceAction::PromptAndSend("fix the test".into()))
+        );
+        assert_eq!(
+            parse_voice_action("Ask ChatGPT why."),
+            Some(VoiceAction::PromptAndSend("why.".into()))
+        );
+        assert_eq!(
+            parse_voice_action("Open example.com."),
+            Some(VoiceAction::OpenUrl("example.com".into()))
+        );
+        assert_eq!(
+            parse_voice_action("Open VS Code."),
+            Some(VoiceAction::SwitchApp("VS Code".into()))
+        );
+        assert_eq!(
+            parse_voice_action("Focus Slack"),
+            Some(VoiceAction::SwitchApp("Slack".into()))
+        );
+        assert_eq!(
+            parse_voice_action("Switch to Calculator."),
+            Some(VoiceAction::SwitchApp("Calculator".into()))
+        );
+    }
+
+    #[test]
+    fn command_key_normalizes_only_the_written_form() {
+        assert_eq!(command_key("  Hey,  Dictate! "), "hey, dictate");
+        assert_eq!(command_key("Page-Down."), "page down");
+        assert_eq!(command_key("..."), "");
     }
 
     #[test]

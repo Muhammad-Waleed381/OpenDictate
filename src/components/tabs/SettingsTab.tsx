@@ -658,7 +658,7 @@ export function SettingsTab() {
             <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
               <span className="font-bold uppercase text-foreground">🤖 AI Agent Prompt & Send</span>
               <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
-                <li><code className="text-foreground font-semibold">"prompt &lt;text&gt;"</code>: Type & auto-send to Claude/Cursor/ChatGPT/CLI</li>
+                <li><code className="text-foreground font-semibold">"send prompt &lt;text&gt;"</code> / <code className="text-foreground font-semibold">"ask claude &lt;text&gt;"</code>: Type & auto-send to Claude/Cursor/ChatGPT/CLI</li>
                 <li><code className="text-foreground font-semibold">"send"</code> / <code className="text-foreground font-semibold">"submit"</code>: Press Enter to submit prompt</li>
                 <li><code className="text-foreground font-semibold">"stop process"</code> / <code className="text-foreground font-semibold">"cancel command"</code>: Ctrl+C interrupt</li>
               </ul>
@@ -676,7 +676,7 @@ export function SettingsTab() {
             <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
               <span className="font-bold uppercase text-foreground">🌐 Voice Search & Tabs</span>
               <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
-                <li><code className="text-foreground font-semibold">"search for &lt;query&gt;"</code> / <code className="text-foreground font-semibold">"google &lt;query&gt;"</code></li>
+                <li><code className="text-foreground font-semibold">"search for &lt;query&gt;"</code> / <code className="text-foreground font-semibold">"google for &lt;query&gt;"</code></li>
                 <li><code className="text-foreground font-semibold">"next tab"</code> / <code className="text-foreground font-semibold">"prev tab"</code> / <code className="text-foreground font-semibold">"close tab"</code></li>
                 <li><code className="text-foreground font-semibold">"scroll down"</code> / <code className="text-foreground font-semibold">"scroll up"</code> (Page scroll)</li>
               </ul>

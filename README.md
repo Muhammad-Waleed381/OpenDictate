@@ -62,7 +62,7 @@ Cloud dictation tools require sending raw audio across the internet, paying recu
   - *Formatting*: Say `"all caps <text>"`, `"camel case <text>"`, `"snake case <text>"`, `"title case <text>"`.
   - *Editing*: Say `"scratch that"` (Undo), `"delete word"`, `"delete line"`, `"clear all"`.
   - *Structure*: Say `"new line"`, `"new paragraph"`, `"tab"`, `"bullet point"`.
-  - *Workflow*: Say `"prompt and send <query>"`, `"submit"`, `"interrupt"`, `"switch to <app>"`, `"open <url>"`.
+  - *Workflow*: Say `"send prompt <query>"`, `"ask claude <query>"`, `"submit"`, `"interrupt"`, `"switch to <app>"`, `"open <url>"`.
 - 🎛️ **Dedicated Models Hub** — 1-click model download and management with real-time disk storage metrics and hardware accelerator indicators (`CPU`, `CUDA`, `CoreML`).
 - ⚡ **Live Floating Dock & Real-Time Captions** — Minimal floating pill dock showing audio waveform meter, recording status, and real-time live captions while you speak.
 - 📖 **Custom Vocabulary & Hotwords** — Add company names, technical jargon, code symbols, and acronyms to the built-in dictionary for boosted recognition accuracy.

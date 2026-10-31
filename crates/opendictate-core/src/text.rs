@@ -1,6 +1,6 @@
 pub mod actions;
 pub mod polish;
-pub use actions::{parse_voice_action, to_camel_case, to_snake_case, to_title_case, VoiceAction};
+pub use actions::{command_key, parse_voice_action, to_camel_case, to_snake_case, to_title_case, VoiceAction};
 pub use polish::{polish_text, PolishConfig, PolishMode, PolishProvider};
 
 struct Token {
