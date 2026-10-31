@@ -56,7 +56,7 @@ const STREAMING_PART_MIN_BYTES: u64 = 100_000;
 const TOKENS_MIN_BYTES: u64 = 100;
 /// The silero VAD onnx is ~1.7 MB; the old 100 KB threshold accepted
 /// truncated/garbage downloads as "installed".
-const VAD_MIN_BYTES: u64 = 1_000_000;
+const VAD_MIN_BYTES: u64 = 500_000;
 const WHISPER_PART_MIN_BYTES: u64 = 5_000_000;
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,7 +116,7 @@ const MODELS: &[ModelDef] = &[
         kind: "vad",
         engine_key: None,
         company: Some("Silero"),
-        size_bytes: 1_700_000,
+        size_bytes: 643_854,
         url: SILERO_VAD_URL,
         available: true,
         streaming: false,
@@ -999,7 +999,7 @@ fn install_stt_model(
     })();
 
     clean_after(&archive_path, &extract_dir);
-    if res.is_err() && is_cancelled() {
+    if res.is_err() {
         let _ = remove_model_unlocked(STT_MODEL_ID);
     }
     res
@@ -1190,7 +1190,7 @@ fn install_transducer_model(
     })();
 
     clean_after(&archive_path, &extract_dir);
-    if res.is_err() && is_cancelled() {
+    if res.is_err() {
         let _ = remove_model_unlocked(id);
     }
     res
@@ -1270,7 +1270,7 @@ fn install_nemo_ctc_model(
     })();
 
     clean_after(&archive_path, &extract_dir);
-    if res.is_err() && is_cancelled() {
+    if res.is_err() {
         let _ = remove_model_unlocked(id);
     }
     res
@@ -1371,7 +1371,7 @@ fn install_cohere_model(
     })();
 
     clean_after(&archive_path, &extract_dir);
-    if res.is_err() && is_cancelled() {
+    if res.is_err() {
         let _ = remove_model_unlocked(id);
     }
     res
