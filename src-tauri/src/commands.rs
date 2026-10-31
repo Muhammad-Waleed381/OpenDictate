@@ -422,9 +422,8 @@ fn patched_settings(
         current.handsfree_mode = value;
     }
     if let Some(words) = settings.wake_words {
-        if !words.trim().is_empty() {
-            current.wake_words = words.trim().to_string();
-        }
+        current.wake_words = normalize_wake_words(&words)
+            .ok_or_else(|| "Enter at least one wake phrase".to_string())?;
     }
     if let Some(timeout) = settings.handsfree_silence_timeout_sec {
         current.handsfree_silence_timeout_sec = timeout.clamp(5, 300);
@@ -469,6 +468,20 @@ fn patched_settings(
     Ok(current)
 }
 
+/// Cleans a comma-separated wake phrase list, or `None` when no phrase remains.
+/// Without this check, a value like "," would silently enable the spotter's
+/// built-in default phrases instead of what the user sees in Settings.
+fn normalize_wake_words(words: &str) -> Option<String> {
+    let mut phrases: Vec<String> = Vec::new();
+    for phrase in words.split(',') {
+        let phrase = phrase.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !phrase.is_empty() && !phrases.iter().any(|p| p.eq_ignore_ascii_case(&phrase)) {
+            phrases.push(phrase);
+        }
+    }
+    (!phrases.is_empty()).then(|| phrases.join(", "))
+}
+
 /// All preference entry points use the same runtime transition and rollback.
 /// Locks never span settings reads plus KWS/engine-cache access.
 fn apply_settings(
@@ -493,9 +506,7 @@ fn apply_settings(
     let handsfree_running = state.handsfree_active.load(Ordering::SeqCst);
     let restart_handsfree = handsfree_running
         && (mic_changed
-            || previous.wake_words != next.wake_words
-            || previous.vad_sensitivity != next.vad_sensitivity
-            || previous.handsfree_silence_timeout_sec != next.handsfree_silence_timeout_sec);
+            || previous.wake_words != next.wake_words);
     let hotkey_changed = previous.hotkey != next.hotkey;
     let autostart_changed = previous.autostart != next.autostart;
     *state.settings.lock().map_err(|e| e.to_string())? = next.clone();
@@ -621,6 +632,25 @@ mod settings_session_tests {
             }
         )
         .is_err());
+    }
+
+    #[test]
+    fn wake_phrases_are_cleaned_and_an_empty_list_is_rejected() {
+        assert_eq!(
+            normalize_wake_words(" hey   dictate,,Computer , computer ").as_deref(),
+            Some("hey dictate, Computer")
+        );
+        for empty in ["", "  ", ",", " , ,"] {
+            assert_eq!(normalize_wake_words(empty), None);
+            assert!(patched_settings(
+                crate::state::Settings::default(),
+                crate::state::SettingsPatch {
+                    wake_words: Some(empty.into()),
+                    ..Default::default()
+                }
+            )
+            .is_err());
+        }
     }
 
     #[test]

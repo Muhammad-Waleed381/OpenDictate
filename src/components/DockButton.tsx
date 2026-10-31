@@ -45,7 +45,9 @@ export function DockButton() {
     try {
       setError(null);
       if (store.recording) await store.stopRecording();
-      else if (!active) await store.startRecording("dictate");
+      // "listening" without a recording is awake Handsfree, which a click can
+      // take over with an explicit recording.
+      else if (!active || isListening) await store.startRecording("dictate");
     } catch (e) {
       setError(String(e));
       setFlash("error");

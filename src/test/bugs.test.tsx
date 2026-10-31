@@ -249,6 +249,26 @@ describe("model lifecycle regressions", () => {
     expect(screen.queryByText("Connecting…")).not.toBeInTheDocument();
   });
 
+  it("offers the KWS download instead of failing when Handsfree is enabled without it", async () => {
+    let ready = false;
+    ipc.invoke.mockImplementation((command: string) => {
+      if (command === "ensure_model") { ready = true; return Promise.resolve(); }
+      if (command === "models_status") return Promise.resolve({ ...status, kws_ready: ready });
+      return defaultInvoke(command);
+    });
+    render(<SettingsTab />);
+    fireEvent.click(document.getElementById("handsfree-mode")!);
+    expect(ipc.invoke).not.toHaveBeenCalledWith("set_settings", expect.anything());
+    const download = await screen.findByRole("button", { name: "Download Model (15MB)" });
+    await act(async () => { fireEvent.click(download); });
+    await waitFor(() =>
+      expect(ipc.invoke).toHaveBeenCalledWith(
+        "set_settings",
+        expect.objectContaining({ settings: expect.objectContaining({ handsfree_mode: true }) }),
+      ),
+    );
+  });
+
   it("B037 only declares KWS ready after completed installation and status refresh", async () => {
     useStore.setState({ settings: { ...settings, handsfree_mode: true } });
     const install = deferred<void>();

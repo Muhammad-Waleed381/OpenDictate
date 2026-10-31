@@ -236,11 +236,11 @@ export function SettingsTab() {
     useStore.getState().patchSettings({ [key]: enabled });
     try {
       await api.setSettings({ [key]: enabled });
-    } catch {
+    } catch (e) {
       if (request === toggleRequest.current) {
         const latest = await api.getSettings().catch(() => null);
         if (latest) useStore.getState().setSettings(latest);
-        toast.error("Could not save setting — reverted");
+        toast.error(`Could not save setting — reverted: ${String(e)}`);
       }
     }
   };
@@ -252,7 +252,18 @@ export function SettingsTab() {
     persistToggle("spoken_punctuation", enabled);
   const handleAudioFeedbackChange = (enabled: boolean) =>
     persistToggle("audio_feedback", enabled);
-  const handleHandsfreeChange = (enabled: boolean) => persistToggle("handsfree_mode", enabled);
+  // Handsfree cannot start without the wake word model, and the download
+  // button lives in the panel this switch reveals. Ask for the download first.
+  const [handsfreeNeedsKws, setHandsfreeNeedsKws] = useState(false);
+  const handleHandsfreeChange = (enabled: boolean) => {
+    if (enabled && !useStore.getState().models?.kws_ready) {
+      setHandsfreeNeedsKws(true);
+      toast.info("Download the wake word model to turn on Handsfree");
+      return;
+    }
+    setHandsfreeNeedsKws(false);
+    return persistToggle("handsfree_mode", enabled);
+  };
   const handleVoiceActionsChange = (enabled: boolean) =>
     persistToggle("voice_actions_enabled", enabled);
 
@@ -271,6 +282,10 @@ export function SettingsTab() {
       toast.info("Downloading Keyword Spotting model (15MB)...");
       await useStore.getState().downloadModel("kws-zipformer-gigaspeech-3.3m-2024-01-01");
       toast.success("Keyword spotting model downloaded and ready!");
+      if (handsfreeNeedsKws) {
+        setHandsfreeNeedsKws(false);
+        await persistToggle("handsfree_mode", true);
+      }
     } catch (e) {
       toast.error(`KWS model download failed: ${String(e)}`);
     }
@@ -536,7 +551,7 @@ export function SettingsTab() {
           />
         </div>
 
-        {settings?.handsfree_mode && (
+        {(settings?.handsfree_mode || handsfreeNeedsKws) && (
           <div className="flex flex-col gap-4 border-t-2 border-border/40 pt-3">
             {!models?.kws_ready && (
               <div className="flex flex-col gap-2 bg-amber-500/10 p-3 border border-amber-500/30 text-xs text-amber-600 dark:text-amber-400">

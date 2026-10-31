@@ -1625,8 +1625,8 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
             let mut noise_gate = NoiseGate::default();
             let mut next_mic_attempt = Instant::now();
             let mut mic_lost = false;
-            let base_threshold = sensitivity_to_energy_threshold(settings.vad_sensitivity);
-            let silero = if models::is_vad_ready() {
+            let mut silero_sensitivity = settings.vad_sensitivity;
+            let mut silero = if models::is_vad_ready() {
                 SileroVad::with_threshold(
                     &models::vad_model_path(),
                     sensitivity_to_silero_threshold(settings.vad_sensitivity),
@@ -1714,6 +1714,10 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                 let rms =
                     (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
                 let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+                // Read live: moving the sensitivity slider must not restart the
+                // listener or put it back to sleep.
+                let current_sensitivity = sensitivity(&state);
+                let base_threshold = sensitivity_to_energy_threshold(current_sensitivity);
                 if !state.handsfree_awake.load(Ordering::SeqCst) {
                     state.handsfree_speaking.store(false, Ordering::SeqCst);
                     speech.take();
@@ -1737,6 +1741,23 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                         }
                     }
                     continue;
+                }
+                // Swap detectors between utterances; a new one has no memory of
+                // the speech in progress.
+                if silero.is_some()
+                    && !speech.active
+                    && (silero_sensitivity - current_sensitivity).abs() > f32::EPSILON
+                {
+                    silero_sensitivity = current_sensitivity;
+                    match SileroVad::with_threshold(
+                        &models::vad_model_path(),
+                        sensitivity_to_silero_threshold(current_sensitivity),
+                    ) {
+                        Ok(detector) => silero = Some(detector),
+                        Err(error) => {
+                            log::warn!("handsfree: keeping the previous VAD threshold: {error}")
+                        }
+                    }
                 }
                 let is_speech = if let Some(ref detector) = silero {
                     detector.accept_streaming(&samples)
@@ -1795,9 +1816,15 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                     }
                     last_awake_activity = Instant::now();
                 }
+                // Read live: moving the timeout slider must not restart the
+                // listener or put it back to sleep.
+                let silence_timeout = state
+                    .settings
+                    .lock()
+                    .map(|s| s.handsfree_silence_timeout_sec)
+                    .unwrap_or(settings.handsfree_silence_timeout_sec);
                 if !speech.active
-                    && last_awake_activity.elapsed()
-                        > Duration::from_secs(settings.handsfree_silence_timeout_sec as u64)
+                    && last_awake_activity.elapsed() > Duration::from_secs(silence_timeout as u64)
                 {
                     if let Ok(_commit) = state.sessions.commit_guard(token) {
                         if work_current(&state, token) {
