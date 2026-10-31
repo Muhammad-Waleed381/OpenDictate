@@ -21,6 +21,8 @@ pub struct SessionControl {
     pub inference: Mutex<()>,
     generation: AtomicU64,
     handsfree_generation: AtomicU64,
+    /// The generation of a stopped recording still being decoded, or 0.
+    finalizing: AtomicU64,
     commits: Mutex<()>,
 }
 
@@ -59,6 +61,28 @@ impl SessionControl {
 
     pub fn handsfree_current(&self, generation: u64) -> bool {
         self.handsfree_generation.load(Ordering::SeqCst) == generation
+    }
+
+    /// A new start invalidates older work, and a stopped recording is only
+    /// saved once its decode finishes. Starting during that decode would throw
+    /// the user's words away, so it has to wait. Cancelling is the deliberate
+    /// way to discard them: it changes the generation, which ends this state.
+    pub fn begin_finalizing(&self, token: WorkToken) {
+        self.finalizing.store(token.generation, Ordering::SeqCst);
+    }
+
+    pub fn end_finalizing(&self, token: WorkToken) {
+        let _ = self.finalizing.compare_exchange(
+            token.generation,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
+    pub fn is_finalizing(&self) -> bool {
+        let generation = self.finalizing.load(Ordering::SeqCst);
+        generation != 0 && generation == self.generation.load(Ordering::SeqCst)
     }
 
     pub fn commit_guard(&self, token: WorkToken) -> Result<MutexGuard<'_, ()>, String> {
@@ -234,6 +258,21 @@ mod tests {
         assert!((14_000..=14_480).contains(&cut), "cut at {cut}");
         emitted.push(buffer.take());
         assert_eq!(emitted.concat(), audio);
+    }
+
+    #[test]
+    fn finalizing_blocks_a_new_start_until_decoded_or_cancelled() {
+        let control = SessionControl::default();
+        let token = control.invalidate();
+        assert!(!control.is_finalizing());
+        control.begin_finalizing(token);
+        assert!(control.is_finalizing());
+        control.end_finalizing(token);
+        assert!(!control.is_finalizing());
+
+        control.begin_finalizing(token);
+        control.invalidate();
+        assert!(!control.is_finalizing(), "cancelling discards the decode");
     }
 
     #[test]

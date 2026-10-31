@@ -122,7 +122,7 @@ fn report_error(app: &AppHandle, state: &AppState, token: WorkToken, error: &str
             return;
         }
         dock::set_state(app, "error", Some(error));
-        let _ = app.emit("dictation-error", serde_json::json!({ "error": error }));
+        let _ = app.emit("dictation-error", serde_json::json!({ "message": error }));
         notify::notify("Dictation error", error);
         play_sound(state, crate::audio::SoundEvent::Error);
         restore_dock_after(app, token, ERROR_DISPLAY);
@@ -150,6 +150,9 @@ pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String
         .map_err(|e| e.to_string())?;
     if state.user_dictation_active.load(Ordering::SeqCst) {
         return Err("a dictation session is already active".to_string());
+    }
+    if state.sessions.is_finalizing() {
+        return Err("Still transcribing the last recording. Try again in a moment.".to_string());
     }
     let model_id = selected_model_id(state);
     if !test && !models::is_model_installed(&model_id) {
@@ -243,6 +246,17 @@ pub fn stop(app: &AppHandle, state: &AppState) -> Result<TranscriptResult, Strin
     stop_session(app, state, None)
 }
 
+struct FinalizingGuard<'a> {
+    state: &'a AppState,
+    token: WorkToken,
+}
+
+impl Drop for FinalizingGuard<'_> {
+    fn drop(&mut self) {
+        self.state.sessions.end_finalizing(self.token);
+    }
+}
+
 fn stop_session(
     app: &AppHandle,
     state: &AppState,
@@ -264,6 +278,8 @@ fn stop_session(
     if !state.user_dictation_active.load(Ordering::SeqCst) {
         return Err("no recording in progress".into());
     }
+    state.sessions.begin_finalizing(token);
+    let _finalizing = FinalizingGuard { state, token };
     let test = state.is_test_mode();
     let was_streaming = state.is_streaming_active();
     state.set_continuous(false);
@@ -309,6 +325,8 @@ fn stop_session(
         }
     };
 
+    // The continuous worker has already reported its own failures.
+    let reported_by_worker = queue.is_some() && !test && !was_streaming;
     let result = if test {
         Ok(microphone_test_result(&audio))
     } else if was_streaming {
@@ -341,7 +359,9 @@ fn stop_session(
         restore_dock(app, state);
     }
     if let Err(error) = &result {
-        report_error(app, state, token, error);
+        if !reported_by_worker {
+            report_error(app, state, token, error);
+        }
     }
     // The session is over: hand the activation back to the application the
     // user is working in, in case the dock took it when the session started.
@@ -440,6 +460,7 @@ fn spawn_continuous_loop(
                     let _ = response.send(result);
                 }
                 if work.finish {
+                    state.sessions.end_finalizing(token);
                     break;
                 }
             }
@@ -451,6 +472,7 @@ fn spawn_continuous_loop(
     let capture_worker = move || {
         let mut silent_since = Instant::now();
         let mut utterance_started = Instant::now();
+        let mut heard_sound = false;
         loop {
             std::thread::sleep(Duration::from_millis(60));
             let state = state_from_app(&app);
@@ -469,10 +491,15 @@ fn spawn_continuous_loop(
             if state.recorder.current_rms() >= sensitivity_to_energy_threshold(sensitivity(&state))
             {
                 silent_since = Instant::now();
+                heard_sound = true;
             }
             let endpoint = silent_since.elapsed() >= Duration::from_millis(1400)
                 && utterance_started.elapsed() >= Duration::from_millis(600);
-            if !endpoint && state.recorder.buffered_samples() < MAX_OFFLINE_SAMPLES {
+            let buffer_full = state.recorder.buffered_samples() >= MAX_OFFLINE_SAMPLES;
+            // A silent stretch has nothing to decode. Queueing it would fill the
+            // backlog during a slow decode and end the session for no reason.
+            // The audio stays buffered in case it held speech too quiet to meter.
+            if !buffer_full && (!endpoint || !heard_sound) {
                 continue;
             }
             let audio = state.recorder.drain_buffer();
@@ -485,6 +512,7 @@ fn spawn_continuous_loop(
                 Ok(()) => {
                     silent_since = Instant::now();
                     utterance_started = Instant::now();
+                    heard_sound = false;
                 }
                 Err(mpsc::TrySendError::Full(mut work)) => {
                     let tail = if state.handsfree_active.load(Ordering::SeqCst) {
@@ -500,6 +528,7 @@ fn spawn_continuous_loop(
                     };
                     work.audio.extend(tail);
                     work.finish = true;
+                    state.sessions.begin_finalizing(token);
                     state.set_continuous(false);
                     state.caption_active.store(false, Ordering::SeqCst);
                     state.user_dictation_active.store(false, Ordering::SeqCst);

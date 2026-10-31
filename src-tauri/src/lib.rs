@@ -32,6 +32,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::list_mics,
+            commands::hold_to_talk_supported,
             commands::get_mic,
             commands::set_mic,
             commands::models_status,
@@ -164,15 +165,10 @@ pub fn run() {
                 if let Err(error) = dictation::start_handsfree(handle, &state) {
                     log::error!("handsfree startup failed: {error}");
                     notify::notify("Handsfree could not start", &error);
+                    // Off for this run only. A microphone missing at login must
+                    // not turn the user's preference off for good.
                     if let Ok(mut settings) = state.settings.lock() {
                         settings.handsfree_mode = false;
-                        if let Ok(conn) = state.db.lock() {
-                            if let Err(save_error) = db::save_settings(&conn, &settings) {
-                                log::error!(
-                                    "failed to persist handsfree startup rollback: {save_error}"
-                                );
-                            }
-                        }
                     }
                 }
             }

@@ -7,8 +7,21 @@ use crate::db;
 use crate::dictation;
 use crate::state::{AppState, ModelsStatus, TranscriptResult};
 
+/// Enumeration can wait seconds on a stuck audio server, so it stays off the
+/// main thread.
 #[tauri::command]
-pub fn list_mics() -> Vec<opendictate_core::audio::MicDevice> {
+pub async fn list_mics() -> Result<Vec<opendictate_core::audio::MicDevice>, String> {
+    tauri::async_runtime::spawn_blocking(enumerate_mics)
+        .await
+        .map_err(|e| format!("microphone list worker failed: {e}"))
+}
+
+#[tauri::command]
+pub fn hold_to_talk_supported() -> bool {
+    crate::hotkey::hold_to_talk_supported()
+}
+
+fn enumerate_mics() -> Vec<opendictate_core::audio::MicDevice> {
     use opendictate_core::audio::MicDevice;
 
     let mut mics = vec![MicDevice {
@@ -206,12 +219,24 @@ pub async fn reset_settings(app: AppHandle) -> Result<crate::state::Settings, St
             .settings_update
             .lock()
             .map_err(|e| e.to_string())?;
-        let settings = crate::state::Settings::default();
+        let current = state.settings.lock().map_err(|e| e.to_string())?.clone();
+        let settings = reset_settings_from(&current);
         apply_settings(&app, &state, settings.clone())?;
         Ok(settings)
     })
     .await
     .map_err(|e| format!("reset settings worker failed: {e}"))?
+}
+
+/// Reset returns preferences to their defaults. Finishing setup and the user's
+/// API key are not preferences: losing them would reopen onboarding and silently
+/// disable a paid service.
+fn reset_settings_from(current: &crate::state::Settings) -> crate::state::Settings {
+    crate::state::Settings {
+        onboarded: current.onboarded,
+        groq_api_key: current.groq_api_key.clone(),
+        ..Default::default()
+    }
 }
 
 #[tauri::command]
@@ -507,7 +532,11 @@ fn apply_settings(
     let restart_handsfree = handsfree_running
         && (mic_changed
             || previous.wake_words != next.wake_words);
-    let hotkey_changed = previous.hotkey != next.hotkey;
+    // A hotkey that failed at startup has no binding yet, so re-saving the same
+    // key has to retry the registration.
+    let bound_hotkey = state.hotkey.lock().map_err(|e| e.to_string())?.clone();
+    let hotkey_changed =
+        previous.hotkey != next.hotkey || bound_hotkey.as_deref() != Some(next.hotkey.as_str());
     let autostart_changed = previous.autostart != next.autostart;
     *state.settings.lock().map_err(|e| e.to_string())? = next.clone();
     let result = (|| {
@@ -651,6 +680,20 @@ mod settings_session_tests {
             )
             .is_err());
         }
+    }
+
+    #[test]
+    fn reset_keeps_onboarding_and_the_api_key() {
+        let current = crate::state::Settings {
+            onboarded: true,
+            groq_api_key: Some("key".into()),
+            handsfree_mode: true,
+            ..Default::default()
+        };
+        let reset = reset_settings_from(&current);
+        assert!(reset.onboarded);
+        assert_eq!(reset.groq_api_key.as_deref(), Some("key"));
+        assert!(!reset.handsfree_mode);
     }
 
     #[test]
@@ -1013,7 +1056,7 @@ fn csv_contents(entries: &[crate::state::HistoryEntry]) -> String {
         out.push_str(&format!(
             "{},\"{}\",{},{},\"{}\"\n",
             e.id,
-            text.replace(['\n', '\r'], " "),
+            text,
             e.created_at,
             e.duration_ms,
             e.source.replace('"', "\"\"").replace(['\n', '\r'], " ")
@@ -1083,13 +1126,11 @@ mod tests {
             },
         ];
         let csv = csv_contents(&entries);
-        let lines: Vec<&str> = csv.lines().collect();
-        assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0], "id,text,created_at,duration_ms,source");
-        assert_eq!(lines[1], "1,\"say \"\"hi\"\"\",1724000000,1200,\"hotkey\"");
         assert_eq!(
-            lines[2],
-            "2,\"line1 line2, with comma\",1724000001,800,\"continuous\""
+            csv,
+            "id,text,created_at,duration_ms,source\n\
+             1,\"say \"\"hi\"\"\",1724000000,1200,\"hotkey\"\n\
+             2,\"line1\nline2, with comma\",1724000001,800,\"continuous\"\n"
         );
     }
 }

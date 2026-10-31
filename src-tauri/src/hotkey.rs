@@ -22,7 +22,11 @@ pub fn register(app: &AppHandle, state: &AppState, key: &str) -> Result<(), Stri
             }
             return Ok(());
         }
-        register_os_shortcut(app, key)?;
+        // Re-registering a live shortcut fails with "already registered", which
+        // would turn a rollback to the working key into an error.
+        if !app.global_shortcut().is_registered(key) {
+            register_os_shortcut(app, key)?;
+        }
         return Ok(());
     }
 
@@ -229,16 +233,26 @@ fn handle_request(app: &AppHandle, request: DictationRequest) {
     let active = state
         .user_dictation_active
         .load(std::sync::atomic::Ordering::SeqCst);
-    let result = match request {
+    // A stop's failures are reported by the session that owned the recording.
+    let start_result = match request {
         DictationRequest::Start if !active => dictation::start(app, &state, false),
-        DictationRequest::Stop if active => dictation::stop(app, &state).map(|_| ()),
-        DictationRequest::Toggle if active => dictation::stop(app, &state).map(|_| ()),
-        DictationRequest::Toggle => dictation::start(app, &state, false),
+        DictationRequest::Toggle if !active => dictation::start(app, &state, false),
+        DictationRequest::Stop | DictationRequest::Toggle if active => {
+            if let Err(error) = dictation::stop(app, &state) {
+                log::warn!("hotkey stop failed: {error}");
+            }
+            Ok(())
+        }
         _ => Ok(()),
     };
-    if let Err(error) = result {
+    if let Err(error) = start_result {
         report_error(app, &error);
     }
+}
+
+/// GNOME's keybinding only delivers a toggle, with no key release event.
+pub fn hold_to_talk_supported() -> bool {
+    !(is_gnome_session() && gnome_schema_available())
 }
 
 fn report_error(app: &AppHandle, error: &str) {
@@ -419,6 +433,19 @@ fn gnome_accelerator(key: &str) -> Option<String> {
                     "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10"
                     | "f11" | "f12" => other.to_uppercase(),
                     "up" | "down" | "left" | "right" => other[..1].to_uppercase() + &other[1..],
+                    // GTK only accepts X keysym names, and gsettings stores any
+                    // string, so a wrong name would be a binding that never fires.
+                    "enter" | "return" => "Return".to_string(),
+                    "tab" => "Tab".to_string(),
+                    "pageup" => "Page_Up".to_string(),
+                    "pagedown" => "Page_Down".to_string(),
+                    "backspace" => "BackSpace".to_string(),
+                    "delete" => "Delete".to_string(),
+                    "home" => "Home".to_string(),
+                    "end" => "End".to_string(),
+                    "insert" => "Insert".to_string(),
+                    "printscreen" => "Print".to_string(),
+                    "escape" | "esc" => "Escape".to_string(),
                     _ => lower,
                 });
             }
@@ -561,6 +588,22 @@ pub fn is_another_instance(_path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnome_accelerators_use_valid_keysym_names() {
+        for (key, expected) in [
+            ("ctrl+alt+enter", "<Control><Alt>Return"),
+            ("ctrl+pageup", "<Control>Page_Up"),
+            ("ctrl+pagedown", "<Control>Page_Down"),
+            ("ctrl+backspace", "<Control>BackSpace"),
+            ("ctrl+printscreen", "<Control>Print"),
+            ("ctrl+k", "<Control>k"),
+            ("ctrl+f5", "<Control>F5"),
+        ] {
+            assert_eq!(gnome_accelerator(key).as_deref(), Some(expected), "{key}");
+        }
+    }
 
     #[test]
     fn quick_press_release_requests_stay_in_callback_order() {

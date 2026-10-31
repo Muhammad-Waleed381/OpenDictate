@@ -248,11 +248,11 @@ pub fn update_history(conn: &Connection, id: i64, text: &str) -> rusqlite::Resul
     tx.commit()
 }
 
+/// Word stats and the heatmap survive this: the user is deleting transcripts,
+/// and `reset_word_stats` is the separate action for clearing stats.
 pub fn clear_history(conn: &Connection) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
-    tx.execute("DELETE FROM history", [])?;
-    tx.execute("DELETE FROM daily_stats", [])?;
-    tx.commit()
+    conn.execute("DELETE FROM history", [])?;
+    Ok(())
 }
 
 pub fn get_dictionary(conn: &Connection) -> rusqlite::Result<Vec<DictEntry>> {
