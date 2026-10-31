@@ -269,6 +269,46 @@ describe("model lifecycle regressions", () => {
     );
   });
 
+  it("cannot rebind the hotkey unless capture is active", async () => {
+    render(<SettingsTab />);
+    expect(screen.queryByLabelText("Press a key combination")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Capture" }));
+    const input = await screen.findByLabelText("Press a key combination");
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "˚", code: "KeyK", altKey: true, ctrlKey: true });
+    });
+    expect(ipc.invoke).toHaveBeenCalledWith("set_settings", { settings: { hotkey: "ctrl+alt+k" } });
+    await waitFor(() => expect(screen.queryByLabelText("Press a key combination")).toBeNull());
+  });
+
+  it("reloads the saved wake phrases so they survive leaving the tab", async () => {
+    useStore.setState({ settings: { ...settings, handsfree_mode: true, wake_words: "computer" } });
+    ipc.invoke.mockImplementation((command: string) =>
+      command === "get_settings"
+        ? Promise.resolve({ ...settings, handsfree_mode: true, wake_words: "hey there" })
+        : defaultInvoke(command));
+    render(<SettingsTab />);
+    fireEvent.change(document.getElementById("wake-words")!, { target: { value: "hey   there" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save" })); });
+    expect(useStore.getState().settings?.wake_words).toBe("hey there");
+  });
+
+  it("treats a cancelled download as cancelled rather than failed", async () => {
+    const install = deferred<void>();
+    ipc.invoke.mockImplementation((command: string) =>
+      command === "ensure_model" ? install.promise : defaultInvoke(command));
+    const download = useStore.getState().downloadModel("some-model");
+    await act(async () => { await useStore.getState().cancelModel("some-model"); });
+    await act(async () => install.reject("model download cancelled"));
+    await expect(download).resolves.toBe(false);
+  });
+
+  it("does not carry an old audio level into the next recording", () => {
+    useStore.setState({ level: 0.4, recording: true });
+    useStore.getState().setRecording(false);
+    expect(useStore.getState().level).toBe(0);
+  });
+
   it("B037 only declares KWS ready after completed installation and status refresh", async () => {
     useStore.setState({ settings: { ...settings, handsfree_mode: true } });
     const install = deferred<void>();

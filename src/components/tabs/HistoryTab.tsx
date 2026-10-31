@@ -81,9 +81,13 @@ export function HistoryTab() {
   const handleBulkDelete = async () => {
     const count = selectedIds.size;
     if (count === 0) return;
+    const visibleIds = new Set(filtered.map((entry) => entry.id));
+    const hiddenSelected = [...selectedIds].filter((id) => !visibleIds.has(id)).length;
     const ok = await confirmDialog({
       title: `Delete ${count} dictations?`,
-      description: `The selected ${count} entries will be permanently removed.`,
+      description: `The selected ${count} entries will be permanently removed.${
+        hiddenSelected > 0 ? ` ${hiddenSelected} of them are hidden by your search.` : ""
+      }`,
       confirmLabel: `Delete (${count})`,
       destructive: true,
     });
@@ -212,7 +216,7 @@ export function HistoryTab() {
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                You dictated {speedStats.totalWords.toLocaleString()} words across {history.length} session{history.length === 1 ? "" : "s"} at ~{speedStats.multiplier}× average typing speed.
+                You dictated {speedStats.totalWords.toLocaleString()} words across {history.length >= 500 ? "your newest 500" : history.length} session{history.length === 1 ? "" : "s"} at ~{speedStats.multiplier}× average typing speed.
               </p>
             </div>
           </div>
@@ -223,7 +227,7 @@ export function HistoryTab() {
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search history…"
+          placeholder={history.length >= 500 ? "Search your newest 500…" : "Search history…"}
         />
         <Button variant="outline" onClick={() => handleExport("json")}>
           Export JSON
@@ -253,7 +257,7 @@ export function HistoryTab() {
       {selectedIds.size > 0 && (
         <div className="flex items-center justify-between border-2 border-border bg-card p-2 shadow-brutal">
           <span className="text-xs font-bold uppercase">
-            {selectedIds.size} of {filtered.length} selected
+            {selectedIds.size} selected
           </span>
           <div className="flex items-center gap-2">
             <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>

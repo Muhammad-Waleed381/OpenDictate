@@ -887,6 +887,28 @@ pub fn import_snippets(contents: String, state: State<AppState>) -> Result<usize
 }
 
 #[tauri::command]
+pub fn export_dictionary(app: AppHandle, state: State<AppState>) -> Result<String, String> {
+    let words = {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        db::get_dictionary(&conn).map_err(|e| e.to_string())?
+    };
+    let exports_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("exports");
+    std::fs::create_dir_all(&exports_dir).map_err(|e| e.to_string())?;
+    let path = exports_dir.join(format!("dictionary-{}.txt", db::now_timestamp()));
+    let contents = words
+        .into_iter()
+        .map(|entry| entry.word)
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 pub fn export_snippets(app: AppHandle, state: State<AppState>) -> Result<String, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let entries = db::list_snippets(&conn).map_err(|e| e.to_string())?;

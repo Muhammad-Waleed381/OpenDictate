@@ -294,6 +294,14 @@ export function importSnippets(contents: string): Promise<number> {
   return invoke<number>("import_snippets", { contents });
 }
 
+export function holdToTalkSupported(): Promise<boolean> {
+  return invoke<boolean>("hold_to_talk_supported");
+}
+
+export function exportDictionary(): Promise<string> {
+  return invoke<string>("export_dictionary");
+}
+
 export function exportSnippets(): Promise<string> {
   return invoke<string>("export_snippets");
 }
@@ -384,6 +392,12 @@ export function onTranscript(
   cb: (payload: TranscriptPayload) => void
 ): Promise<UnlistenFn> {
   return listen<TranscriptPayload>("transcript", (event) => cb(event.payload));
+}
+
+export function onDictationError(
+  cb: (payload: { message: string }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ message: string }>("dictation-error", (e) => cb(e.payload));
 }
 
 export function onHistoryUpdated(cb: () => void): Promise<UnlistenFn> {

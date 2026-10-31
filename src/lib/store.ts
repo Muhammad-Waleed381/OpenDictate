@@ -61,7 +61,8 @@ interface OpenDictateStore {
 
   refreshModels: () => Promise<void>;
   refreshModelState: () => Promise<void>;
-  downloadModel: (id: string) => Promise<void>;
+  /** Resolves to whether the model is installed; false if the user cancelled. */
+  downloadModel: (id: string) => Promise<boolean>;
   cancelModel: (id: string) => Promise<void>;
   finishModel: (id: string) => void;
   refreshCatalog: () => Promise<void>;
@@ -116,6 +117,9 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
   setSnippets: (snippets) => set({ snippets }),
   setRecording: (recording) => set((state) => ({
     recording,
+    // A cancelled session never emits its final zero, and a stale level would
+    // count as signal in the next microphone test.
+    level: recording ? state.level : 0,
     recordingMode: recording ? (state.recordingMode ?? "dictate") : null,
     recordingRevision: state.recordingRevision + 1,
     recordingGeneration: state.recordingGeneration + (recording && !state.recording ? 1 : 0),
@@ -282,6 +286,10 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
       // A failed status refresh must not turn a successful installation into
       // a reported failure: the model is on disk either way.
       await get().refreshModelState().catch(() => {});
+      return true;
+    } catch (error) {
+      if (get().cancellingModels.includes(id)) return false;
+      throw error;
     } finally {
       get().finishModel(id);
       // VAD may be installed as a dependency of this model.

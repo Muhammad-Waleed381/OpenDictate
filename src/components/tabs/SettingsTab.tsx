@@ -41,9 +41,14 @@ function comboFromEvent(e: KeyboardEvent): string | null {
   if (e.shiftKey) mods.push("shift");
 
   const key = e.key;
+  // The physical key, because modifiers change the character: Option+K gives
+  // "˚" on macOS and Shift+1 gives "!".
+  const physical = /^(?:Key([A-Z])|Digit(\d))$/.exec(e.code ?? "");
   let name: string | null = null;
   if (/^F([1-9]|1\d|2[0-4])$/.test(key)) {
     name = key.toLowerCase();
+  } else if (physical) {
+    name = (physical[1] ?? physical[2]).toLowerCase();
   } else if (/^[a-z0-9]$/i.test(key)) {
     name = key.toLowerCase();
   } else {
@@ -76,10 +81,14 @@ function HotkeyCapture() {
   }, [capturing]);
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Escape") {
+    if (e.key === "Escape" || (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey)) {
       setCapturing(false);
       setPreview(null);
       setError(null);
+      return;
+    }
+    if (e.repeat || ["Control", "Shift", "Alt", "Meta"].includes(e.key)) {
+      e.preventDefault();
       return;
     }
     const combo = comboFromEvent(e);
@@ -97,6 +106,7 @@ function HotkeyCapture() {
       await api.setSettings({ hotkey: combo });
       await useStore.getState().refreshAll();
       setCapturing(false);
+      setPreview(null);
       setError(null);
       setApplied(true);
       setTimeout(() => setApplied(false), 1500);
@@ -116,15 +126,19 @@ function HotkeyCapture() {
           onClick={() => setCapturing(true)}
         >
           {capturing ? (preview ?? "Press your combination…") : current}
-          <input
-            ref={inputRef}
-            id="hotkey"
-            className="sr-only"
-            value=""
-            readOnly
-            onKeyDown={handleKeyDown}
-            aria-label="Press a key combination"
-          />
+          {/* Only while capturing: left in place, it kept the focus after a
+              capture and rebound the hotkey on the next shortcut pressed. */}
+          {capturing && (
+            <input
+              ref={inputRef}
+              id="hotkey"
+              className="sr-only"
+              value=""
+              readOnly
+              onKeyDown={handleKeyDown}
+              aria-label="Press a key combination"
+            />
+          )}
         </div>
         {capturing ? (
           <Button variant="outline" onClick={() => { setCapturing(false); setPreview(null); setError(null); }}>
@@ -172,7 +186,7 @@ function HotkeyCapture() {
 }
 
 const micLabel = (mic: string | null, mics: api.MicDevice[]): string => {
-  if (mic === null) return "Select microphone";
+  if (mic === null) return "System default";
   const found = mics.find((m) => m.id === mic);
   return found?.label ?? mic;
 };
@@ -181,7 +195,6 @@ export function SettingsTab() {
   const mics = useStore((s) => s.mics);
   const mic = useStore((s) => s.mic);
   const settings = useStore((s) => s.settings);
-  const toggleRequest = useRef(0);
   const [savingInputTarget, setSavingInputTarget] = useState(false);
   const themePref = useTheme((s) => s.pref);
   const setThemePref = useTheme((s) => s.setPref);
@@ -219,6 +232,12 @@ export function SettingsTab() {
     }
   };
 
+  // Shows what the backend actually stored, including values it normalized.
+  const syncSavedSettings = async () => {
+    const latest = await api.getSettings().catch(() => null);
+    if (latest) useStore.getState().setSettings(latest);
+  };
+
   const persistToggle = async (
     key:
       | "continuous"
@@ -232,16 +251,13 @@ export function SettingsTab() {
   ) => {
     const current = useStore.getState().settings;
     if (!current) return;
-    const request = ++toggleRequest.current;
     useStore.getState().patchSettings({ [key]: enabled });
     try {
       await api.setSettings({ [key]: enabled });
     } catch (e) {
-      if (request === toggleRequest.current) {
-        const latest = await api.getSettings().catch(() => null);
-        if (latest) useStore.getState().setSettings(latest);
-        toast.error(`Could not save setting — reverted: ${String(e)}`);
-      }
+      // Report every failure, even if another switch was flipped since.
+      toast.error(`Could not save setting — reverted: ${String(e)}`);
+      await syncSavedSettings();
     }
   };
 
@@ -255,6 +271,14 @@ export function SettingsTab() {
   // Handsfree cannot start without the wake word model, and the download
   // button lives in the panel this switch reveals. Ask for the download first.
   const [handsfreeNeedsKws, setHandsfreeNeedsKws] = useState(false);
+  const [holdToTalkSupported, setHoldToTalkSupported] = useState(true);
+  useEffect(() => {
+    let active = true;
+    api.holdToTalkSupported()
+      .then((supported) => { if (active && supported === false) setHoldToTalkSupported(false); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
   const handleHandsfreeChange = (enabled: boolean) => {
     if (enabled && !useStore.getState().models?.kws_ready) {
       setHandsfreeNeedsKws(true);
@@ -280,7 +304,8 @@ export function SettingsTab() {
   const handleDownloadKws = async () => {
     try {
       toast.info("Downloading Keyword Spotting model (15MB)...");
-      await useStore.getState().downloadModel("kws-zipformer-gigaspeech-3.3m-2024-01-01");
+      const installed = await useStore.getState().downloadModel("kws-zipformer-gigaspeech-3.3m-2024-01-01");
+      if (!installed) return;
       toast.success("Keyword spotting model downloaded and ready!");
       if (handsfreeNeedsKws) {
         setHandsfreeNeedsKws(false);
@@ -306,6 +331,7 @@ export function SettingsTab() {
   const handleSaveWakeWords = async () => {
     try {
       await api.setSettings({ wake_words: wakeWordsInput });
+      await syncSavedSettings();
       toast.success("Wake words saved");
     } catch (e) {
       toast.error(`Failed to save wake words: ${String(e)}`);
@@ -320,6 +346,7 @@ export function SettingsTab() {
       await api.setSettings({ handsfree_silence_timeout_sec: sec });
     } catch (e) {
       toast.error(`Could not save timeout: ${String(e)}`);
+      await syncSavedSettings();
     }
   };
 
@@ -382,6 +409,7 @@ export function SettingsTab() {
   const handleSaveGroqKey = async () => {
     try {
       await api.setSettings({ groq_api_key: groqKeyInput.trim() });
+      await syncSavedSettings();
       toast.success("Groq API key saved");
     } catch (e) {
       toast.error(`Failed to save Groq API key: ${String(e)}`);
@@ -477,6 +505,7 @@ export function SettingsTab() {
         await api.setSettings({ audio_feedback_volume: value });
       } catch (e) {
         toast.error(`Could not save volume: ${String(e)}`);
+        await syncSavedSettings();
       }
     }, 150);
   };
@@ -884,7 +913,7 @@ export function SettingsTab() {
         </div>
         <div className="flex flex-col gap-2">
           <Label htmlFor="mic">Microphone</Label>
-          <Select value={mic ?? ""} onValueChange={handleMicChange}>
+          <Select value={mic ?? "default"} onValueChange={handleMicChange}>
             <SelectTrigger className="w-full" id="mic">
               <SelectValue>{micLabel(mic, mics)}</SelectValue>
             </SelectTrigger>
@@ -954,13 +983,16 @@ export function SettingsTab() {
         <div className="flex flex-col gap-1">
           <Label htmlFor="hold-to-talk">Hold-to-talk mode</Label>
           <p className="text-xs text-muted-foreground">
-            Hold your global hotkey while speaking and release to type.
+            {holdToTalkSupported
+              ? "Hold your global hotkey while speaking and release to type."
+              : "Not available on GNOME: its shortcuts only report a key press, so the hotkey toggles dictation."}
           </p>
         </div>
         <Switch
           id="hold-to-talk"
-          checked={settings?.hold_to_talk ?? false}
+          checked={holdToTalkSupported && (settings?.hold_to_talk ?? false)}
           onCheckedChange={handleHoldToTalkChange}
+          disabled={!holdToTalkSupported}
         />
       </div>
 

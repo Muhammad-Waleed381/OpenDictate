@@ -62,6 +62,7 @@ pub fn run() {
             commands::remove_snippet,
             commands::import_snippets,
             commands::export_snippets,
+            commands::export_dictionary,
             commands::paste_clipboard,
             commands::test_snippet,
             commands::copy_text,

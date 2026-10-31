@@ -6,8 +6,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Button } from "@/components/ui/button";
 import { MicTest } from "@/components/MicTest";
 import { ModelCard } from "@/components/ModelCard";
+import { toast } from "@/components/ui/toast";
 
 const STEPS = ["Microphone", "Speech model", "Shortcut"] as const;
+
+const VAD_MODEL_ID = "silero-vad-v4";
 
 export function Onboarding() {
   const [step, setStep] = useState(1);
@@ -39,6 +42,19 @@ export function Onboarding() {
     };
   }, []);
 
+  // Speech detection installs after the model, so a failure there leaves the
+  // model showing Installed with Next disabled and nothing to explain why.
+  const vadBusy = modelDownloads.includes(VAD_MODEL_ID);
+  const vadMissing = !!selectedModel?.installed && models?.vad_ready === false &&
+    !modelDownloads.includes(selectedModel.id);
+  const handleRetryVad = async () => {
+    try {
+      await useStore.getState().downloadModel(VAD_MODEL_ID);
+    } catch (e) {
+      toast.error(`Speech detection download failed: ${String(e)}`);
+    }
+  };
+
   const handleDone = async () => {
     setDone(true);
     try {
@@ -56,7 +72,7 @@ export function Onboarding() {
   };
 
   return (
-    <Dialog open={!done} onOpenChange={(open) => { if (!open) handleDismiss(); }} modal>
+    <Dialog open={!done} onOpenChange={(open) => { if (!open) handleDismiss(); }} modal disablePointerDismissal>
       {/* Header and footer are pinned; only the step body scrolls, so the
           Back / Skip / Next row stays reachable however long the model list
           gets. p-0 moves padding onto the three sections so the scroll edge
@@ -119,6 +135,14 @@ export function Onboarding() {
           <div className="flex flex-col gap-4 border-2 border-border bg-card p-4 shadow-brutal">
             {step === 1 && <MicTest />}
             {step === 2 && <ModelCard />}
+            {step === 2 && vadMissing && (
+              <div className="mt-3 flex items-center justify-between gap-2 border-2 border-border p-2 text-xs">
+                <span>Speech detection is missing. It is required to continue.</span>
+                <Button size="sm" variant="outline" onClick={handleRetryVad} disabled={vadBusy}>
+                  {vadBusy ? "Downloading…" : "Retry"}
+                </Button>
+              </div>
+            )}
             {step === 3 && (
               <div className="flex flex-col items-center gap-4 py-2">
                 <span className="border-2 border-primary bg-primary px-4 py-2 text-lg font-bold tracking-widest text-primary-foreground uppercase shadow-brutal">

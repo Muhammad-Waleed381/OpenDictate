@@ -29,7 +29,7 @@ function progressPercent(received: number, total: number): number {
 }
 
 const micLabel = (mic: string | null, mics: api.MicDevice[]): string => {
-  if (mic === null) return "Select microphone";
+  if (mic === null) return "System default";
   const found = mics.find((m) => m.id === mic);
   return found?.label ?? mic;
 };
@@ -150,7 +150,7 @@ function ReadyStrip() {
               </span>
             )}
           </div>
-          <Select value={mic ?? ""} onValueChange={handleMicChange} disabled={recording || recordingBusy}>
+          <Select value={mic ?? "default"} onValueChange={handleMicChange} disabled={recording || recordingBusy}>
             <SelectTrigger className="w-full">
               <SelectValue>{micLabel(mic, mics)}</SelectValue>
             </SelectTrigger>

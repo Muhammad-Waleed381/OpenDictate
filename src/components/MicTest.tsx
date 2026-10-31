@@ -12,7 +12,7 @@ import {
 import { toast } from "@/components/ui/toast";
 
 const micLabel = (mic: string | null, mics: api.MicDevice[]): string => {
-  if (mic === null) return "Select microphone";
+  if (mic === null) return "System default";
   const found = mics.find((m) => m.id === mic);
   return found?.label ?? mic;
 };
@@ -48,6 +48,7 @@ export function MicTest() {
   const handleStart = async () => {
     if (useStore.getState().recording || useStore.getState().recordingBusy) return;
     peakRef.current = 0;
+    useStore.setState({ level: 0 });
     setPeak(0);
     setVerdict(null);
     setNoAudioHint(false);
@@ -68,13 +69,15 @@ export function MicTest() {
     try {
       const result = await useStore.getState().stopRecording();
       if (!result) return;
-      const quiet = peakRef.current <= 0.05;
+      // The backend's check of the recorded audio decides whether anything
+      // arrived; the meter's peak only says how loud it was.
+      const noAudio = !result.text;
       setTesting(false);
-      setVerdict(quiet ? "quiet" : "working");
+      setVerdict(noAudio || peakRef.current <= 0.05 ? "quiet" : "working");
       setPeak(peakRef.current);
       // No audio at all: surface the platform-specific hint (macOS mic
       // permission is the most common cause and was previously unreachable).
-      setNoAudioHint(quiet);
+      setNoAudioHint(noAudio);
     } catch (e) {
       setError(String(e));
       setTesting(useStore.getState().recordingMode === "test");
@@ -110,7 +113,7 @@ export function MicTest() {
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1.5">
         <label className="text-xs font-bold text-muted-foreground uppercase">Microphone Device</label>
-        <Select value={mic ?? ""} onValueChange={handleMicChange} disabled={recording || busy}>
+        <Select value={mic ?? "default"} onValueChange={handleMicChange} disabled={recording || busy}>
           <SelectTrigger className="w-full">
             <SelectValue>{micLabel(mic, mics)}</SelectValue>
           </SelectTrigger>

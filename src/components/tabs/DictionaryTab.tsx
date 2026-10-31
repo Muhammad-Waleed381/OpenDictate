@@ -47,16 +47,12 @@ export function DictionaryTab() {
   };
 
   const handleExport = async () => {
-    const blob = new Blob([dictionary.map((entry) => entry.word).join("\n")], {
-      type: "text/plain;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "opendictate-dictionary.txt";
-    link.click();
-    URL.revokeObjectURL(url);
-    toast.success("Dictionary exported");
+    try {
+      const path = await api.exportDictionary();
+      toast.success(`Dictionary exported to ${path}`);
+    } catch (e) {
+      toast.error(`Export failed: ${String(e)}`);
+    }
   };
 
   const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {

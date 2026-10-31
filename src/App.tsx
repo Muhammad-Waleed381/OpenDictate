@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Settings, Activity, BookOpen, History, FileText, House, Cpu } from "lucide-react";
 import { Onboarding } from "@/components/Onboarding";
-import { Toaster } from "@/components/ui/toast";
+import { Toaster, toast } from "@/components/ui/toast";
 import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
 import { DockButton } from "@/components/DockButton";
 import { useRecording } from "@/lib/useRecording";
@@ -72,9 +72,12 @@ function useOpenDictateEvents() {
       ),
       api.onHistoryUpdated(() => store.refreshStats().catch(() => {})),
       api.onPartial((payload) => store.setPartial(payload.text)),
-      api.onRecordingChanged((payload) =>
-        store.setRecording(payload.recording)
-      ),
+      api.onRecordingChanged((payload) => {
+        // The live caption belongs to one recording.
+        store.setPartial("");
+        store.setRecording(payload.recording);
+      }),
+      api.onDictationError((payload) => toast.error(payload.message)),
       api.onDockPosition((pos) => {
         const cur = useStore.getState().settings;
         if (cur) {

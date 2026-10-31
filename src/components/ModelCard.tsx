@@ -122,10 +122,14 @@ export function ModelCard() {
   // The initial state above runs before the catalog is loaded (it starts as
   // []), so the tab defaulted to "non-streaming" even when the active model
   // was streaming. Re-sync once the catalog/settings arrive.
+  // The catalog gets a new array after every refresh, so depending on it would
+  // switch the user's tab whenever a download finished.
+  const catalogLoaded = catalog.length > 0;
   useEffect(() => {
     const active = catalog.find((m) => m.id === settings?.stt_model);
     if (active) setView(active.streaming ? "streaming" : "non-streaming");
-  }, [catalog, settings?.stt_model]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalogLoaded, settings?.stt_model]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -153,8 +157,8 @@ export function ModelCard() {
     try {
       await useStore.getState().downloadModel(id);
     } catch (e) {
+      // The model-error listener above has already raised the toast.
       setError(String(e));
-      toast.error(`Model installation failed: ${String(e)}`);
     }
   };
 
@@ -667,7 +671,7 @@ export function ModelCard() {
         <p className="min-w-0 text-xs text-muted-foreground">
           {installedBytes > 0 ? `${formatBytes(installedBytes)} of model storage used` : "No models installed yet."}
         </p>
-        {missingCount > 0 && (
+        {(missingCount > 0 || downloadAllStatus) && (
           <div className="flex items-center gap-2">
             {downloadAllStatus ? (
               <div className="flex items-center gap-2">
