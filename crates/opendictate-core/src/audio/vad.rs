@@ -12,8 +12,21 @@ pub struct VadResult {
     pub has_speech: bool,
 }
 
+const SILERO_FRAME: usize = 512;
+
 pub struct SileroVad {
     detector: Mutex<VoiceActivityDetector>,
+    /// Streaming samples waiting to fill the next whole model frame.
+    pending: Mutex<Vec<f32>>,
+}
+
+/// Appends `samples` and removes the whole frames now available. The remainder
+/// stays in `pending`: padding it with zeros would put a gap of silence into
+/// the audio the model sees on every poll.
+fn take_whole_frames(pending: &mut Vec<f32>, samples: &[f32], frame: usize) -> Vec<f32> {
+    pending.extend_from_slice(samples);
+    let whole = pending.len() / frame * frame;
+    pending.drain(..whole).collect()
 }
 
 // SAFETY: VadModelConfig holds plain data; the stateful detector is created
@@ -57,6 +70,7 @@ impl SileroVad {
         log::info!("silero VAD loaded from {}", model_path.display());
         Ok(Self {
             detector: Mutex::new(detector),
+            pending: Mutex::new(Vec::new()),
         })
     }
 
@@ -70,15 +84,12 @@ impl SileroVad {
             Ok(detector) => detector,
             Err(_) => return false,
         };
-        let chunk_size = 512;
-        for chunk in samples.chunks(chunk_size) {
-            if chunk.len() == chunk_size {
-                detector.accept_waveform(chunk);
-            } else {
-                let mut padded = vec![0.0f32; chunk_size];
-                padded[..chunk.len()].copy_from_slice(chunk);
-                detector.accept_waveform(&padded);
-            }
+        let frames = match self.pending.lock() {
+            Ok(mut pending) => take_whole_frames(&mut pending, samples, SILERO_FRAME),
+            Err(_) => return false,
+        };
+        for frame in frames.chunks_exact(SILERO_FRAME) {
+            detector.accept_waveform(frame);
         }
         let is_speech = detector.detected() || !detector.is_empty();
         detector.clear();
@@ -89,6 +100,9 @@ impl SileroVad {
     pub fn reset(&self) {
         if let Ok(detector) = self.detector.lock() {
             detector.reset();
+        }
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.clear();
         }
     }
 
@@ -297,6 +311,17 @@ pub fn apply_vad(audio: &[f32], silero: Option<&SileroVad>, sensitivity: f32) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streaming_keeps_partial_frames_for_the_next_poll_without_padding() {
+        let mut pending = Vec::new();
+        assert!(take_whole_frames(&mut pending, &[1.0, 2.0, 3.0], 4).is_empty());
+        assert_eq!(
+            take_whole_frames(&mut pending, &[4.0, 5.0, 6.0, 7.0, 8.0, 9.0], 4),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+        );
+        assert_eq!(pending, vec![9.0]);
+    }
 
     #[test]
     fn rms_of_silence_is_zero() {

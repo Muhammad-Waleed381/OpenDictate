@@ -97,6 +97,90 @@ pub fn tokenize_phrase(phrase: &str, vocab: &HashSet<String>) -> String {
     phrase_tokens.join(" ")
 }
 
+/// How many spellings of one word, and of one phrase, are given to the spotter.
+const MAX_WORD_SPELLINGS: usize = 8;
+const MAX_PHRASE_SPELLINGS: usize = 32;
+
+/// Every way to write `word` with vocabulary tokens, fewest tokens first.
+///
+/// The model was trained on one specific BPE segmentation, and its `bpe.model`
+/// does not ship with the download. The spotter only fires on the exact token
+/// sequence it is given, so a single guessed spelling can leave a clearly spoken
+/// wake phrase undetectable ("yellow" was only ever `▁ Y EL LO W`).
+fn word_spellings(word: &str, vocab: &HashSet<String>) -> Vec<Vec<String>> {
+    fn walk(
+        rest: &str,
+        pieces: &mut Vec<String>,
+        vocab: &HashSet<String>,
+        found: &mut Vec<Vec<String>>,
+        budget: &mut usize,
+    ) {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        if rest.is_empty() {
+            found.push(pieces.clone());
+            return;
+        }
+        let boundaries: Vec<usize> = rest.char_indices().map(|(i, c)| i + c.len_utf8()).collect();
+        for &end in boundaries.iter().rev() {
+            let piece = if pieces.is_empty() {
+                format!("\u{2581}{}", &rest[..end])
+            } else {
+                rest[..end].to_string()
+            };
+            if vocab.contains(&piece) {
+                pieces.push(piece);
+                walk(&rest[end..], pieces, vocab, found, budget);
+                pieces.pop();
+            }
+        }
+    }
+    let upper = word.to_uppercase();
+    let mut found = Vec::new();
+    // Bounds the search on long words; the longest pieces are explored first.
+    let mut budget = 20_000;
+    walk(&upper, &mut Vec::new(), vocab, &mut found, &mut budget);
+    if vocab.contains("\u{2581}") {
+        // The model can also start a word with a bare word-boundary token.
+        let mut budget = 20_000;
+        let mut pieces = vec!["\u{2581}".to_string()];
+        walk(&upper, &mut pieces, vocab, &mut found, &mut budget);
+    }
+    found.sort_by_key(Vec::len);
+    found.dedup();
+    found.truncate(MAX_WORD_SPELLINGS);
+    found
+}
+
+/// The token spellings to register for a phrase, most likely first. Falls back
+/// to [`tokenize_phrase`] when a word has characters the vocabulary lacks.
+pub fn phrase_spellings(phrase: &str, vocab: &HashSet<String>) -> Vec<String> {
+    let mut combined: Vec<Vec<String>> = vec![Vec::new()];
+    for word in phrase.split_whitespace() {
+        let spellings = word_spellings(word, vocab);
+        if spellings.is_empty() {
+            let fallback = tokenize_phrase(phrase, vocab);
+            return if fallback.is_empty() { Vec::new() } else { vec![fallback] };
+        }
+        let mut next = Vec::new();
+        for prefix in &combined {
+            for spelling in &spellings {
+                next.push([prefix.as_slice(), spelling.as_slice()].concat());
+            }
+        }
+        next.sort_by_key(Vec::len);
+        next.truncate(MAX_PHRASE_SPELLINGS);
+        combined = next;
+    }
+    combined
+        .into_iter()
+        .filter(|tokens| !tokens.is_empty())
+        .map(|tokens| tokens.join(" "))
+        .collect()
+}
+
 /// A configured, reusable keyword spotter engine.
 pub struct Spotter {
     spotter: KeywordSpotter,
@@ -175,11 +259,15 @@ impl Spotter {
             if trimmed.is_empty() {
                 continue;
             }
-            let tokenized = tokenize_phrase(trimmed, &vocab);
-            if !tokenized.is_empty() {
-                log::info!("KWS mapped keyword '{}' -> '{}'", trimmed, tokenized);
-                keyword_map.insert(tokenized.clone(), trimmed.to_string());
-                tokenized_keywords.push(tokenized);
+            let spellings = phrase_spellings(trimmed, &vocab);
+            log::info!("KWS mapped keyword '{trimmed}' -> {} spellings", spellings.len());
+            for tokenized in spellings {
+                if keyword_map
+                    .insert(tokenized.clone(), trimmed.to_string())
+                    .is_none()
+                {
+                    tokenized_keywords.push(tokenized);
+                }
             }
         }
 
@@ -240,6 +328,35 @@ impl Spotter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vocab(tokens: &[&str]) -> HashSet<String> {
+        tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn a_word_gets_every_vocabulary_spelling_with_the_shortest_first() {
+        let v = vocab(&["\u{2581}", "\u{2581}Y", "ELLOW", "E", "LLOW", "Y", "EL", "LOW"]);
+        let spellings = phrase_spellings("yellow", &v);
+        assert_eq!(spellings[0], "\u{2581}Y ELLOW");
+        assert!(spellings.contains(&"\u{2581}Y EL LOW".to_string()));
+        assert!(spellings.contains(&"\u{2581} Y ELLOW".to_string()));
+    }
+
+    #[test]
+    fn phrases_combine_word_spellings_within_the_limit() {
+        let v = vocab(&["\u{2581}A", "\u{2581}B", "A", "B", "AA", "BB"]);
+        let spellings = phrase_spellings("aaa bbb", &v);
+        assert!(spellings.contains(&"\u{2581}A AA \u{2581}B BB".to_string()));
+        assert!(spellings.contains(&"\u{2581}A A A \u{2581}B B B".to_string()));
+        assert!(spellings.len() <= MAX_PHRASE_SPELLINGS);
+    }
+
+    #[test]
+    fn unrepresentable_words_fall_back_to_the_best_effort_spelling() {
+        let v = vocab(&["\u{2581}A"]);
+        assert_eq!(phrase_spellings("a\u{e9}", &v), vec!["\u{2581}A".to_string()]);
+        assert!(phrase_spellings("", &v).is_empty());
+    }
 
     #[test]
     fn test_spotter_init_and_feed() {

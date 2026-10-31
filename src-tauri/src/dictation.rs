@@ -11,7 +11,7 @@ use opendictate_core::stt::models;
 use opendictate_core::stt::streaming::StreamingRecognizer;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::session::{submit_after_insert, SpeechBuffer, WorkToken};
+use crate::session::{submit_after_insert, NoiseGate, SpeechBuffer, WorkToken};
 use crate::state::{AppState, HistoryEntry, StreamingPipe, TranscriptResult};
 use crate::{db, dock, inject, notify};
 
@@ -1595,12 +1595,16 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
             let mut frames: VecDeque<bool> = VecDeque::with_capacity(8);
             let mut silent_since = Instant::now();
             let mut last_awake_activity = Instant::now();
-            let mut noise_floor: f32 = 0.012;
+            let mut noise_gate = NoiseGate::default();
+            let base_threshold = sensitivity_to_energy_threshold(settings.vad_sensitivity);
             let silero = if models::is_vad_ready() {
                 SileroVad::with_threshold(
                     &models::vad_model_path(),
                     sensitivity_to_silero_threshold(settings.vad_sensitivity),
                 )
+                .inspect_err(|error| {
+                    log::warn!("handsfree: Silero VAD unavailable, using energy: {error}")
+                })
                 .ok()
             } else {
                 None
@@ -1651,10 +1655,11 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                 }
                 let rms =
                     (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+                let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                 if !state.handsfree_awake.load(Ordering::SeqCst) {
                     speech.take();
                     frames.clear();
-                    noise_floor = (noise_floor * 0.9 + rms * 0.1).clamp(0.005, 0.12);
+                    noise_gate.classify(rms, peak, false, base_threshold);
                     if let Some(keyword) = spotter.process_samples(&keyword_session, &samples) {
                         if let Ok(_commit) = state.sessions.commit_guard(token) {
                             if !work_current(&state, token) {
@@ -1674,19 +1679,10 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                     }
                     continue;
                 }
-                let rate = if speech.active { 0.05 } else { 0.15 };
-                noise_floor = (noise_floor * (1.0 - rate) + rms * rate).clamp(0.005, 0.15);
-                let base = sensitivity_to_energy_threshold(settings.vad_sensitivity);
-                let threshold = if speech.active {
-                    (noise_floor * 1.4).max(base * 0.6)
-                } else {
-                    (noise_floor * 2.0).max(base * 0.9)
-                };
                 let is_speech = if let Some(ref detector) = silero {
                     detector.accept_streaming(&samples)
                 } else {
-                    let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-                    rms >= threshold && (peak / rms.max(1e-5) >= 2.0 || rms >= noise_floor * 2.0)
+                    noise_gate.classify(rms, peak, speech.active, base_threshold)
                 };
                 frames.push_back(is_speech);
                 if frames.len() > 8 {

@@ -103,6 +103,23 @@ pub fn submit_after_insert(
     Ok(inserted)
 }
 
+/// Where to cut an utterance that reached `limit`: the quietest 30 ms in its last
+/// fifth, so uninterrupted speech is split between words rather than inside one.
+fn quietest_split(samples: &[f32], limit: usize) -> usize {
+    const WINDOW: usize = 480;
+    let start = limit - limit / 5;
+    if limit - start < WINDOW {
+        return limit;
+    }
+    (start..=limit - WINDOW)
+        .step_by(WINDOW / 2)
+        .min_by(|&a, &b| {
+            let energy = |at: usize| samples[at..at + WINDOW].iter().map(|s| s * s).sum::<f32>();
+            energy(a).total_cmp(&energy(b))
+        })
+        .map_or(limit, |at| at + WINDOW / 2)
+}
+
 /// Tracks the samples around a two-observation speech onset.
 pub struct SpeechBuffer {
     samples: Vec<f32>,
@@ -144,7 +161,7 @@ impl SpeechBuffer {
         // keeps the remainder in order instead of dropping the overrun.
         let mut completed = Vec::new();
         while self.samples.len() >= self.limit {
-            let remainder = self.samples.split_off(self.limit);
+            let remainder = self.samples.split_off(quietest_split(&self.samples, self.limit));
             completed.push(std::mem::replace(&mut self.samples, remainder));
         }
         completed
@@ -155,6 +172,40 @@ impl SpeechBuffer {
         self.consecutive = 0;
         self.pre_roll.clear();
         std::mem::take(&mut self.samples)
+    }
+}
+
+/// Energy-based speech detection for Handsfree when the Silero model is absent.
+pub struct NoiseGate {
+    floor: f32,
+}
+
+impl Default for NoiseGate {
+    fn default() -> Self {
+        Self { floor: 0.012 }
+    }
+}
+
+impl NoiseGate {
+    /// Classifies one batch and adapts the noise floor. The floor follows
+    /// quiet audio but barely moves during speech; if speech could raise it,
+    /// a sustained voice would soon fall under the threshold and be cut off.
+    /// A very slow rise still lets it learn a steady noise such as a fan.
+    pub fn classify(&mut self, rms: f32, peak: f32, active: bool, base: f32) -> bool {
+        let threshold = if active {
+            (self.floor * 1.4).max(base * 0.6)
+        } else {
+            (self.floor * 2.0).max(base * 0.9)
+        };
+        let speech = rms >= threshold
+            && (peak / rms.max(1e-5) >= 2.0 || rms >= self.floor * 2.0);
+        let rate = match (speech, rms < self.floor) {
+            (true, _) => 0.002,
+            (false, true) => 0.3,
+            (false, false) => 0.15,
+        };
+        self.floor = (self.floor * (1.0 - rate) + rms * rate).clamp(0.005, 0.15);
+        speech
     }
 }
 
@@ -187,6 +238,40 @@ pub fn release_download_owner(
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn long_speech_is_split_at_its_quietest_point_without_losing_samples() {
+        let mut audio = vec![0.5f32; 16_000];
+        audio[14_000..14_480].fill(0.0);
+        let mut buffer = SpeechBuffer::new(15_000, 20_000);
+        buffer.push(&audio[..1], true);
+        let mut emitted = buffer.push(&audio[1..], true);
+        assert_eq!(emitted.len(), 1);
+        let cut = emitted[0].len();
+        assert!((14_000..=14_480).contains(&cut), "cut at {cut}");
+        emitted.push(buffer.take());
+        assert_eq!(emitted.concat(), audio);
+    }
+
+    #[test]
+    fn sustained_speech_stays_above_the_noise_gate() {
+        let mut gate = NoiseGate::default();
+        // Ten seconds of a steady voice, then the following silence.
+        for _ in 0..166 {
+            assert!(gate.classify(0.05, 0.12, true, 0.008));
+        }
+        assert!(!gate.classify(0.002, 0.004, true, 0.008));
+    }
+
+    #[test]
+    fn noise_gate_learns_a_steady_loud_background() {
+        let mut gate = NoiseGate::default();
+        assert!(gate.classify(0.05, 0.06, false, 0.008));
+        for _ in 0..1500 {
+            gate.classify(0.05, 0.06, true, 0.008);
+        }
+        assert!(!gate.classify(0.05, 0.06, true, 0.008));
+    }
 
     #[test]
     fn explicit_start_reuses_live_handsfree_capture_without_reopening_it() {
