@@ -17,6 +17,7 @@ use crate::{db, dock, inject, notify};
 
 const MAX_OFFLINE_SAMPLES: usize = 110 * 16_000;
 const CONTINUOUS_BACKLOG: usize = 2;
+const MIC_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
 pub struct QueuedAudio {
     audio: Vec<f32>,
@@ -790,14 +791,25 @@ fn process_utterance(
         return finalize_transcript(app, state, "", 0, token, continuous, finish);
     }
     ensure_current(state, token)?;
-    let engine = load_engine(state)?;
-    let raw = engine
-        .transcribe(
-            &final_audio,
-            dictionary_hotwords(&dictionary_terms(state)).as_deref(),
-        )
-        .map_err(|e| e.to_string())?;
+    let raw = transcribe_utterance(state, &final_audio)?;
     finalize_transcript(app, state, &raw, duration_ms, token, continuous, finish)
+}
+
+/// Decodes a complete utterance with the selected model. Handsfree buffers
+/// whole utterances even when that model is a streaming one, and a streaming
+/// model cannot be loaded by the offline engine.
+fn transcribe_utterance(state: &AppState, audio: &[f32]) -> Result<String, String> {
+    let hotwords = dictionary_hotwords(&dictionary_terms(state));
+    if models::is_streaming_model(&selected_model_id(state)) {
+        let recognizer = warmup_streaming(state)?;
+        let session = recognizer.create_session(hotwords.as_deref());
+        recognizer.accept(&session, audio);
+        recognizer.finish(&session);
+        return Ok(recognizer.result(&session));
+    }
+    load_engine(state)?
+        .transcribe(audio, hotwords.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 fn normalize_transcript(raw: &str, punctuation: bool, dictionary: &[String]) -> String {
@@ -1596,6 +1608,8 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
             let mut silent_since = Instant::now();
             let mut last_awake_activity = Instant::now();
             let mut noise_gate = NoiseGate::default();
+            let mut next_mic_attempt = Instant::now();
+            let mut mic_lost = false;
             let base_threshold = sensitivity_to_energy_threshold(settings.vad_sensitivity);
             let silero = if models::is_vad_ready() {
                 SileroVad::with_threshold(
@@ -1639,13 +1653,36 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                     }
                 }
                 if !state.recorder.is_recording() {
-                    if let Err(error) = start_capture(&state) {
-                        state.handsfree_active.store(false, Ordering::SeqCst);
-                        drop(transition);
-                        notify::notify("Handsfree stopped", &error);
-                        break;
+                    // A microphone can disappear and come back (a USB or
+                    // Bluetooth headset). Keep retrying instead of leaving
+                    // Handsfree off while Settings still shows it as active.
+                    if Instant::now() < next_mic_attempt {
+                        continue;
                     }
-                    watermark = state.recorder.sample_position();
+                    next_mic_attempt = Instant::now() + MIC_RETRY_INTERVAL;
+                    match start_capture(&state) {
+                        Ok(()) => {
+                            watermark = state.recorder.sample_position();
+                            if mic_lost {
+                                mic_lost = false;
+                                notify::notify("Handsfree resumed", "The microphone is back.");
+                            }
+                        }
+                        Err(error) => {
+                            if !mic_lost {
+                                mic_lost = true;
+                                speech.take();
+                                frames.clear();
+                                state.handsfree_awake.store(false, Ordering::SeqCst);
+                                restore_dock(&app, &state);
+                                notify::notify(
+                                    "Handsfree paused",
+                                    &format!("Waiting for the microphone: {error}"),
+                                );
+                            }
+                            continue;
+                        }
+                    }
                 }
                 let token = state.sessions.handsfree_token();
                 let samples = state.recorder.take_since(&mut watermark);
