@@ -10,6 +10,21 @@ struct Token {
 }
 
 fn tokenize(value: &str) -> Vec<Token> {
+    let mut result = raw_tokenize(value);
+    // A quote around a word is not part of it: 'iphone' is the word iphone.
+    for token in &mut result {
+        let word = &value[token.start..token.end];
+        let trimmed = word.trim_matches('\'');
+        if !trimmed.is_empty() && trimmed.len() != word.len() {
+            token.start += word.len() - word.trim_start_matches('\'').len();
+            token.end = token.start + trimmed.len();
+            token.lower = trimmed.to_lowercase();
+        }
+    }
+    result
+}
+
+fn raw_tokenize(value: &str) -> Vec<Token> {
     let mut result = Vec::new();
     let mut start = None;
     for (index, character) in value.char_indices() {
@@ -91,18 +106,37 @@ pub fn correct_dictionary_terms(text: &str, terms: &[String]) -> String {
             .iter()
             .filter_map(|term| {
                 let end = index + term.tokens.len();
-                (end <= tokens.len()
-                    && tokens[index..end]
-                        .iter()
-                        .map(|token| token.lower.as_str())
-                        .eq(term.tokens.iter().map(String::as_str)))
-                .then_some((term.tokens.len(), term))
+                if end > tokens.len() {
+                    return None;
+                }
+                let mut possessive = false;
+                let same = tokens[index..end]
+                    .iter()
+                    .zip(&term.tokens)
+                    .enumerate()
+                    .all(|(offset, (token, expected))| {
+                        if token.lower == *expected {
+                            return true;
+                        }
+                        // "iphone's" is the term "iPhone" plus a possessive.
+                        let last = index + offset + 1 == end;
+                        possessive = last
+                            && token.lower.strip_suffix("'s") == Some(expected.as_str());
+                        possessive
+                    });
+                // Words in different clauses are not a phrase: "new. York".
+                let same_clause = tokens[index..end].windows(2).all(|pair| {
+                    text[pair[0].end..pair[1].start]
+                        .chars()
+                        .all(|c| !".,;:!?".contains(c) || term.canonical.contains(c))
+                });
+                (same && same_clause).then_some((term.tokens.len(), term, possessive))
             })
-            .max_by_key(|(length, _)| *length);
+            .max_by_key(|(length, _, _)| *length);
 
-        if let Some((length, term)) = matched {
+        if let Some((length, term, possessive)) = matched {
             let mut start = tokens[index].start;
-            let mut end = tokens[index + length - 1].end;
+            let mut end = tokens[index + length - 1].end - if possessive { 2 } else { 0 };
             let previous_end = replacements.last().map_or(0, |(_, end, _)| *end);
             if let Some(prefix_start) = start.checked_sub(term.leading.len()) {
                 if prefix_start >= previous_end
@@ -162,7 +196,14 @@ pub fn map_spoken_punctuation(text: &str) -> String {
             })
             .max_by_key(|(length, _)| *length);
 
-        if let Some((length, symbol)) = matched {
+        // "the comma" and "a period" name the word; they do not dictate the mark.
+        let names_the_word = index > 0
+            && matches!(
+                tokens[index - 1].lower.as_str(),
+                "a" | "an" | "the" | "this" | "that" | "each" | "every" | "my" | "your" | "our"
+                    | "their" | "his" | "her" | "its" | "grace" | "trial" | "time"
+            );
+        if let Some((length, symbol)) = matched.filter(|_| !names_the_word) {
             // Previous replacement ended exactly at the token before this match,
             // so the inter-symbol gap must be preserved.
             let prev_taken = index > 0
@@ -315,6 +356,15 @@ pub fn strip_sound_effects(text: &str) -> String {
 /// Cleans up model hallucination loops where a word or multi-word phrase is repeated
 /// consecutively (e.g. "I can do it myself I can do it myself I can do it myself ... I can do"
 /// or "Test Test Test Test Test" or "Yes, I do that myself! Yes, I do that myself!").
+fn is_number_word(word: &str) -> bool {
+    !word.is_empty() && word.chars().all(|c| c.is_ascii_digit())
+        || matches!(
+            word,
+            "zero" | "oh" | "one" | "two" | "three" | "four" | "five" | "six" | "seven" | "eight"
+                | "nine" | "ten"
+        )
+}
+
 pub fn deduplicate_repeated_phrases(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -362,9 +412,19 @@ pub fn deduplicate_repeated_phrases(text: &str) -> String {
                 }
             }
 
-            let min_repeats = if k == 1 { 3 } else { 2 };
-            if repeats >= min_repeats {
-                best_match = Some((k, repeats, partial_len));
+            // People do repeat themselves ("no no no", "New York, New York")
+            // and numbers ("five five five", "1 2 1 2"). Only runs that are
+            // too long to be natural are treated as a recognizer loop.
+            let min_repeats = match k {
+                1 => 4,
+                2 | 3 => 3,
+                _ => 2,
+            };
+            if repeats >= min_repeats && !pattern.iter().all(|w| is_number_word(w)) {
+                // A cut-off copy only counts at the very end of the text;
+                // elsewhere those words begin the speaker's next sentence.
+                let at_end = cursor + partial_len == n;
+                best_match = Some((k, repeats, if at_end { partial_len } else { 0 }));
                 break;
             }
         }
@@ -797,6 +857,23 @@ mod tests {
     }
 
     #[test]
+    fn dictionary_terms_respect_clauses_quotes_and_possessives() {
+        let terms = vec!["New York".to_string(), "iPhone".to_string(), "Node.js".to_string()];
+        let fix = |text: &str| super::correct_dictionary_terms(text, &terms);
+        assert_eq!(fix("I went to new. York is nice."), "I went to new. York is nice.");
+        assert_eq!(fix("the iphone's battery and 'iphone' here"), "the iPhone's battery and 'iPhone' here");
+        assert_eq!(fix("use node.js here"), "use Node.js here");
+    }
+
+    #[test]
+    fn spoken_punctuation_leaves_the_named_word_alone() {
+        use super::map_spoken_punctuation as map;
+        assert_eq!(map("the grace period ended"), "the grace period ended");
+        assert_eq!(map("after the comma we go"), "after the comma we go");
+        assert_eq!(map("hello comma world period"), "hello, world.");
+    }
+
+    #[test]
     fn test_deduplicate_repeated_phrases() {
         use super::deduplicate_repeated_phrases;
         assert_eq!(
@@ -818,6 +895,21 @@ mod tests {
         assert_eq!(
             deduplicate_repeated_phrases("This is a normal sentence."),
             "This is a normal sentence."
+        );
+        for spoken in [
+            "my number is five five five one two three four",
+            "call nine one one one now",
+            "the code is 1 2 1 2",
+            "New York New York is great",
+            "no no no",
+        ] {
+            assert_eq!(deduplicate_repeated_phrases(spoken), spoken);
+        }
+        assert_eq!(
+            deduplicate_repeated_phrases(
+                "we will rock you we will rock you we will rock you we will win"
+            ),
+            "we will rock you we will win"
         );
     }
 }
