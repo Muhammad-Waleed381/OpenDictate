@@ -120,6 +120,7 @@ pub fn run() {
                 kws_engine: Arc::new(Mutex::new(None)),
                 handsfree_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 handsfree_awake: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                handsfree_speaking: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 user_dictation_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 streaming_rtf_x100: Arc::new(std::sync::atomic::AtomicU32::new(0)),
                 gpu_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),

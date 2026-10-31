@@ -18,6 +18,7 @@ use crate::{db, dock, inject, notify};
 const MAX_OFFLINE_SAMPLES: usize = 110 * 16_000;
 const CONTINUOUS_BACKLOG: usize = 2;
 const MIC_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+const ERROR_DISPLAY: Duration = Duration::from_millis(2600);
 
 pub struct QueuedAudio {
     audio: Vec<f32>,
@@ -124,7 +125,21 @@ fn report_error(app: &AppHandle, state: &AppState, token: WorkToken, error: &str
         let _ = app.emit("dictation-error", serde_json::json!({ "error": error }));
         notify::notify("Dictation error", error);
         play_sound(state, crate::audio::SoundEvent::Error);
+        restore_dock_after(app, token, ERROR_DISPLAY);
     }
+}
+
+/// Returns the dock to the session's resting state once a temporary state has
+/// been shown. Nothing else leaves "error" or "inserted" while Handsfree idles.
+fn restore_dock_after(app: &AppHandle, token: WorkToken, delay: Duration) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(delay);
+        let state = state_from_app(&app);
+        if let Ok(_commit) = state.sessions.commit_guard(token) {
+            restore_dock(&app, &state);
+        };
+    });
 }
 
 pub fn start(app: &AppHandle, state: &AppState, test: bool) -> Result<(), String> {
@@ -1327,7 +1342,9 @@ fn handle_voice_action_or_snippet(
         }
         Some(VoiceAction::Sleep) => {
             state.handsfree_awake.store(false, Ordering::SeqCst);
+            state.handsfree_speaking.store(false, Ordering::SeqCst);
             restore_dock(app, state);
+            play_sound(state, crate::audio::SoundEvent::Sleeping);
             return Ok(Some("✓ Sleeping".to_string()));
         }
         None => return Ok(None),
@@ -1417,9 +1434,14 @@ fn pill_text(text: &str) -> String {
 }
 
 fn restore_dock(app: &AppHandle, state: &AppState) {
-    if state.user_dictation_active.load(Ordering::SeqCst)
-        || state.handsfree_awake.load(Ordering::SeqCst)
-    {
+    let awake = state.handsfree_awake.load(Ordering::SeqCst);
+    if state.user_dictation_active.load(Ordering::SeqCst) || awake {
+        if awake && state.handsfree_speaking.load(Ordering::SeqCst) {
+            // Do not show "listening" over an utterance still in progress.
+            dock::set_state(app, "recording", None);
+            dock::set_caption(app, Some("Recording…"));
+            return;
+        }
         dock::set_state(app, "listening", None);
         dock::set_caption(app, Some("Listening…"));
     } else {
@@ -1436,14 +1458,7 @@ fn show_completed(app: &AppHandle, state: &AppState, token: WorkToken, label: &s
     dock::set_state(app, "inserted", None);
     dock::set_caption(app, Some(label));
     play_sound(state, crate::audio::SoundEvent::Inserted);
-    let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1500));
-        let state = state_from_app(&app);
-        if let Ok(_commit) = state.sessions.commit_guard(token) {
-            restore_dock(&app, &state);
-        };
-    });
+    restore_dock_after(app, token, Duration::from_millis(1500));
 }
 
 fn commit_text(
@@ -1644,7 +1659,13 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                     if let Some(ref detector) = silero {
                         detector.reset();
                     }
-                    state.handsfree_awake.store(false, Ordering::SeqCst);
+                    state.handsfree_speaking.store(false, Ordering::SeqCst);
+                    let was_awake = state.handsfree_awake.swap(false, Ordering::SeqCst);
+                    if was_awake && !explicit {
+                        // A cancellation showed the dock for the awake state
+                        // that has just ended.
+                        restore_dock(&app, &state);
+                    }
                     watermark = state.recorder.sample_position();
                     boundary = current_boundary;
                     was_explicit = explicit;
@@ -1694,6 +1715,7 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                     (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
                 let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
                 if !state.handsfree_awake.load(Ordering::SeqCst) {
+                    state.handsfree_speaking.store(false, Ordering::SeqCst);
                     speech.take();
                     frames.clear();
                     noise_gate.classify(rms, peak, false, base_threshold);
@@ -1736,15 +1758,19 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                 let was_active = speech.active;
                 let mut completed = speech.push(&samples, is_speech);
                 if !was_active && speech.active && work_current(&state, token) {
-                    dock::set_state(&app, "recording", None);
+                    state.handsfree_speaking.store(true, Ordering::SeqCst);
+                    restore_dock(&app, &state);
                 }
                 if speech.active
                     && silence_confirmed
                     && silent_since.elapsed() >= Duration::from_millis(500)
                 {
                     let audio = speech.take();
+                    state.handsfree_speaking.store(false, Ordering::SeqCst);
                     if audio.len() >= 6400 {
                         completed.push(audio);
+                    } else if work_current(&state, token) {
+                        restore_dock(&app, &state);
                     }
                     frames.clear();
                 }
@@ -1752,9 +1778,20 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                     if !work_current(&state, token) {
                         break;
                     }
-                    let result = process_utterance(&app, &state, &audio, token, true, false);
-                    if let Err(error) = result {
-                        report_error(&app, &state, token, &error);
+                    dock::set_state(&app, "transcribing", None);
+                    dock::set_caption(&app, Some("transcribing…"));
+                    match process_utterance(&app, &state, &audio, token, true, false) {
+                        Err(error) => report_error(&app, &state, token, &error),
+                        // Silence, noise, or a repeated wake phrase: nothing
+                        // was inserted that would have updated the dock.
+                        Ok(result) if result.text.is_empty() => {
+                            if let Ok(_commit) = state.sessions.commit_guard(token) {
+                                if work_current(&state, token) {
+                                    restore_dock(&app, &state);
+                                }
+                            }
+                        }
+                        Ok(_) => {}
                     }
                     last_awake_activity = Instant::now();
                 }
@@ -1772,6 +1809,7 @@ pub(crate) fn start_handsfree_locked(app: &AppHandle, state: &AppState) -> Resul
                                 detector.reset();
                             }
                             restore_dock(&app, &state);
+                            play_sound(&state, crate::audio::SoundEvent::Sleeping);
                         }
                     }
                 }
@@ -1801,6 +1839,7 @@ pub(crate) fn stop_handsfree_locked(app: &AppHandle, state: &AppState) -> Result
     state.sessions.restart_handsfree();
     state.handsfree_active.store(false, Ordering::SeqCst);
     state.handsfree_awake.store(false, Ordering::SeqCst);
+    state.handsfree_speaking.store(false, Ordering::SeqCst);
     if !state.user_dictation_active.load(Ordering::SeqCst) {
         cancel_capture(state)?;
         restore_dock(app, state);
@@ -1990,6 +2029,7 @@ mod session_regressions {
             kws_engine: Arc::new(std::sync::Mutex::new(None)),
             handsfree_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             handsfree_awake: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            handsfree_speaking: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             user_dictation_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             streaming_rtf_x100: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             gpu_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),

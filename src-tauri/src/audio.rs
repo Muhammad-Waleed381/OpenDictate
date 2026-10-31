@@ -9,6 +9,7 @@ pub enum SoundEvent {
     Listening,
     Inserted,
     Error,
+    Sleeping,
 }
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -74,6 +75,12 @@ pub fn play_event(volume: f32, event: SoundEvent) {
             }
             SoundEvent::Inserted => sink.append(tone(1046.0, 0.2, volume)),
             SoundEvent::Error => sink.append(sweep(440.0, 220.0, 0.35, volume)),
+            // The wake chime in reverse, so the two are easy to tell apart.
+            SoundEvent::Sleeping => {
+                sink.append(tone(880.0, 0.12, volume));
+                sink.append(silence(0.05));
+                sink.append(tone(660.0, 0.16, volume));
+            }
         }
         sink.sleep_until_end();
     });

@@ -270,6 +270,8 @@ pub struct AppState {
     pub kws_engine: Arc<Mutex<Option<CachedKwsEngine>>>,
     pub handsfree_active: Arc<AtomicBool>,
     pub handsfree_awake: Arc<AtomicBool>,
+    /// The awake Handsfree listener is inside an utterance right now.
+    pub handsfree_speaking: Arc<AtomicBool>,
     /// True while the user has an explicit dictation session open (started via
     /// hotkey/hold-to-talk). Distinct from handsfree holding the mic open.
     /// Used by the hotkey toggle to know whether a second press should stop.
