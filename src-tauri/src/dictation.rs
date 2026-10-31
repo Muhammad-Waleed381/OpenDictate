@@ -823,7 +823,11 @@ struct PreparedTranscript {
 
 fn split_snippet_payload(payload: &str) -> Option<SnippetCommand> {
     let mut parts = payload.trim().splitn(2, char::is_whitespace);
-    let name = parts.next().unwrap_or("");
+    // The recognizer ends a sentence right after the name: "Insert snippet sig."
+    let name = parts
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(['.', ',', '!', '?', ';', ':', '\u{2026}']);
     if name.is_empty() {
         return None;
     }
@@ -836,7 +840,7 @@ fn split_snippet_payload(payload: &str) -> Option<SnippetCommand> {
 fn parse_snippet_command(text: &str, aliases_enabled: bool) -> Option<SnippetCommand> {
     let original = text.trim();
     let prefixes = if aliases_enabled {
-        &["insert snippet ", "paste snippet ", "snippet "][..]
+        &["insert snippet ", "paste snippet "][..]
     } else {
         &["insert snippet "][..]
     };
@@ -881,6 +885,28 @@ fn prepare_transcript(
     }
 }
 
+/// "go to sleep" only means something to the Handsfree listener. In an explicit
+/// recording it is dictated text, not a command that silently discards it.
+fn action_applies(action: &opendictate_core::text::VoiceAction, handsfree: bool) -> bool {
+    handsfree || *action != opendictate_core::text::VoiceAction::Sleep
+}
+
+/// Whether a Handsfree transcript is only a wake phrase repeated while already
+/// awake. Typing it would put the wake phrase into the user's document.
+fn is_wake_phrase_echo(raw: &str, wake_words: &str) -> bool {
+    let key = |value: &str| opendictate_core::text::command_key(value).replace(',', "");
+    let spoken = key(raw);
+    !spoken.is_empty() && wake_words.split(',').any(|phrase| key(phrase) == spoken)
+}
+
+/// "switch to" and "open app" can only be commands. "open x", "focus x" and
+/// "go to x" can also be sentences, so those stay dictation when the named
+/// application is not available.
+fn is_explicit_app_switch(text: &str) -> bool {
+    let text = text.trim_start().to_lowercase();
+    text.starts_with("switch to") || text.starts_with("open app")
+}
+
 fn finalize_transcript(
     app: &AppHandle,
     state: &AppState,
@@ -892,12 +918,34 @@ fn finalize_transcript(
 ) -> Result<TranscriptResult, String> {
     ensure_current(state, token)?;
     let dictionary = dictionary_terms(state);
-    let (punctuation, actions_enabled) = state
+    let (punctuation, actions_enabled, wake_words) = state
         .settings
         .lock()
-        .map(|s| (s.spoken_punctuation, s.voice_actions_enabled))
-        .unwrap_or((false, true));
-    let prepared = prepare_transcript(raw, punctuation, &dictionary, actions_enabled);
+        .map(|s| {
+            (
+                s.spoken_punctuation,
+                s.voice_actions_enabled,
+                s.wake_words.clone(),
+            )
+        })
+        .unwrap_or((false, true, String::new()));
+    let handsfree = token.handsfree_generation.is_some();
+    if handsfree && is_wake_phrase_echo(raw, &wake_words) {
+        return Ok(TranscriptResult {
+            text: String::new(),
+            duration_ms,
+        });
+    }
+    let mut prepared = prepare_transcript(raw, punctuation, &dictionary, actions_enabled);
+    if prepared
+        .action
+        .as_ref()
+        .is_some_and(|action| !action_applies(action, handsfree))
+    {
+        prepared.action = None;
+        prepared.text = normalize_transcript(raw.trim(), punctuation, &dictionary);
+    }
+    let was_command = prepared.action.is_some() || prepared.snippet.is_some();
     let text = prepared.text.clone();
     if text.is_empty() {
         let _commit = state.sessions.commit_guard(token)?;
@@ -912,6 +960,13 @@ fn finalize_transcript(
     if let Some(text) = handle_voice_action_or_snippet(app, state, &prepared, token)? {
         return Ok(TranscriptResult { text, duration_ms });
     }
+    // A command that could not run falls through as the sentence it also was;
+    // it needs the prose normalization that command matching skipped.
+    let text = if was_command {
+        normalize_transcript(raw.trim(), punctuation, &dictionary)
+    } else {
+        text
+    };
     ensure_current(state, token)?;
     let text = opendictate_core::text::correct_dictionary_terms(
         &apply_voice_polish(state, &text),
@@ -1092,7 +1147,14 @@ fn handle_voice_action_or_snippet(
     let _commit = state.sessions.commit_guard(token)?;
     ensure_current(state, token)?;
     if let Some(snippet) = prepared.snippet.as_ref() {
-        return handle_snippet_command_locked(app, state, snippet, token);
+        let result = handle_snippet_command_locked(app, state, snippet, token)?;
+        if result.is_none() {
+            notify::notify(
+                "Snippet not found",
+                &format!("No snippet named \"{}\". Inserted your words as text.", snippet.name),
+            );
+        }
+        return Ok(result);
     }
     let action = prepared.action.clone();
     let label = match action {
@@ -1163,7 +1225,13 @@ fn handle_voice_action_or_snippet(
             "Stopped (Ctrl+C)".to_string()
         }
         Some(VoiceAction::SwitchApp(name)) => {
-            inject::switch_to_app(&name)?;
+            if let Err(error) = inject::switch_to_app(&name) {
+                if is_explicit_app_switch(&prepared.text) {
+                    return Err(error);
+                }
+                log::info!("treating as dictation: {error}");
+                return Ok(None);
+            }
             format!("Switched to {name}")
         }
         Some(VoiceAction::NextTab) => {
@@ -1199,13 +1267,10 @@ fn handle_voice_action_or_snippet(
             format!("Opened {url}")
         }
         Some(VoiceAction::InsertSnippet(name)) => {
-            return handle_snippet_command_locked(
-                app,
-                state,
-                &split_snippet_payload(&name)
-                    .ok_or_else(|| "snippet name is missing".to_string())?,
-                token,
-            );
+            return match split_snippet_payload(&name) {
+                Some(command) => handle_snippet_command_locked(app, state, &command, token),
+                None => Ok(None),
+            };
         }
         Some(VoiceAction::Sleep) => {
             state.handsfree_awake.store(false, Ordering::SeqCst);
@@ -1236,9 +1301,11 @@ fn handle_snippet_command_locked(
         .filter(|s| opendictate_core::text::is_single_word(&s.trigger))
         .map(|s| s.trigger.clone())
         .collect::<Vec<_>>();
-    let snippet = opendictate_core::text::fuzzy_match_trigger(name, &triggers, 0.6)
+    let Some(snippet) = opendictate_core::text::fuzzy_match_trigger(name, &triggers, 0.6)
         .and_then(|(trigger, _)| list.into_iter().find(|s| s.trigger == trigger))
-        .ok_or_else(|| format!("Snippet not found: {name}"))?;
+    else {
+        return Ok(None);
+    };
     use tauri_plugin_clipboard_manager::ClipboardExt;
     let clipboard = app.clipboard().read_text().ok();
     let expanded =
@@ -1698,7 +1765,7 @@ mod session_regressions {
     fn prepared_prompt_payload_is_not_spoken_punctuation_or_prose() {
         use opendictate_core::text::VoiceAction;
         let payload = "Explain period comma and question mark in file.json?";
-        let prepared = prepare_transcript(&format!("ASK {payload}"), true, &[], true);
+        let prepared = prepare_transcript(&format!("ASK CLAUDE {payload}"), true, &[], true);
         assert_eq!(
             prepared.action,
             Some(VoiceAction::PromptAndSend(payload.into()))
@@ -1741,6 +1808,43 @@ mod session_regressions {
             prepare_transcript("OPEN URL https://example.com/file.json", true, &[], false);
         assert!(prepared.action.is_none());
         assert!(prepared.snippet.is_none());
+    }
+
+    #[test]
+    fn snippet_name_drops_the_sentence_punctuation_after_it() {
+        let prepared = prepare_transcript("Insert snippet sig.", true, &[], true);
+        assert_eq!(
+            prepared.snippet,
+            Some(SnippetCommand {
+                name: "sig".into(),
+                tail: String::new()
+            })
+        );
+    }
+
+    #[test]
+    fn sleep_is_a_command_only_for_the_handsfree_listener() {
+        use opendictate_core::text::VoiceAction;
+        assert!(action_applies(&VoiceAction::Sleep, true));
+        assert!(!action_applies(&VoiceAction::Sleep, false));
+        assert!(action_applies(&VoiceAction::Undo, false));
+    }
+
+    #[test]
+    fn repeated_wake_phrase_is_recognized_but_sentences_containing_it_are_not() {
+        let words = "hey dictate, computer";
+        assert!(is_wake_phrase_echo("Hey, dictate.", words));
+        assert!(is_wake_phrase_echo("COMPUTER!", words));
+        assert!(!is_wake_phrase_echo("Computer science is fun.", words));
+        assert!(!is_wake_phrase_echo("...", words));
+    }
+
+    #[test]
+    fn only_unambiguous_app_commands_report_a_missing_application() {
+        assert!(is_explicit_app_switch("Switch to Slack."));
+        assert!(is_explicit_app_switch("open app chrome"));
+        assert!(!is_explicit_app_switch("Open calculator"));
+        assert!(!is_explicit_app_switch("Go to market"));
     }
 
     #[test]
