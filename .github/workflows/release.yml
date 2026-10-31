@@ -17,6 +17,8 @@ permissions:
 
 jobs:
   build:
+    # A manual run from a branch would publish a release and a tag named after it.
+    if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +34,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check the tag matches the app version
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${version}" >&2
+            exit 1
+          fi
+
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
@@ -46,7 +57,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: "./src-tauri -> target"
+          workspaces: ". -> target"
 
       - name: Install Linux system deps
         if: matrix.platform == 'ubuntu-22.04'
