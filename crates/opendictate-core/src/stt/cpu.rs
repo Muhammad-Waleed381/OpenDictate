@@ -107,9 +107,16 @@ pub fn optimal_streaming_threads() -> i32 {
     physical_cores().clamp(1, 6) as i32
 }
 
-/// Returns optimal thread count for keyword spotting (KWS).
-pub fn optimal_kws_threads() -> i32 {
+/// Returns the thread count for the live-caption model. Measured on a 4-core CPU,
+/// 2 threads decode it faster than 4, and they leave the rest to the main model.
+pub fn optimal_caption_threads() -> i32 {
     physical_cores().clamp(1, 2) as i32
+}
+
+/// Returns the thread count for keyword spotting (KWS). The model is 3.3M and
+/// listens all the time, so it should not hold a second core during a decode.
+pub fn optimal_kws_threads() -> i32 {
+    1
 }
 
 #[cfg(test)]
@@ -158,6 +165,7 @@ core id		: 1
     #[test]
     fn test_optimal_streaming_and_kws_threads() {
         assert!(optimal_streaming_threads() >= 1 && optimal_streaming_threads() <= 6);
-        assert!(optimal_kws_threads() >= 1 && optimal_kws_threads() <= 2);
+        assert_eq!(optimal_kws_threads(), 1);
+        assert!(optimal_caption_threads() >= 1 && optimal_caption_threads() <= 2);
     }
 }

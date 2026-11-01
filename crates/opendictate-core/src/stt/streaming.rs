@@ -10,6 +10,11 @@ use sherpa_onnx::{
 use super::provider::Provider;
 use crate::error::{CoreError, Result};
 
+/// Silence that flushes the decoder when input ends. 700 ms gave the same text as
+/// a full second on every model and clip tried, and 500 ms lost word endings. On
+/// Parakeet 560ms this cuts the wait after stopping by about 30%.
+const FINISH_FLUSH_SAMPLES: usize = SAMPLE_RATE as usize * 7 / 10;
+
 /// Streaming (online) recognizer backed by sherpa-onnx `OnlineRecognizer`
 /// (NeMo/parakeet unified transducer and FastConformer CTC models).
 ///
@@ -64,18 +69,41 @@ impl StreamingRecognizer {
         Self::build(model_dir, model_type, Provider::Cpu)
     }
 
+    /// The small live-caption model. It needs little CPU and runs next to the
+    /// model producing the transcript, so it stays on the caption thread budget.
+    pub fn new_caption(model_dir: &Path) -> Result<Self> {
+        Self::build_with_threads(
+            model_dir,
+            None,
+            Provider::Cpu,
+            super::cpu::optimal_caption_threads(),
+        )
+    }
+
     fn build(model_dir: &Path, model_type: Option<&str>, provider: Provider) -> Result<Self> {
+        // Online transducers and CTC decoders decode many small chunks sequentially;
+        // optimal_streaming_threads targets physical cores capped at 6 to avoid intra-op
+        // thread synchronization overhead.
+        Self::build_with_threads(
+            model_dir,
+            model_type,
+            provider,
+            super::cpu::optimal_streaming_threads(),
+        )
+    }
+
+    fn build_with_threads(
+        model_dir: &Path,
+        model_type: Option<&str>,
+        provider: Provider,
+        n_threads: i32,
+    ) -> Result<Self> {
         if !model_dir.exists() {
             return Err(CoreError::Transcription(format!(
                 "streaming model directory not found at {}",
                 model_dir.display()
             )));
         }
-
-        // Online transducers and CTC decoders decode many small chunks sequentially;
-        // optimal_streaming_threads targets physical cores capped at 6 to avoid intra-op
-        // thread synchronization overhead.
-        let n_threads = super::cpu::optimal_streaming_threads();
 
         let find = |needle: &str| -> Result<String> {
             let mut matches: Vec<_> = std::fs::read_dir(model_dir)
@@ -280,7 +308,7 @@ impl StreamingRecognizer {
         }
         session
             .stream
-            .accept_waveform(SAMPLE_RATE as i32, &vec![0.0; SAMPLE_RATE as usize]);
+            .accept_waveform(SAMPLE_RATE as i32, &vec![0.0; FINISH_FLUSH_SAMPLES]);
         session.stream.input_finished();
         self.drain(session);
     }

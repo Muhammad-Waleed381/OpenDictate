@@ -12,6 +12,13 @@ use crate::error::{CoreError, Result};
 const MIN_AUDIO_SAMPLES: usize = 3_200;
 /// Whisper models require audio chunks strictly under 30 seconds.
 const WHISPER_CHUNK_SAMPLES: usize = 16_000 * 29;
+/// Whisper's encoder cost grows with the frames it is given, and sherpa's default
+/// padding adds far more than needed. 200 frames (2 s) cut Whisper Turbo decode time by about 30%.
+const WHISPER_TAIL_PADDING_FRAMES: i32 = 200;
+/// Short padding alone makes Whisper repeat itself on brief clips ("Hello Hello
+/// Hello"), so every clip reaches the encoder at least this long. Measured on
+/// base and turbo with clips down to 0.9 s: 6 s still repeats on turbo, 8 s does not.
+const WHISPER_MIN_SAMPLES: usize = 16_000 * 8;
 /// Languages the Cohere model accepts. Sherpa rejects anything else, including
 /// the "auto" that the Language setting defaults to.
 const COHERE_LANGUAGES: &[&str] = &[
@@ -27,6 +34,11 @@ fn cohere_language(language: Option<&str>) -> String {
         }
         None => "en".to_string(),
     }
+}
+
+/// Silence added so a Whisper clip reaches [`WHISPER_MIN_SAMPLES`].
+fn whisper_silence_padding(samples: usize) -> usize {
+    WHISPER_MIN_SAMPLES.saturating_sub(samples)
 }
 
 /// Cuts long audio at quiet moments, so a word is not split across two decodes.
@@ -165,7 +177,7 @@ impl SttEngine {
                             decoder: Some(decoder.to_string_lossy().to_string()),
                             language: whisper_language,
                             task: Some("transcribe".to_string()),
-                            tail_paddings: -1,
+                            tail_paddings: WHISPER_TAIL_PADDING_FRAMES,
                             ..Default::default()
                         },
                         tokens: Some(tokens.to_string_lossy().to_string()),
@@ -394,7 +406,8 @@ impl SttEngine {
         //
         // The NeMo transducer/CTC (Parakeet) offline models do NOT need this:
         // they accept arbitrarily long audio in a single pass (verified
-        // empirically; sherpa-onnx only *advises* <=30s for offline models).
+        // empirically; sherpa-onnx only *advises* <=30s for offline models), and
+        // splitting 120 s of speech at 60 s did not make them faster.
         // Streaming models feed samples incrementally and are unaffected too.
         if self.kind == ModelKind::Whisper && audio.len() > WHISPER_CHUNK_SAMPLES {
             let chunks: Vec<&[f32]> = split_at_quiet_points(audio, WHISPER_CHUNK_SAMPLES)
@@ -437,7 +450,7 @@ impl SttEngine {
                     Some(words) => self.recognizer.create_stream_with_hotwords(words),
                     None => self.recognizer.create_stream(),
                 };
-                stream.accept_waveform(16000, chunk);
+                self.feed(&stream, chunk);
                 stream
             })
             .collect();
@@ -458,6 +471,16 @@ impl SttEngine {
         Ok(results)
     }
 
+    fn feed(&self, stream: &sherpa_onnx::OfflineStream, audio: &[f32]) {
+        stream.accept_waveform(16000, audio);
+        if self.kind == ModelKind::Whisper {
+            let padding = whisper_silence_padding(audio.len());
+            if padding > 0 {
+                stream.accept_waveform(16000, &vec![0.0; padding]);
+            }
+        }
+    }
+
     fn transcribe_single(&self, audio: &[f32], hotwords: Option<&str>) -> Result<String> {
         if audio.len() < MIN_AUDIO_SAMPLES {
             return Ok(String::new());
@@ -471,7 +494,7 @@ impl SttEngine {
             Some(words) => self.recognizer.create_stream_with_hotwords(words),
             None => self.recognizer.create_stream(),
         };
-        stream.accept_waveform(16000, audio);
+        self.feed(&stream, audio);
         self.recognizer.decode(&stream);
 
         let result = stream
@@ -491,6 +514,13 @@ mod tests {
         assert_eq!(cohere_language(None), "en");
         assert_eq!(cohere_language(Some("de")), "de");
         assert_eq!(cohere_language(Some("ur")), "en");
+    }
+
+    #[test]
+    fn only_short_whisper_clips_get_padding() {
+        assert_eq!(whisper_silence_padding(16_000), 16_000 * 7);
+        assert_eq!(whisper_silence_padding(WHISPER_MIN_SAMPLES), 0);
+        assert_eq!(whisper_silence_padding(WHISPER_MIN_SAMPLES + 1), 0);
     }
 
     #[test]

@@ -585,6 +585,10 @@ pub fn warmup_current_model(state: &AppState) {
     if models::is_vad_ready() {
         let _ = run_vad(state, &[0.0f32; 1600]);
     }
+    // Starting a recording waits on this, so load it before the first one.
+    if models::is_caption_model_ready() {
+        let _ = caption_recognizer(state);
+    }
 }
 
 pub fn warmup_streaming(state: &AppState) -> Result<Arc<StreamingRecognizer>, String> {
@@ -687,27 +691,30 @@ fn spawn_streaming(app: &AppHandle, state: &AppState, token: WorkToken) -> Resul
     Ok(())
 }
 
+fn caption_recognizer(state: &AppState) -> Result<Arc<StreamingRecognizer>, String> {
+    let mut cache = state.caption_engine.lock().map_err(|e| e.to_string())?;
+    if let Some(existing) = cache.as_ref() {
+        return Ok(Arc::clone(&existing.recognizer));
+    }
+    let created = Arc::new(
+        StreamingRecognizer::new_caption(&models::caption_model_dir())
+            .map_err(|e| e.to_string())?,
+    );
+    *cache = Some(crate::state::CachedStreamingEngine {
+        model_id: models::CAPTION_MODEL_ID.to_string(),
+        recognizer: Arc::clone(&created),
+    });
+    Ok(created)
+}
+
 fn spawn_caption_loop(app: &AppHandle, state: &AppState, token: WorkToken) {
-    let Ok(mut cache) = state.caption_engine.lock() else {
-        return;
+    let recognizer = match caption_recognizer(state) {
+        Ok(recognizer) => recognizer,
+        Err(error) => {
+            log::warn!("captions unavailable: {error}");
+            return;
+        }
     };
-    let recognizer = if let Some(existing) = cache.as_ref() {
-        Arc::clone(&existing.recognizer)
-    } else {
-        let created = match StreamingRecognizer::new(&models::caption_model_dir()) {
-            Ok(r) => Arc::new(r),
-            Err(error) => {
-                log::warn!("captions unavailable: {error}");
-                return;
-            }
-        };
-        *cache = Some(crate::state::CachedStreamingEngine {
-            model_id: models::CAPTION_MODEL_ID.to_string(),
-            recognizer: Arc::clone(&created),
-        });
-        created
-    };
-    drop(cache);
     let session = recognizer.create_session(None);
     *state
         .caption_stream
@@ -1165,6 +1172,17 @@ pub fn load_engine(state: &AppState) -> Result<Arc<SttEngine>, String> {
     } else {
         ModelKind::NemoCtc
     };
+    // A stop during warmup waits for that load instead of building a second copy
+    // of the model at the same time, which would slow both.
+    let _loading = state.stt_engine_load.lock().map_err(|e| e.to_string())?;
+    {
+        let cache = state.stt_engine.lock().map_err(|e| e.to_string())?;
+        if let Some(cached) = cache.as_ref() {
+            if cached.model_id == model_id && cached.language == language_key {
+                return Ok(Arc::clone(&cached.engine));
+            }
+        }
+    }
     let load_started = Instant::now();
     let provider = desired_provider(state);
     let engine = Arc::new({
@@ -1176,11 +1194,6 @@ pub fn load_engine(state: &AppState) -> Result<Arc<SttEngine>, String> {
         eng
     });
     let mut cache = state.stt_engine.lock().map_err(|e| e.to_string())?;
-    if let Some(cached) = cache.as_ref() {
-        if cached.model_id == model_id && cached.language == language_key {
-            return Ok(Arc::clone(&cached.engine));
-        }
-    }
     *cache = Some(crate::state::CachedSttEngine {
         model_id,
         language: language_key,
@@ -2078,6 +2091,7 @@ mod session_regressions {
             stream_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_inserted: Arc::new(std::sync::Mutex::new(None)),
             stt_engine: Arc::new(std::sync::Mutex::new(None)),
+            stt_engine_load: Arc::new(std::sync::Mutex::new(())),
             streaming_engine: Arc::new(std::sync::Mutex::new(None)),
             caption_engine: Arc::new(std::sync::Mutex::new(None)),
             caption_stream: Arc::new(std::sync::Mutex::new(None)),
