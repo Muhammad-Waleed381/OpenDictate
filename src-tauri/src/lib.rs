@@ -13,6 +13,7 @@ mod notify;
 mod session;
 mod state;
 mod tray;
+mod update;
 pub mod tray_icon;
 
 use std::sync::{Arc, Mutex};
@@ -50,6 +51,8 @@ pub fn run() {
             commands::set_settings,
             commands::complete_onboarding,
             commands::get_history,
+            commands::get_history_before,
+            commands::search_history,
             commands::delete_history,
             commands::update_history,
             commands::clear_history,
@@ -68,6 +71,8 @@ pub fn run() {
             commands::copy_text,
             commands::undo_last_insert,
             commands::warmup_model,
+            update::check_for_update,
+            update::open_update_page,
             commands::word_stats,
             commands::reset_word_stats,
             commands::export_history,
@@ -115,6 +120,7 @@ pub fn run() {
                 stream_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 last_inserted: Arc::new(Mutex::new(None)),
                 stt_engine: Arc::new(Mutex::new(None)),
+                stt_engine_load: Arc::new(Mutex::new(())),
                 streaming_engine: Arc::new(Mutex::new(None)),
                 caption_engine: Arc::new(Mutex::new(None)),
                 caption_stream: Arc::new(Mutex::new(None)),
@@ -202,13 +208,36 @@ pub fn run() {
                 // so its Models-tab badge reflects this CPU's capability.
                 use opendictate_core::stt::models;
                 let streaming_id = models::PARAKEET_STREAMING_MODEL_ID;
-                if models::is_model_installed(streaming_id) {
+                let version = env!("CARGO_PKG_VERSION");
+                let measured = state.settings.lock().ok().and_then(|settings| {
+                    (settings.streaming_rtf_version == version)
+                        .then_some(settings.streaming_rtf_x100)
+                });
+                if let Some(rtf_x100) = measured {
+                    // The benchmark loads a second copy of the model and takes
+                    // every core for several seconds, so it runs once per version.
+                    state
+                        .streaming_rtf_x100
+                        .store(rtf_x100, std::sync::atomic::Ordering::SeqCst);
+                } else if models::is_model_installed(streaming_id) {
                     match opendictate_core::stt::streaming::StreamingRecognizer::benchmark_rtf(
                         &models::model_dir_for(streaming_id),
                     ) {
-                        Ok(rtf) => state
-                            .streaming_rtf_x100
-                            .store((rtf * 100.0) as u32, std::sync::atomic::Ordering::SeqCst),
+                        Ok(rtf) => {
+                            let rtf_x100 = (rtf * 100.0) as u32;
+                            state
+                                .streaming_rtf_x100
+                                .store(rtf_x100, std::sync::atomic::Ordering::SeqCst);
+                            if let (Ok(mut settings), Ok(conn)) =
+                                (state.settings.lock(), state.db.lock())
+                            {
+                                settings.streaming_rtf_x100 = rtf_x100;
+                                settings.streaming_rtf_version = version.to_string();
+                                if let Err(e) = db::save_settings(&conn, &settings) {
+                                    log::warn!("could not save the streaming benchmark: {e}");
+                                }
+                            }
+                        }
                         Err(e) => log::warn!("streaming benchmark failed: {e}"),
                     }
                 }

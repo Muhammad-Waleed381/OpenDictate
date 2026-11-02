@@ -465,6 +465,9 @@ fn patched_settings(
         }
         current.polish_provider = provider;
     }
+    if let Some(check_updates) = settings.check_updates {
+        current.check_updates = check_updates;
+    }
     if let Some(mode) = settings.polish_mode {
         if matches!(mode.as_str(), "clean" | "bullets") {
             current.polish_mode = mode;
@@ -761,6 +764,28 @@ pub fn get_history(state: State<AppState>) -> Result<Vec<crate::state::HistoryEn
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::get_history(&conn).map_err(|e| e.to_string())
 }
+
+/// Older entries than the UI has loaded, for "Show older".
+#[tauri::command]
+pub fn get_history_before(
+    before_id: i64,
+    state: State<AppState>,
+) -> Result<Vec<crate::state::HistoryEntry>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::get_history_before(&conn, before_id, HISTORY_PAGE).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn search_history(
+    query: String,
+    state: State<AppState>,
+) -> Result<Vec<crate::state::HistoryEntry>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::search_history(&conn, &query, HISTORY_PAGE).map_err(|e| e.to_string())
+}
+
+/// Matches the newest-entries page that `get_history` returns.
+const HISTORY_PAGE: i64 = 500;
 
 #[tauri::command]
 pub fn delete_history(id: i64, state: State<AppState>) -> Result<(), String> {

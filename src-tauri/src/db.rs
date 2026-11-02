@@ -158,6 +158,40 @@ pub fn get_history(conn: &Connection) -> rusqlite::Result<Vec<HistoryEntry>> {
     )
 }
 
+/// One page of history older than `before_id`, newest first.
+pub fn get_history_before(
+    conn: &Connection,
+    before_id: i64,
+    limit: i64,
+) -> rusqlite::Result<Vec<HistoryEntry>> {
+    history_query_with(
+        conn,
+        "SELECT id, text, created_at, duration_ms, source FROM history
+         WHERE id < ?1 ORDER BY id DESC LIMIT ?2",
+        rusqlite::params![before_id, limit],
+    )
+}
+
+/// Searches every entry, not only the page the UI has loaded. Matching ignores
+/// case for ASCII letters, as SQLite's LIKE does.
+pub fn search_history(
+    conn: &Connection,
+    query: &str,
+    limit: i64,
+) -> rusqlite::Result<Vec<HistoryEntry>> {
+    let escaped = query
+        .trim()
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    history_query_with(
+        conn,
+        "SELECT id, text, created_at, duration_ms, source FROM history
+         WHERE text LIKE ?1 ESCAPE '\\' ORDER BY id DESC LIMIT ?2",
+        rusqlite::params![format!("%{escaped}%"), limit],
+    )
+}
+
 /// Export is intentionally independent of the recent-history UI limit.
 pub fn get_all_history(conn: &Connection) -> rusqlite::Result<Vec<HistoryEntry>> {
     history_query(
@@ -167,8 +201,16 @@ pub fn get_all_history(conn: &Connection) -> rusqlite::Result<Vec<HistoryEntry>>
 }
 
 fn history_query(conn: &Connection, query: &str) -> rusqlite::Result<Vec<HistoryEntry>> {
+    history_query_with(conn, query, [])
+}
+
+fn history_query_with(
+    conn: &Connection,
+    query: &str,
+    params: impl rusqlite::Params,
+) -> rusqlite::Result<Vec<HistoryEntry>> {
     let mut stmt = conn.prepare(query)?;
-    let rows = stmt.query_map([], |r| {
+    let rows = stmt.query_map(params, |r| {
         Ok(HistoryEntry {
             id: r.get(0)?,
             text: r.get(1)?,
@@ -405,6 +447,58 @@ mod tests {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap_or((0, 0))
+    }
+
+    fn history_rows(conn: &Connection, texts: &[&str]) {
+        for text in texts {
+            insert_history(
+                conn,
+                &HistoryEntry {
+                    id: 0,
+                    text: (*text).into(),
+                    created_at: "83".into(),
+                    duration_ms: 1000,
+                    source: "test".into(),
+                },
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn search_reaches_entries_beyond_the_newest_page() {
+        let conn = Connection::open_in_memory().unwrap();
+        stats_tables(&conn);
+        history_rows(&conn, &["Kubernetes rollout notes"]);
+        let filler: Vec<String> = (0..600).map(|i| format!("note {i}")).collect();
+        history_rows(&conn, &filler.iter().map(String::as_str).collect::<Vec<_>>());
+        assert!(get_history(&conn).unwrap().iter().all(|e| e.id != 1));
+        let found = search_history(&conn, "kubernetes", 500).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, 1);
+    }
+
+    #[test]
+    fn search_treats_wildcards_literally() {
+        let conn = Connection::open_in_memory().unwrap();
+        stats_tables(&conn);
+        history_rows(&conn, &["50% done", "500 done", "snake_case", "snakeXcase"]);
+        let texts = |q| -> Vec<String> {
+            search_history(&conn, q, 500).unwrap().into_iter().map(|e| e.text).collect()
+        };
+        assert_eq!(texts("50%"), vec!["50% done"]);
+        assert_eq!(texts("snake_case"), vec!["snake_case"]);
+    }
+
+    #[test]
+    fn older_pages_continue_where_the_newest_page_ends() {
+        let conn = Connection::open_in_memory().unwrap();
+        stats_tables(&conn);
+        let rows: Vec<String> = (0..10).map(|i| format!("entry {i}")).collect();
+        history_rows(&conn, &rows.iter().map(String::as_str).collect::<Vec<_>>());
+        let page = get_history_before(&conn, 6, 3).unwrap();
+        assert_eq!(page.iter().map(|e| e.id).collect::<Vec<_>>(), vec![5, 4, 3]);
+        assert!(get_history_before(&conn, 1, 3).unwrap().is_empty());
     }
 
     #[test]

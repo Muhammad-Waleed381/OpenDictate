@@ -34,6 +34,7 @@ pub struct SettingsPatch {
     pub groq_api_key: Option<String>,
     pub groq_model: Option<String>,
     pub dock_position: Option<String>,
+    pub check_updates: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +49,14 @@ pub struct Settings {
     pub onboarded: bool,
     #[serde(default = "default_stt_model", alias = "sttModel")]
     pub stt_model: String,
+    /// Ask GitHub for a newer release when the app opens.
+    #[serde(default = "default_check_updates")]
+    pub check_updates: bool,
+    /// Last streaming benchmark, x100, and the app version that measured it.
+    #[serde(default)]
+    pub streaming_rtf_x100: u32,
+    #[serde(default)]
+    pub streaming_rtf_version: String,
     #[serde(default = "default_insert_mode")]
     pub insert_mode: String,
     #[serde(default = "default_input_target")]
@@ -88,6 +97,10 @@ pub struct Settings {
     pub dock_position: String,
 }
 
+fn default_check_updates() -> bool {
+    true
+}
+
 fn default_stt_model() -> String {
     opendictate_core::stt::models::STT_MODEL_ID.to_string()
 }
@@ -101,7 +114,7 @@ fn default_input_target() -> String {
 }
 
 fn default_heatmap_color() -> String {
-    "#16a34a".to_string()
+    "#562ff7".to_string()
 }
 
 fn default_vad_sensitivity() -> f32 {
@@ -183,6 +196,9 @@ impl Default for Settings {
             groq_api_key: None,
             groq_model: default_groq_model(),
             dock_position: default_dock_position(),
+            check_updates: default_check_updates(),
+            streaming_rtf_x100: 0,
+            streaming_rtf_version: String::new(),
         }
     }
 }
@@ -283,6 +299,8 @@ pub struct AppState {
     pub gpu_active: Arc<std::sync::atomic::AtomicBool>,
     pub last_inserted: Arc<Mutex<Option<String>>>,
     pub stt_engine: Arc<Mutex<Option<CachedSttEngine>>>,
+    /// Held while a model loads, so concurrent callers share one load.
+    pub stt_engine_load: Arc<Mutex<()>>,
     pub streaming_engine: Arc<Mutex<Option<CachedStreamingEngine>>>,
     pub vad: Arc<Mutex<Option<CachedVad>>>,
     pub active_downloads: Arc<Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>,
