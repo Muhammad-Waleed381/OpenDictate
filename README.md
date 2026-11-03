@@ -39,16 +39,15 @@ Get the latest installer for your operating system directly from [Releases](http
 
 ## 🥊 Why OpenDictate? (Comparison with Alternatives)
 
-Cloud dictation tools require sending raw audio across the internet, paying recurring monthly fees, and suffer from network latency. OpenDictate runs state-of-the-art speech models **100% locally on your hardware** — after a one-time model download, voice typing is instantaneous, completely private, and free forever.
+Cloud dictation tools require sending raw audio across the internet, paying recurring monthly fees, and suffer from network latency. OpenDictate runs state-of-the-art speech models **100% locally on your hardware** — after a one-time model download, voice typing is fast, completely private, and free forever.
 
 | Feature | **OpenDictate** | **Wispr Flow** | **Superwhisper** | **Apple / Windows Dictation** |
 | :--- | :---: | :---: | :---: | :---: |
 | **Pricing** | **100% Free & Open Source (MIT)** | \$12 – \$20 / month | \$8 / month or \$199 | Built-in |
 | **Privacy & Cloud** | **100% Local (Zero Cloud Required)** | Cloud API dependency | Local (Mac only) | Cloud / Telemetry |
 | **Platform Support** | **Linux, macOS, Windows (Exp)** | Mac & Windows | macOS only | Single OS |
-| **AI Speech Models** | **Whisper, FastConformer 80ms, Parakeet** | Proprietary Cloud | Whisper | Proprietary |
+| **AI Speech Models** | **Whisper, FastConformer, Parakeet** | Proprietary Cloud | Whisper | Proprietary |
 | **Voice Actions / Coding** | **Yes** (Casing, navigation, undo, edit) | Partial | Partial | Basic |
-| **Latency** | **~80ms** (FastConformer Streaming) | ~500ms+ (Network lag) | ~300ms | ~400ms |
 | **Custom Dictionary** | **Yes** (Hotword boosting) | Yes | Yes | Limited |
 | **Telemetry / Tracking** | **Zero Telemetry** | Analytics tracked | Basic analytics | OS telemetry |
 
@@ -57,7 +56,7 @@ Cloud dictation tools require sending raw audio across the internet, paying recu
 ## ✨ Features
 
 - 🎙️ **One Hotkey, Anywhere** — Global shortcut (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> on Windows/Linux, <kbd>⌘</kbd>+<kbd>⇧</kbd>+<kbd>Space</kbd> on macOS) triggers dictation; the recognized text is injected into whichever text field or application currently has focus.
-- 🏎️ **Ultra-Low Latency Streaming (80ms)** — Real-time live transcription powered by the NVIDIA FastConformer CTC engine.
+- 🏎️ **Live Streaming Transcription** — NVIDIA FastConformer CTC transcribes in 80 ms steps while you speak. On a 4-core laptop CPU your text is ready about 0.3 s after you stop. See [measured speed](#-speech-to-text-model-catalog).
 - 🎮 **Voice Actions & Voice Coding** — Control your text hands-free with voice commands:
   - *Formatting*: Say `"all caps <text>"`, `"camel case <text>"`, `"snake case <text>"`, `"title case <text>"`.
   - *Editing*: Say `"scratch that"` (Undo), `"delete word"`, `"delete line"`, `"clear all"`.
@@ -69,7 +68,7 @@ Cloud dictation tools require sending raw audio across the internet, paying recu
 - ✂️ **Snippet Expansion** — Expand boilerplate text templates on the fly by saying `"insert snippet <trigger>"`.
 - 🪄 **Optional AI Voice Polish** — Clean up disfluencies, remove filler words ("um", "ah"), or auto-format raw thoughts into bullet points using local SLMs or cloud LLMs (Groq).
 - 📅 **History & Yearly Heatmap** — Full searchable history stored in a local SQLite database with GitHub-style annual activity heatmap.
-- 🔒 **100% Private & Offline** — No accounts, no subscriptions, no telemetry, and zero network calls after model downloads.
+- 🔒 **100% Private & Offline** — No accounts, no subscriptions, and no telemetry. After model downloads, the only automatic network call is a version check against GitHub when the app opens, which you can turn off in Settings.
 
 ---
 
@@ -81,7 +80,7 @@ Looking for step-by-step setup guides, voice coding cheat sheets, or troubleshoo
 
 - 🚀 **[Quickstart Guide](https://opendictate.vercel.app/docs#quickstart)** — 0 to Voice in 60 seconds on Linux, macOS, and Windows.
 - 🎮 **[Voice Commands Reference](https://opendictate.vercel.app/docs#voice-commands)** — Complete list of casing modifiers, editing keys, and navigation macros.
-- 🤖 **[Hardware Acceleration](https://opendictate.vercel.app/docs#models)** — Choosing between FastConformer (80ms), Parakeet TDT, and Whisper.
+- 🤖 **[Hardware Acceleration](https://opendictate.vercel.app/docs#models)** — Choosing between FastConformer, Parakeet TDT, and Whisper.
 - ❓ **[Troubleshooting & FAQs](https://opendictate.vercel.app/docs#troubleshooting)** — Linux `/dev/uinput` configuration and macOS permissions.
 
 ---
@@ -112,27 +111,29 @@ Looking for step-by-step setup guides, voice coding cheat sheets, or troubleshoo
 
 ## 🤖 Speech-to-Text Model Catalog
 
-OpenDictate supports a wide variety of state-of-the-art open speech models to match your hardware:
+OpenDictate supports a wide variety of state-of-the-art open speech models to match your hardware.
+
+Speeds below were measured on a 4-core laptop CPU (Intel Core i5-8350U, no GPU) with real speech, as time spent per second of audio: **0.1× means 10 seconds of speech is transcribed in about 1 second**. Expect faster results on newer CPUs. "Not measured" means we have not timed that model yet. To time models on your own machine, run `cargo run --release -p opendictate-core --example bench_inference -- <16 kHz wav>`.
 
 ### Offline Accuracy Models
-| Model | Size | Best For |
-| :--- | :---: | :--- |
-| **Parakeet TDT 110M (int8)** | ~104 MB | **Default.** Ultra-fast, highly accurate English on modest CPUs. |
-| **Parakeet TDT 0.6B v3** | ~487 MB | Highest single-pass accuracy; multilingual support. |
-| **Parakeet Unified EN 0.6B** | ~501 MB | Unified punctuation and casing out of the box. |
-| **Whisper Tiny (en)** | ~118 MB | Ultra-lightweight Whisper model for low RAM systems. |
-| **Whisper Base (en)** | ~209 MB | Balanced Whisper model for standard desktop use. |
-| **Whisper Small (en)** | ~636 MB | High accuracy Whisper model. |
-| **Whisper Turbo (Large v3)** | ~564 MB | Highest-speed Large v3 Whisper model. |
-| **Whisper Medium (en)** | ~1.9 GB | Maximum Whisper accuracy for high-spec workstations. |
+| Model | Size | Speed (4-core laptop) | Best For |
+| :--- | :---: | :---: | :--- |
+| **Parakeet TDT 110M (int8)** | ~104 MB | ~0.03× | **Default.** Fast, accurate English on modest CPUs. |
+| **Parakeet TDT 0.6B v3** | ~487 MB | ~0.1× | Highest single-pass accuracy; multilingual support. |
+| **Parakeet Unified EN 0.6B** | ~501 MB | ~0.12× | Unified punctuation and casing out of the box. |
+| **Whisper Tiny (en)** | ~118 MB | Not measured | Ultra-lightweight Whisper model for low RAM systems. |
+| **Whisper Base (en)** | ~209 MB | ~0.15× | Balanced Whisper model for standard desktop use. |
+| **Whisper Small (en)** | ~636 MB | Not measured | High accuracy Whisper model. |
+| **Whisper Turbo (Large v3)** | ~564 MB | ~0.6–0.8× | Large v3 accuracy at a fraction of its cost; slow without a GPU. |
+| **Whisper Medium (en)** | ~1.9 GB | Not measured | Maximum Whisper accuracy for high-spec workstations. |
 
 ### Streaming & Real-Time Models
-| Model | Size | Latency | Purpose |
+| Model | Size | Speed (4-core laptop) | Purpose |
 | :--- | :---: | :---: | :--- |
-| **FastConformer CTC (Streaming)** | ~110 MB | **80ms** | Ultra-low latency streaming recognition. |
-| **Parakeet Unified 0.6B Streaming** | ~501 MB | ~160ms | High-accuracy streaming transcription. |
-| **Zipformer EN 20M** | ~29 MB | Real-time | Internal live caption engine. |
-| **Silero VAD v4** | ~1.7 MB | Real-time | Intelligent voice activity and silence detection. |
+| **FastConformer CTC (Streaming)** | ~110 MB | ~0.25×, text ~0.3 s after you stop | Low-latency streaming recognition in 80 ms steps. |
+| **Parakeet Unified 0.6B Streaming** | ~501 MB | ~4–5× | High-accuracy streaming. Too slow for live use on this CPU; needs a GPU or a much faster processor. The Models tab measures your machine and warns you. |
+| **Zipformer EN 20M** | ~29 MB | ~0.03× | Internal live caption engine. |
+| **Silero VAD v4** | ~1.7 MB | ~0.01× | Voice activity and silence detection. |
 
 ---
 
