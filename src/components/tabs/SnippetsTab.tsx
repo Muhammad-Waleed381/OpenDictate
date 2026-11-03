@@ -86,7 +86,7 @@ export function SnippetsTab() {
     if (!lastResult?.text) return;
     setText(lastResult.text);
     setTrigger("");
-    toast.info("Filled from last dictation — give it a trigger name");
+    toast.info("Filled from last dictation. Give it a trigger name");
   };
 
   const beginEdit = (entry: api.SnippetEntry) => {
@@ -193,18 +193,18 @@ export function SnippetsTab() {
             <Input
               value={trigger}
               onChange={(e) => setTrigger(e.target.value)}
-              placeholder="One-word trigger — e.g. “signature”"
+              placeholder="One-word trigger, like “signature”"
               aria-label="Snippet trigger name"
               className={triggerHasWhitespace || triggerExists ? "border-destructive focus-visible:ring-destructive" : ""}
             />
             {triggerHasWhitespace && (
-              <span className="text-[11px] font-bold text-destructive">
-                ✕ Triggers must be a single word without spaces.
+              <span className="text-[11px] font-semibold text-destructive">
+                Triggers must be a single word without spaces.
               </span>
             )}
             {triggerExists && (
-              <span className="text-[11px] font-bold text-destructive">
-                ✕ A snippet with trigger “{trigger.trim()}” already exists.
+              <span className="text-[11px] font-semibold text-destructive">
+                A snippet with trigger “{trigger.trim()}” already exists.
               </span>
             )}
           </div>
@@ -222,7 +222,7 @@ export function SnippetsTab() {
         </div>
         <div className="flex flex-col gap-1.5">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+            <span className="text-xs font-semibold text-muted-foreground">
               Placeholders:
             </span>
             {SNIPPET_PLACEHOLDERS.map((token) => (
@@ -231,7 +231,7 @@ export function SnippetsTab() {
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => handleInsertPlaceholder(token, false)}
-                className="inline-flex h-6 items-center border border-border bg-secondary/70 px-2 font-mono text-xs font-semibold text-secondary-foreground transition-all hover:bg-primary hover:text-primary-foreground active:translate-x-[1px] active:translate-y-[1px] cursor-pointer"
+                className="inline-flex h-6 items-center rounded-sm bg-secondary px-2 font-mono text-xs font-semibold text-secondary-foreground transition-colors hover:bg-primary hover:text-primary-foreground cursor-pointer"
                 title={`Insert ${token}`}
               >
                 {token}
@@ -257,7 +257,7 @@ export function SnippetsTab() {
         <Button variant="outline" onClick={handleExport} disabled={snippets.length === 0}>
           Export snippets
         </Button>
-        <label className="inline-flex cursor-pointer items-center border-2 border-border bg-card px-3 py-2 text-xs font-bold uppercase shadow-brutal hover:bg-primary hover:text-primary-foreground">
+        <label className="inline-flex h-9 cursor-pointer items-center rounded-md border border-input bg-card px-4 text-sm font-medium transition-colors hover:bg-accent">
           Import snippets
           <input type="file" accept=".json" className="sr-only" onChange={handleImport} />
         </label>
@@ -269,21 +269,21 @@ export function SnippetsTab() {
       </div>
 
       {snippets.length === 0 ? (
-        <div className="border-2 border-dashed border-border p-6 text-center">
-          <p className="text-sm font-bold uppercase tracking-wider">No snippets yet</p>
+        <div className="rounded-lg border border-dashed border-border p-6 text-center text-pretty">
+          <p className="text-sm font-semibold">No snippets yet</p>
           <p className="mt-1 text-sm text-muted-foreground">
             Add a template above, then dictate “insert snippet &lt;trigger&gt;” to expand it.
             Anything said after the trigger is dictated normally.
           </p>
         </div>
       ) : (
-        <div className="border-2 border-border">
+        <div>
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Trigger</TableHead>
                 <TableHead>Text</TableHead>
-                <TableHead className="w-32">Actions</TableHead>
+                <TableHead className="w-40"><span className="sr-only">Actions</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -300,7 +300,7 @@ export function SnippetsTab() {
                     <TableCell className="align-top">
                       <div className="flex flex-col gap-1.5">
                         <div className="flex flex-wrap items-center gap-1">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                          <span className="text-[11px] font-semibold text-muted-foreground">
                             Placeholders:
                           </span>
                           {SNIPPET_PLACEHOLDERS.map((token) => (
@@ -309,7 +309,7 @@ export function SnippetsTab() {
                               type="button"
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={() => handleInsertPlaceholder(token, true)}
-                              className="inline-flex h-5 items-center border border-border bg-secondary/70 px-1.5 font-mono text-[11px] font-semibold text-secondary-foreground transition-all hover:bg-primary hover:text-primary-foreground active:translate-x-[1px] active:translate-y-[1px] cursor-pointer"
+                              className="inline-flex h-5 items-center rounded-sm bg-secondary px-1.5 font-mono text-[11px] font-semibold text-secondary-foreground transition-colors hover:bg-primary hover:text-primary-foreground cursor-pointer"
                               title={`Insert ${token}`}
                             >
                               {token}
@@ -323,7 +323,7 @@ export function SnippetsTab() {
                           rows={3}
                           aria-label="Edit snippet text"
                         />
-                        <p className="text-[10px] text-muted-foreground">
+                        <p className="text-[11px] text-muted-foreground">
                           Placeholders like &#123;date&#125;, &#123;time&#125;, &#123;datetime&#125;, and &#123;clipboard&#125; are dynamically replaced when inserted.
                         </p>
                       </div>
@@ -345,10 +345,10 @@ export function SnippetsTab() {
                   </TableRow>
                 ) : (
                   <TableRow key={entry.id}>
-                    <TableCell className="font-bold whitespace-nowrap">
+                    <TableCell className="font-medium whitespace-nowrap">
                       {entry.trigger}
                     </TableCell>
-                    <TableCell className="max-w-md">
+                    <TableCell className="w-full max-w-0">
                       <span className="block truncate">{entry.text}</span>
                     </TableCell>
                     <TableCell>
@@ -356,7 +356,7 @@ export function SnippetsTab() {
                         <Button
                           size="icon-sm"
                           variant="ghost"
-                          title="Test Insert — returns to the previous application"
+                          title="Test Insert: returns to the previous application"
                           onClick={() => handleTestInsert(entry.text)}
                         >
                           <CornerDownLeft />
@@ -367,7 +367,7 @@ export function SnippetsTab() {
                         <Button size="icon-sm" variant="ghost" title="Copy text" onClick={() => handleCopySnippet(entry.text)}>
                           <Copy />
                         </Button>
-                        <Button size="icon-sm" variant="destructive" title="Delete" onClick={() => handleDelete(entry.id, entry.trigger)}>
+                        <Button size="icon-sm" variant="ghost" className="hover:text-destructive" title="Delete" onClick={() => handleDelete(entry.id, entry.trigger)}>
                           <Trash2 />
                         </Button>
                       </div>

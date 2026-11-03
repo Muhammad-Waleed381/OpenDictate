@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { useTheme } from "@/lib/theme";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { UpdateSettings } from "@/components/UpdatePrompt";
 
 const KEY_NAMES: Record<string, string> = {
   " ": "space",
@@ -93,7 +94,7 @@ function HotkeyCapture() {
     }
     const combo = comboFromEvent(e);
     if (!combo) {
-      setError("Unsupported key — try letters, digits, F1-F24, or arrows with a modifier");
+      setError("Unsupported key. Try letters, digits, F1-F24, or arrows with a modifier");
       return;
     }
     setError(null);
@@ -120,7 +121,7 @@ function HotkeyCapture() {
       <Label htmlFor="hotkey">Global hotkey</Label>
       <div className="flex items-center gap-2">
         <div
-          className={`flex h-10 flex-1 items-center border-2 border-border bg-card px-3 font-bold tracking-widest uppercase ${
+          className={`flex h-9 flex-1 items-center rounded-md border border-input bg-card px-3 text-sm font-medium ${
             capturing ? "animate-od-blink" : ""
           }`}
           onClick={() => setCapturing(true)}
@@ -146,13 +147,13 @@ function HotkeyCapture() {
           </Button>
         ) : (
           <Button onClick={() => { setCapturing(true); setError(null); }}>
-            {applied ? "✓ Captured" : "Capture"}
+            {applied ? "Captured" : "Capture"}
           </Button>
         )}
       </div>
       {IS_MAC && (
         <div className="flex flex-col gap-1.5">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+          <span className="text-[11px] font-semibold text-muted-foreground">
             Or double-tap a modifier
           </span>
           <div className="flex flex-wrap gap-1.5">
@@ -171,19 +172,38 @@ function HotkeyCapture() {
       )}
       <p className="text-xs text-muted-foreground">
         {capturing
-          ? "Press the keys now — Escape cancels."
+          ? "Press the keys now. Escape cancels."
           : applied
             ? "Hotkey saved. Works anywhere, even when the app is in the tray."
             : "Click Capture, then press your combination."}
       </p>
       {error && (
-        <div className="border-2 border-primary bg-primary px-2 py-1.5 text-xs font-bold text-primary-foreground uppercase">
-          ✕ {error}
+        <div className="rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive ">
+          {error}
         </div>
       )}
     </div>
   );
 }
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  en: "English",
+  es: "Spanish",
+  fr: "French",
+  de: "German",
+  pt: "Portuguese",
+  it: "Italian",
+  ur: "Urdu",
+  hi: "Hindi",
+};
+
+const DOCK_POSITIONS: Record<string, string> = {
+  bottom_right: "Bottom right",
+  bottom_center: "Bottom center",
+  bottom_left: "Bottom left",
+  top_right: "Top right",
+  top_left: "Top left",
+};
 
 const micLabel = (mic: string | null, mics: api.MicDevice[]): string => {
   if (mic === null) return "System default";
@@ -256,7 +276,7 @@ export function SettingsTab() {
       await api.setSettings({ [key]: enabled });
     } catch (e) {
       // Report every failure, even if another switch was flipped since.
-      toast.error(`Could not save setting — reverted: ${String(e)}`);
+      toast.error(`Could not save setting, so it was reverted: ${String(e)}`);
       await syncSavedSettings();
     }
   };
@@ -429,7 +449,7 @@ export function SettingsTab() {
         settings?.groq_model ?? "llama-3.1-8b-instant",
       );
       setTestGroqResult(res);
-      toast.success("Groq API key test succeeded! ⚡");
+      toast.success("Groq API key test succeeded");
     } catch (e) {
       toast.error(`Groq API test failed: ${String(e)}`);
     } finally {
@@ -474,7 +494,7 @@ export function SettingsTab() {
     } catch {
       const latest = await api.getSettings().catch(() => null);
       if (latest) useStore.getState().setSettings(latest);
-      toast.error("Could not save GPU setting — reverted");
+      toast.error("Could not save the GPU setting, so it was reverted");
     }
   };
 
@@ -489,7 +509,7 @@ export function SettingsTab() {
     } catch {
       const latest = await api.getSettings().catch(() => null);
       if (latest) useStore.getState().setSettings(latest);
-      toast.error("Could not save dock position — reverted");
+      toast.error("Could not save the dock position, so it was reverted");
     }
   };
 
@@ -514,6 +534,8 @@ export function SettingsTab() {
 
   return (
     <div className="flex flex-col gap-6">
+      <UpdateSettings />
+
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-col gap-1">
           <Label htmlFor="theme-select">Appearance</Label>
@@ -523,7 +545,7 @@ export function SettingsTab() {
         </div>
         <Select value={themePref} onValueChange={(v) => setThemePref(v as "system" | "light" | "dark")}>
           <SelectTrigger id="theme-select" className="w-32">
-            <SelectValue />
+            <SelectValue>{({system:"System",light:"Light",dark:"Dark"} as Record<string,string>)[themePref] ?? "System"}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="system">System</SelectItem>
@@ -545,25 +567,25 @@ export function SettingsTab() {
           onValueChange={handleDockPositionChange}
         >
           <SelectTrigger id="dock-position" className="w-52">
-            <SelectValue />
+            <SelectValue>{DOCK_POSITIONS[settings?.dock_position ?? "bottom_right"] ?? "Bottom right"}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="bottom_right">Bottom Right (Default)</SelectItem>
-            <SelectItem value="bottom_center">Bottom Center</SelectItem>
-            <SelectItem value="bottom_left">Bottom Left</SelectItem>
-            <SelectItem value="top_right">Top Right</SelectItem>
-            <SelectItem value="top_left">Top Left</SelectItem>
+            <SelectItem value="bottom_right">Bottom right</SelectItem>
+            <SelectItem value="bottom_center">Bottom center</SelectItem>
+            <SelectItem value="bottom_left">Bottom left</SelectItem>
+            <SelectItem value="top_right">Top right</SelectItem>
+            <SelectItem value="top_left">Top left</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       {/* --- Intelligent Handsfree Mode Card --- */}
-      <div className="flex flex-col gap-3 rounded-none border-2 border-border bg-card p-4 shadow-[3px_3px_0_0_var(--od-shadow)]">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
         <div className="flex items-center justify-between gap-2">
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-bold uppercase tracking-wider text-foreground">
-                🎙️ Intelligent Handsfree Mode
+              <span className="text-sm font-semibold text-foreground">
+                Handsfree mode
               </span>
               <Badge variant={settings?.handsfree_mode ? "default" : "outline"}>
                 {settings?.handsfree_mode ? "Active" : "Disabled"}
@@ -581,11 +603,11 @@ export function SettingsTab() {
         </div>
 
         {(settings?.handsfree_mode || handsfreeNeedsKws) && (
-          <div className="flex flex-col gap-4 border-t-2 border-border/40 pt-3">
+          <div className="flex flex-col gap-4 border-t border-border/40 pt-3">
             {!models?.kws_ready && (
-              <div className="flex flex-col gap-2 bg-amber-500/10 p-3 border border-amber-500/30 text-xs text-amber-600 dark:text-amber-400">
+              <div className="flex flex-col gap-2 rounded-md bg-notice-soft p-3 text-xs text-notice">
                 <div className="flex items-center justify-between gap-2">
-                  <span>⚠️ Keyword Spotting (KWS) model required for handsfree (15MB).</span>
+                  <span>Handsfree needs the wake word model (15 MB).</span>
                   <Button
                     size="sm"
                     variant="outline"
@@ -601,9 +623,9 @@ export function SettingsTab() {
                       <span>Downloading Zipformer KWS model...</span>
                       <span>{Math.round((kwsProgress.received / kwsProgress.total) * 100)}%</span>
                     </div>
-                    <div className="h-1.5 w-full bg-amber-500/20 overflow-hidden">
+                    <div className="h-1.5 w-full bg-notice/20 overflow-hidden">
                       <div
-                        className="h-full bg-amber-500 transition-all duration-200"
+                        className="h-full bg-notice transition-[width] duration-200"
                         style={{ width: `${Math.round((kwsProgress.received / kwsProgress.total) * 100)}%` }}
                       />
                     </div>
@@ -614,7 +636,7 @@ export function SettingsTab() {
 
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between">
-                <Label htmlFor="wake-words" className="text-xs font-bold uppercase">
+                <Label htmlFor="wake-words" className="text-xs font-semibold ">
                   Wake Phrases (Comma separated)
                 </Label>
                 <span className="text-[11px] text-muted-foreground">
@@ -637,7 +659,7 @@ export function SettingsTab() {
 
             <div className="flex items-center justify-between gap-4">
               <div className="flex flex-col">
-                <Label htmlFor="timeout-slider" className="text-xs font-bold uppercase">
+                <Label htmlFor="timeout-slider" className="text-xs font-semibold ">
                   Auto-Sleep Inactivity Timeout
                 </Label>
                 <span className="text-[11px] text-muted-foreground">
@@ -654,7 +676,7 @@ export function SettingsTab() {
                   onChange={handleTimeoutChange}
                   className="flex-1"
                 />
-                <span className="w-10 text-right text-xs font-bold tabular-nums">
+                <span className="w-10 text-right text-xs font-semibold tabular-nums">
                   {settings?.handsfree_silence_timeout_sec ?? 30}s
                 </span>
               </div>
@@ -664,12 +686,12 @@ export function SettingsTab() {
       </div>
 
       {/* --- Voice Actions & In-Place Editing Card --- */}
-      <div className="flex flex-col gap-3 rounded-none border-2 border-border bg-card p-4 shadow-[3px_3px_0_0_var(--od-shadow)]">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
         <div className="flex items-center justify-between gap-2">
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-bold uppercase tracking-wider text-foreground">
-                ⚡ Voice Actions & In-Place Editing
+              <span className="text-sm font-semibold text-foreground">
+                Voice commands
               </span>
               <Badge variant={settings?.voice_actions_enabled ? "default" : "outline"}>
                 {settings?.voice_actions_enabled ? "Enabled" : "Off"}
@@ -693,14 +715,14 @@ export function SettingsTab() {
             onClick={() => setShowVoiceActionsHelp(!showVoiceActionsHelp)}
             className="text-xs"
           >
-            {showVoiceActionsHelp ? "Hide Voice Commands" : "📖 View Voice Commands Cheat Sheet"}
+            {showVoiceActionsHelp ? "Hide Voice Commands" : "View voice commands"}
           </Button>
         </div>
 
         {showVoiceActionsHelp && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 border-t-2 border-border/40 pt-3 text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 border-t border-border/40 pt-3 text-xs">
             <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
-              <span className="font-bold uppercase text-foreground">🤖 AI Agent Prompt & Send</span>
+              <span className="font-semibold text-foreground">Prompts</span>
               <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
                 <li><code className="text-foreground font-semibold">"send prompt &lt;text&gt;"</code> / <code className="text-foreground font-semibold">"ask claude &lt;text&gt;"</code>: Type & auto-send to Claude/Cursor/ChatGPT/CLI</li>
                 <li><code className="text-foreground font-semibold">"send"</code> / <code className="text-foreground font-semibold">"submit"</code>: Press Enter to submit prompt</li>
@@ -709,7 +731,7 @@ export function SettingsTab() {
             </div>
 
             <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
-              <span className="font-bold uppercase text-foreground">🔀 App Switching</span>
+              <span className="font-semibold text-foreground">Switching apps</span>
               <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
                 <li><code className="text-foreground font-semibold">"switch to cursor"</code> / <code className="text-foreground font-semibold">"switch to code"</code></li>
                 <li><code className="text-foreground font-semibold">"switch to terminal"</code> / <code className="text-foreground font-semibold">"switch to chrome"</code></li>
@@ -718,7 +740,7 @@ export function SettingsTab() {
             </div>
 
             <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
-              <span className="font-bold uppercase text-foreground">🌐 Voice Search & Tabs</span>
+              <span className="font-semibold text-foreground">Search and tabs</span>
               <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
                 <li><code className="text-foreground font-semibold">"search for &lt;query&gt;"</code> / <code className="text-foreground font-semibold">"google for &lt;query&gt;"</code></li>
                 <li><code className="text-foreground font-semibold">"next tab"</code> / <code className="text-foreground font-semibold">"prev tab"</code> / <code className="text-foreground font-semibold">"close tab"</code></li>
@@ -727,7 +749,7 @@ export function SettingsTab() {
             </div>
 
             <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
-              <span className="font-bold uppercase text-foreground">⏪ Undo & Corrections</span>
+              <span className="font-semibold text-foreground">Undo and corrections</span>
               <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
                 <li><code className="text-foreground font-semibold">"scratch that"</code> / <code className="text-foreground font-semibold">"undo"</code>: Reverts last text</li>
                 <li><code className="text-foreground font-semibold">"delete word"</code>: Erases word before cursor</li>
@@ -737,7 +759,7 @@ export function SettingsTab() {
             </div>
 
             <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
-              <span className="font-bold uppercase text-foreground">🔠 Smart Case & Formatting</span>
+              <span className="font-semibold text-foreground">Case and formatting</span>
               <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
                 <li><code className="text-foreground font-semibold">"camel case &lt;phrase&gt;"</code> → camelCase</li>
                 <li><code className="text-foreground font-semibold">"snake case &lt;phrase&gt;"</code> → snake_case</li>
@@ -747,12 +769,12 @@ export function SettingsTab() {
             </div>
 
             <div className="flex flex-col gap-1 rounded border border-border/60 bg-muted/40 p-2.5">
-              <span className="font-bold uppercase text-foreground">💤 Handsfree & Snippets</span>
+              <span className="font-semibold text-foreground">Handsfree and snippets</span>
               <ul className="list-disc pl-4 text-muted-foreground space-y-0.5">
                 <li><code className="text-foreground font-semibold">"go to sleep"</code> / <code className="text-foreground font-semibold">"stop listening"</code></li>
                 <li><code className="text-foreground font-semibold">"insert snippet &lt;name&gt;"</code>: Expands saved snippet</li>
                 <li><code className="text-foreground font-semibold">"git status"</code> / <code className="text-foreground font-semibold">"clear terminal"</code>: Run at once in the Terminal input target</li>
-                <li><code className="text-foreground font-semibold">"git push"</code> / <code className="text-foreground font-semibold">"git pull"</code>: Typed only — say "send" to run</li>
+                <li><code className="text-foreground font-semibold">"git push"</code> / <code className="text-foreground font-semibold">"git pull"</code>: Typed only. Say "send" to run</li>
               </ul>
             </div>
           </div>
@@ -760,16 +782,16 @@ export function SettingsTab() {
       </div>
 
       {/* --- AI Voice Polish (Groq API & Local SLM) Card --- */}
-      <div className="flex flex-col gap-3 rounded-none border-2 border-border bg-card p-4 shadow-[3px_3px_0_0_var(--od-shadow)]">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
         <div className="flex items-center justify-between gap-2">
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-bold uppercase tracking-wider text-foreground">
-                ✨ AI Voice Polish
+              <span className="text-sm font-semibold text-foreground">
+                AI voice polish
               </span>
               <Badge variant={settings?.polish_provider === "groq" ? "default" : "outline"}>
                 {settings?.polish_provider === "groq"
-                  ? "Groq Cloud LPU ⚡"
+                  ? "Groq"
                   : settings?.polish_provider === "local_slm"
                   ? "Unavailable"
                   : "Off"}
@@ -785,12 +807,12 @@ export function SettingsTab() {
             onValueChange={handlePolishProviderChange}
           >
             <SelectTrigger id="polish-provider" className="w-48" aria-label="Polish provider">
-              <SelectValue />
+              <SelectValue>{settings?.polish_provider === "groq" ? "Groq" : settings?.polish_provider === "local_slm" ? "Local SLM (unavailable)" : "Off"}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="off">Off (Raw Voice)</SelectItem>
-              <SelectItem value="groq">Groq LPU (Ultra-Fast ⚡)</SelectItem>
-              <SelectItem value="local_slm" disabled>Local SLM (Unavailable)</SelectItem>
+              <SelectItem value="off">Off</SelectItem>
+              <SelectItem value="groq">Groq</SelectItem>
+              <SelectItem value="local_slm" disabled>Local SLM (unavailable)</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -801,9 +823,9 @@ export function SettingsTab() {
           </p>
         )}
         {settings?.polish_provider === "groq" && (
-          <div className="flex flex-col gap-3 border-t-2 border-border/40 pt-3">
+          <div className="flex flex-col gap-3 border-t border-border/40 pt-3">
             <div className="flex items-center justify-between gap-2">
-              <Label htmlFor="polish-mode" className="text-xs font-bold uppercase">
+              <Label htmlFor="polish-mode" className="text-xs font-semibold ">
                 Polish Output Mode
               </Label>
               <Select
@@ -811,11 +833,11 @@ export function SettingsTab() {
                 onValueChange={handlePolishModeChange}
               >
                 <SelectTrigger id="polish-mode" className="w-44">
-                  <SelectValue />
+                  <SelectValue>{settings?.polish_mode === "bullets" ? "Executive bullets" : "Clean and grammar"}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="clean">Clean & Grammar Polish</SelectItem>
-                  <SelectItem value="bullets">Executive Bullets</SelectItem>
+                  <SelectItem value="clean">Clean and grammar</SelectItem>
+                  <SelectItem value="bullets">Executive bullets</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -823,7 +845,7 @@ export function SettingsTab() {
             {settings?.polish_provider === "groq" && (
               <div className="flex flex-col gap-2.5 rounded border border-border/60 bg-muted/20 p-3">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="groq-key" className="text-xs font-bold uppercase">
+                  <Label htmlFor="groq-key" className="text-xs font-semibold ">
                     Groq Cloud API Key
                   </Label>
                   <a
@@ -853,7 +875,7 @@ export function SettingsTab() {
                     onClick={handleTestGroq}
                     disabled={testingGroq}
                   >
-                    {testingGroq ? "Testing..." : "⚡ Test"}
+                    {testingGroq ? "Testing..." : "Test"}
                   </Button>
                 </div>
 
@@ -866,7 +888,7 @@ export function SettingsTab() {
                     onValueChange={handleGroqModelChange}
                   >
                     <SelectTrigger id="groq-model" className="w-56">
-                      <SelectValue />
+                      <SelectValue>{settings?.groq_model ?? "llama-3.1-8b-instant"}</SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="llama-3.1-8b-instant">
@@ -880,7 +902,7 @@ export function SettingsTab() {
                 </div>
 
                 {testGroqResult && (
-                  <div className="rounded bg-emerald-500/10 border border-emerald-500/30 p-2 text-xs text-emerald-600 dark:text-emerald-400">
+                  <div className="rounded-md bg-positive-soft p-2 text-xs text-positive">
                     <strong>Test Output:</strong> {testGroqResult}
                   </div>
                 )}
@@ -943,7 +965,7 @@ export function SettingsTab() {
               <SelectValue>
                 {settings?.language === "auto" || settings?.language == null
                   ? "Auto (system default)"
-                  : settings.language}
+                  : (LANGUAGE_NAMES[settings.language] ?? settings.language)}
               </SelectValue>
             </SelectTrigger>
             <SelectContent className="w-full">
@@ -969,7 +991,7 @@ export function SettingsTab() {
         <div className="flex flex-col gap-1">
           <Label htmlFor="continuous">Continuous dictation</Label>
           <p className="text-xs text-muted-foreground">
-            Keep listening after each phrase — press the hotkey again to stop.
+            Keep listening after each phrase. Press the hotkey again to stop.
           </p>
         </div>
         <Switch
@@ -1078,22 +1100,22 @@ export function SettingsTab() {
                 value={Math.round((settings?.audio_feedback_volume ?? 0.5) * 100)}
                 onChange={(v) => handleVolumeChange(v / 100)}
               />
-              <span className="w-12 text-right text-xs font-bold tabular-nums">
+              <span className="w-12 text-right text-xs font-semibold tabular-nums">
                 {Math.round((settings?.audio_feedback_volume ?? 0.5) * 100)}%
               </span>
             </div>
             <div className="flex items-center gap-2 pt-1">
-              <span className="text-[10px] font-bold text-muted-foreground uppercase">
+              <span className="text-[11px] font-semibold text-muted-foreground ">
                 Test audio cues:
               </span>
               <Button size="sm" variant="outline" onClick={() => handlePlaySound("start")}>
-                ▶ Start
+                Start
               </Button>
               <Button size="sm" variant="outline" onClick={() => handlePlaySound("insert")}>
-                ▶ Insert
+                Insert
               </Button>
               <Button size="sm" variant="outline" onClick={() => handlePlaySound("error")}>
-                ▶ Error
+                Error
               </Button>
             </div>
           </div>
@@ -1102,7 +1124,7 @@ export function SettingsTab() {
 
       <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
         <div className="flex flex-col">
-          <span className="text-xs font-bold uppercase text-muted-foreground">
+          <span className="text-xs font-semibold text-muted-foreground">
             Factory reset
           </span>
           <span className="text-[11px] text-muted-foreground">

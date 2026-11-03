@@ -1,7 +1,7 @@
 import { useStore } from "@/lib/store";
 import { ModelCard } from "@/components/ModelCard";
 import { Badge } from "@/components/ui/badge";
-import { Cpu, HardDrive, CheckCircle2, Info } from "lucide-react";
+import { HardDrive, CheckCircle2, Info } from "lucide-react";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "0 MB";
@@ -28,30 +28,28 @@ export function ModelsTab() {
   return (
     <div className="flex flex-col gap-6">
       {/* Top Banner / Summary */}
-      <div className="flex flex-col gap-3 border-2 border-border bg-card p-4">
+      <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <span className="flex size-7 items-center justify-center border-2 border-border bg-primary text-xs font-bold text-primary-foreground">
-              <Cpu className="size-4" />
-            </span>
+            
             <div>
-              <h2 className="text-sm font-bold tracking-wider uppercase">Speech Models & Engines</h2>
+              <h2 className="text-sm font-semibold ">Speech models</h2>
               <p className="text-xs text-muted-foreground">
-                Manage local neural ASR models for live captions and high-accuracy dictation.
+                Everything is transcribed on this device. Choose for live captions or for accuracy.
               </p>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold uppercase">
+            <Badge variant="outline" className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold ">
               <CheckCircle2 className="size-3.5 text-primary" />
               Active: {activeModel?.name ?? settings?.stt_model ?? "None"}
             </Badge>
-            <Badge variant="outline" className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold uppercase">
+            <Badge variant="outline" className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold ">
               <HardDrive className="size-3.5 text-muted-foreground" />
               {installedModels.length} installed ({formatBytes(totalInstalledBytes)})
             </Badge>
-            <Badge variant="outline" className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-bold uppercase">
+            <Badge variant="outline" className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold ">
               GPU: {activeGpuMode.toUpperCase()}
             </Badge>
           </div>
@@ -59,10 +57,10 @@ export function ModelsTab() {
       </div>
 
       {/* Model Loading / Cold Start Disclaimer */}
-      <div className="flex items-center gap-2.5 border-2 border-border bg-card/60 px-3.5 py-2.5 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2.5 rounded-lg bg-muted px-3.5 py-2.5 text-xs text-muted-foreground">
         <Info className="size-4 shrink-0 text-muted-foreground" />
         <span>
-          <strong className="text-foreground">Note:</strong> First transcription after opening app will be slow due to initial model loading. Subsequent transcriptions will be instantaneous.
+          The first transcription after opening the app is slower while the model loads. After that it is fast.
         </span>
       </div>
 

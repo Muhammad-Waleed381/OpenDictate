@@ -1,15 +1,16 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "@/lib/store";
 import * as api from "@/lib/api";
-import { formatHotkey, cn, DEFAULT_HOTKEY } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Settings, Activity, BookOpen, History, FileText, House, Cpu } from "lucide-react";
+import { Mic, Square } from "lucide-react";
+import { AppSidebar, NAV_ITEMS, type TabId } from "@/components/AppSidebar";
 import { Onboarding } from "@/components/Onboarding";
 import { Toaster, toast } from "@/components/ui/toast";
 import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
 import { DockButton } from "@/components/DockButton";
+import { UpdatePrompt } from "@/components/UpdatePrompt";
 import { useRecording } from "@/lib/useRecording";
 import { HomeTab } from "@/components/tabs/HomeTab";
 import { SettingsTab } from "@/components/tabs/SettingsTab";
@@ -19,17 +20,7 @@ import { HeatmapTab } from "@/components/tabs/HeatmapTab";
 import { SnippetsTab } from "@/components/tabs/SnippetsTab";
 import { ModelsTab } from "@/components/tabs/ModelsTab";
 
-const TABS = [
-  { id: "home", label: "Home", icon: House },
-  { id: "activity", label: "Activity", icon: Activity },
-  { id: "dictionary", label: "Dictionary", icon: BookOpen },
-  { id: "snippets", label: "Snippets", icon: FileText },
-  { id: "history", label: "History", icon: History },
-  { id: "models", label: "Models", icon: Cpu },
-  { id: "settings", label: "Settings", icon: Settings },
-] as const;
 
-type TabId = (typeof TABS)[number]["id"];
 
 function useOpenDictateEvents() {
   useEffect(() => {
@@ -110,36 +101,33 @@ function RecordingButton() {
   const { recording, busy, toggle } = useRecording();
 
   return (
-    <Button onClick={toggle} disabled={busy} variant={recording ? "outline" : "default"} size="sm">
-      {recording ? "■ STOP" : "● RECORD"}
+    <Button
+      onClick={toggle}
+      disabled={busy}
+      size="sm"
+      className={recording ? "" : "border-transparent bg-record text-record-foreground hover:bg-record-hover"}
+      variant={recording ? "outline" : "default"}
+    >
+      {recording ? <Square className="size-3 fill-current" aria-hidden /> : <Mic aria-hidden />}
+      {recording ? "Stop" : "Record"}
     </Button>
   );
 }
 
-function Header() {
-  const settings = useStore((s) => s.settings);
+function Header({ title, showRecord }: { title: string; showRecord: boolean }) {
   const recording = useStore((s) => s.recording);
 
   return (
-    <header className="relative flex items-center gap-3 border-b-2 border-border bg-card px-6 py-3 text-foreground">
-      <div className="flex items-center gap-2.5">
-        <span className="flex size-5 items-center justify-center border-2 border-border bg-primary text-[10px] font-bold text-primary-foreground">
-          OD
-        </span>
-        <h1 className="text-sm font-bold tracking-[0.2em] uppercase">
-          OpenDictate
-        </h1>
-      </div>
-      <Badge variant="outline" className="ml-auto border-border text-foreground shadow-none">
-        {formatHotkey(settings?.hotkey ?? DEFAULT_HOTKEY)}
-      </Badge>
-      <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider">
+    <header className="flex h-14 shrink-0 items-center gap-3 px-6 text-foreground">
+      <h1 className="text-lg font-semibold">{title}</h1>
+      <span className="ml-auto flex items-center gap-1.5 text-[13px] text-muted-foreground">
         <span
-          className={`size-2.5 border border-foreground ${recording ? "animate-od-blink bg-foreground" : "bg-transparent"}`}
+          className={cn("size-2 rounded-full", recording ? "animate-od-blink bg-record-live" : "bg-input")}
+          aria-hidden
         />
         {recording ? "Recording" : "Idle"}
       </span>
-      <RecordingButton />
+      {(showRecord || recording) && <RecordingButton />}
     </header>
   );
 }
@@ -149,10 +137,10 @@ export function MainApp() {
   // Tabs are deep-linkable via location.hash (#settings, #activity, …).
   const [tab, setTab] = useState<TabId>(() => {
     const h = window.location.hash.slice(1) as TabId;
-    return TABS.some((t) => t.id === h) ? h : "home";
+    return NAV_ITEMS.some((t) => t.id === h) ? h : "home";
   });
   const [collapsed, setCollapsed] = useState<boolean>(
-    () => localStorage.getItem("od:sidebar") !== "collapsed",
+    () => localStorage.getItem("od:sidebar") === "collapsed",
   );
 
   const switchTab = (t: TabId) => {
@@ -160,17 +148,27 @@ export function MainApp() {
     window.history.replaceState(null, "", `#${t}`);
   };
 
-  const toggleSidebar = () => {
+  const toggleSidebar = useCallback(() => {
     setCollapsed((c) => {
-      localStorage.setItem("od:sidebar", c ? "collapsed" : "expanded");
+      localStorage.setItem("od:sidebar", c ? "expanded" : "collapsed");
       return !c;
     });
-  };
+  }, []);
 
   useOpenDictateEvents();
 
   useEffect(() => {
     useStore.getState().refreshAll().catch(() => {});
+  }, []);
+
+  // In-app links such as "Change model" navigate by hash.
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = window.location.hash.slice(1) as TabId;
+      if (NAV_ITEMS.some((t) => t.id === next)) setTab(next);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
   useEffect(() => {
@@ -189,51 +187,13 @@ export function MainApp() {
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <div className="flex min-h-0 flex-1">
-        <aside
-          className={cn(
-            "flex shrink-0 flex-col border-r-2 border-sidebar-border bg-sidebar transition-[width] duration-200",
-            collapsed ? "w-12" : "w-44",
-          )}
-        >
-          <button
-            onClick={toggleSidebar}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="flex h-9 shrink-0 cursor-pointer items-center justify-center border-b-2 border-sidebar-border text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            {collapsed ? "▸" : "◂"}
-          </button>
-          <nav className={cn("flex flex-col gap-1", collapsed ? "p-2" : "p-3")}>
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => switchTab(t.id)}
-                title={collapsed ? t.label : undefined}
-                className={cn(
-                  "relative flex cursor-pointer items-center text-xs font-bold tracking-wider uppercase transition-colors duration-150",
-                  collapsed ? "justify-center py-2" : "gap-2.5 justify-start px-4 py-2.5",
-                  tab === t.id
-                    ? "bg-brand text-brand-foreground"
-                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground",
-                )}
-              >
-                {tab === t.id && (
-                  <span className="absolute inset-y-0 left-0 w-1 bg-brand-foreground" aria-hidden />
-                )}
-                <t.icon className="size-4 shrink-0" strokeWidth={2.5} />
-                {!collapsed && t.label}
-              </button>
-            ))}
-          </nav>
-          {!collapsed && (
-            <div className="mt-auto flex flex-col gap-1 border-t-2 border-sidebar-border p-4 text-[9px] font-bold tracking-widest text-muted-foreground uppercase">
-              <span>Local-first</span>
-              <span>Zero telemetry</span>
-            </div>
-          )}
-        </aside>
+        <AppSidebar tab={tab} onSelect={switchTab} collapsed={collapsed} onToggle={toggleSidebar} />
         <div className="flex min-w-0 flex-1 flex-col">
-          <Header />
-          <main className="flex-1 overflow-y-auto px-6 py-5">
+          <Header
+            title={NAV_ITEMS.find((t) => t.id === tab)?.label ?? "OpenDictate"}
+            showRecord={tab !== "home"}
+          />
+          <main className="flex-1 overflow-y-auto px-6 pb-6">
             <div key={tab} className="animate-od-slide-up">
               {tab === "home" && <HomeTab />}
               {tab === "activity" && <HeatmapTab />}
@@ -246,14 +206,8 @@ export function MainApp() {
           </main>
         </div>
       </div>
-      <footer className="flex items-center gap-3 border-t-2 border-border bg-card px-6 py-2.5 text-[11px] font-bold tracking-wider text-foreground uppercase">
-        <span>Speak. Don't type.</span>
-        <span className="ml-auto hidden text-muted-foreground sm:inline">
-          Local-first · zero telemetry · MIT
-        </span>
-        <span className="text-muted-foreground tabular-nums">{__APP_VERSION__}</span>
-      </footer>
       {settings && !settings.onboarded && <Onboarding />}
+      {settings?.onboarded && settings.check_updates !== false && <UpdatePrompt />}
       <Toaster />
       <ConfirmDialogHost />
     </div>

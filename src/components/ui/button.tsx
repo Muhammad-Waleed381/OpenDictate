@@ -4,31 +4,31 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "group/button inline-flex shrink-0 items-center justify-center rounded-none border-2 border-border bg-clip-padding text-sm font-bold uppercase tracking-wide whitespace-nowrap transition-all duration-150 ease-spring outline-none select-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none aria-invalid:border-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-border bg-clip-padding text-sm font-semibold whitespace-nowrap transition-colors duration-150 ease-fluid outline-none select-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none aria-invalid:border-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground shadow-brutal hover:shadow-brutal-hover hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none",
+          "border-transparent bg-primary text-primary-foreground hover:bg-primary/88 active:bg-primary/80",
         outline:
-          "border-border bg-background text-foreground shadow-brutal hover:bg-accent hover:shadow-brutal-hover hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none aria-expanded:bg-accent",
+          "border-input bg-card text-foreground hover:bg-accent active:bg-secondary",
         secondary:
-          "bg-secondary text-secondary-foreground shadow-brutal hover:bg-accent hover:shadow-brutal-hover hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none",
+          "border-transparent bg-secondary text-secondary-foreground hover:bg-accent",
         ghost:
           "border-transparent bg-transparent text-foreground shadow-none hover:bg-accent active:translate-y-px",
         destructive:
-          "bg-destructive text-destructive-foreground border-destructive shadow-brutal hover:shadow-brutal-hover hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[3px] active:translate-y-[3px] active:shadow-none",
+          "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/90",
         link: "border-transparent bg-transparent text-primary underline-offset-4 hover:underline shadow-none",
       },
       size: {
         default:
           "h-9 gap-1.5 px-4 has-data-[icon=inline-end]:pr-3 has-data-[icon=inline-start]:pl-3",
-        xs: "h-6 gap-1 px-2 text-xs in-data-[slot=button-group]:rounded-none has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-8 gap-1 px-3 text-xs in-data-[slot=button-group]:rounded-none has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-3.5",
+        xs: "h-6 gap-1 px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
+        sm: "h-8 gap-1 px-3 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-11 gap-1.5 px-5 text-base has-data-[icon=inline-end]:pr-4 has-data-[icon=inline-start]:pl-4",
         icon: "size-9 p-0",
-        "icon-xs": "size-6 p-0 in-data-[slot=button-group]:rounded-none [&_svg:not([class*='size-'])]:size-3",
-        "icon-sm": "size-7 p-0 in-data-[slot=button-group]:rounded-none",
+        "icon-xs": "size-6 p-0 in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
+        "icon-sm": "size-7 p-0 in-data-[slot=button-group]:rounded-lg",
         "icon-lg": "size-11 p-0",
       },
     },

@@ -5,7 +5,7 @@ import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { calculateAggregateSpeed } from "@/lib/utils";
+import { calculateAggregateSpeed, DEFAULT_HOTKEY, formatHotkey } from "@/lib/utils";
 
 const CELL_PX = 13;
 const GAP_PX = 3;
@@ -41,15 +41,20 @@ function levelFor(words: number): number {
   return 4;
 }
 
-const DEFAULT_COLOR = "#16a34a";
+const DEFAULT_COLOR = "#562ff7";
+
+/** The year is wider than a small window; the recent weeks are what people look for. */
+const scrollToNewest = (element: HTMLDivElement | null) => {
+  if (element) element.scrollLeft = element.scrollWidth;
+};
 
 const PRESETS: { name: string; hex: string }[] = [
-  { name: "Green", hex: "#16a34a" },
-  { name: "Blue", hex: "#2563eb" },
-  { name: "Violet", hex: "#7c3aed" },
-  { name: "Amber", hex: "#d97706" },
-  { name: "Rose", hex: "#e11d48" },
-  { name: "Slate", hex: "#475569" },
+  { name: "Galactic violet", hex: "#562ff7" },
+  { name: "Ocean", hex: "#0e7fa8" },
+  { name: "Pine", hex: "#1f7a6c" },
+  { name: "Amber", hex: "#c98a1b" },
+  { name: "Bubblegum pink", hex: "#f354d0" },
+  { name: "Slate", hex: "#5a5370" },
 ];
 
 function hexToRgb(hex: string): [number, number, number] | null {
@@ -61,23 +66,12 @@ function hexToRgb(hex: string): [number, number, number] | null {
   return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 }
 
-function mix(hex: string, other: [number, number, number], t: number): string {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return DEFAULT_COLOR;
-  const out = rgb.map((v, i) => Math.round(v * (1 - t) + other[i] * t));
-  return `#${out.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
-}
-
+/** Shades fade toward the card, so more activity reads stronger in both themes. */
 function shadesFor(hex: string): (string | null)[] {
-  const white: [number, number, number] = [255, 255, 255];
-  const black: [number, number, number] = [0, 0, 0];
-  return [
-    null,
-    mix(hex, white, 0.7),
-    mix(hex, white, 0.4),
-    mix(hex, white, 0.1),
-    mix(hex, black, 0.3),
-  ];
+  const base = hexToRgb(hex) ? hex : DEFAULT_COLOR;
+  return [null, 30, 52, 76, 100].map((percent) =>
+    percent === null ? null : `color-mix(in srgb, ${base} ${percent}%, var(--card))`,
+  );
 }
 
 const MONTH_LABELS = [
@@ -97,8 +91,11 @@ export function HeatmapTab() {
   const stats = useStore((s) => s.stats);
   const history = useStore((s) => s.history);
   const hydrated = useStore((s) => s.hydrated);
+  const hotkey = formatHotkey(useStore((s) => s.settings?.hotkey) ?? DEFAULT_HOTKEY);
   const settings = useStore((s) => s.settings);
-  const color = settings?.heatmap_color ?? DEFAULT_COLOR;
+  // "#16a34a" was the previous default, not a choice the user made.
+  const saved = settings?.heatmap_color;
+  const color = !saved || saved === "#16a34a" ? DEFAULT_COLOR : saved;
   const cellColors = useMemo(() => shadesFor(color), [color]);
   const speedStats = useMemo(() => calculateAggregateSpeed(history), [history]);
   const [hoveredCell, setHoveredCell] = useState<{
@@ -224,69 +221,69 @@ export function HeatmapTab() {
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <Card size="sm" className={statCard}>
-            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+        <div className="grid grid-cols-6 gap-3 lg:grid-cols-5">
+          <Card size="sm" className={`${statCard} col-span-2 lg:col-span-1`}>
+            <span className="text-xs text-muted-foreground">
               Words transcribed
             </span>
-            <span className="text-3xl font-black tabular-nums">
+            <span className="text-2xl font-semibold tabular-nums">
               {totals.total_words.toLocaleString()}
             </span>
           </Card>
-          <Card size="sm" className={statCard}>
-            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+          <Card size="sm" className={`${statCard} col-span-2 lg:col-span-1`}>
+            <span className="text-xs text-muted-foreground">
               Dictations
             </span>
-            <span className="text-3xl font-black tabular-nums">
+            <span className="text-2xl font-semibold tabular-nums">
               {totals.total_sessions.toLocaleString()}
             </span>
           </Card>
-          <Card size="sm" className={statCard}>
-            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+          <Card size="sm" className={`${statCard} col-span-2 lg:col-span-1`}>
+            <span className="text-xs text-muted-foreground">
               Day streak
             </span>
-            <span className="text-3xl font-black tabular-nums">
+            <span className="text-2xl font-semibold tabular-nums">
               {totals.streak_days}
-              <span className="ml-1 text-sm font-bold text-muted-foreground">days</span>
+              <span className="ml-1 text-sm font-semibold text-muted-foreground">days</span>
             </span>
           </Card>
-          <Card size="sm" className={statCard}>
-            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+          <Card size="sm" className={`${statCard} col-span-3 lg:col-span-1`}>
+            <span className="text-xs text-muted-foreground">
               Best day
             </span>
-            <span className="text-3xl font-black tabular-nums">
+            <span className="text-2xl font-semibold tabular-nums">
               {totals.best_words.toLocaleString()}
             </span>
-            <span className="text-xs font-bold text-muted-foreground">
+            <span className="text-xs font-semibold text-muted-foreground">
               {totals.best_words > 0 ? `words · ${bestLabel}` : "—"}
             </span>
           </Card>
-          <Card size="sm" className={statCard}>
-            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+          <Card size="sm" className={`${statCard} col-span-3 lg:col-span-1`}>
+            <span className="text-xs text-muted-foreground">
               Average speed
             </span>
-            <span className="text-3xl font-black tabular-nums">
+            <span className="text-2xl font-semibold tabular-nums">
               {speedStats ? (
                 <>
                   {speedStats.avgWpm}
-                  <span className="ml-1 text-sm font-bold text-muted-foreground">WPM</span>
+                  <span className="ml-1 text-sm font-semibold text-muted-foreground">WPM</span>
                 </>
               ) : (
                 "—"
               )}
             </span>
-            <span className="text-xs font-bold text-muted-foreground">
-              {speedStats ? `⚡ ${speedStats.multiplier}× typing speed` : "—"}
+            <span className="text-xs font-semibold text-muted-foreground">
+              {speedStats ? `${speedStats.multiplier}× typing speed` : "—"}
             </span>
           </Card>
         </div>
       )}
 
       {hydrated && totals.total_words === 0 && (
-        <div className="rounded-none border-2 border-dashed border-border p-6 text-center">
-          <p className="text-sm font-bold uppercase tracking-wider">No activity yet</p>
+        <div className="rounded-lg border border-dashed border-border p-6 text-center">
+          <p className="text-sm font-semibold">No activity yet</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Word counts appear here after your first dictation — try the Home tab.
+            Word counts appear here after your first dictation. Press {hotkey} in any app to start.
           </p>
         </div>
       )}
@@ -294,22 +291,22 @@ export function HeatmapTab() {
       <Card className="p-5">
         <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-3">
           <div className="flex items-baseline gap-2">
-            <h3 className="text-sm font-black tracking-widest uppercase">
+            <h3 className="text-sm font-semibold ">
               Word activity
             </h3>
-            <span className="text-xs font-bold text-muted-foreground">
+            <span className="text-xs font-semibold text-muted-foreground">
               words transcribed per day · last 52 weeks
             </span>
           </div>
           <div className="ml-auto flex items-center gap-3">
             <button
               onClick={handleReset}
-              className="cursor-pointer border-2 border-border/30 px-2 py-0.5 text-[10px] font-bold tracking-widest text-muted-foreground uppercase transition-colors hover:border-red-500 hover:text-red-500"
+              className="cursor-pointer rounded-sm border border-input px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
             >
               Reset stats
             </button>
             <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold tracking-widest text-muted-foreground uppercase">
+            <span className="text-xs text-muted-foreground">
               Color
             </span>
             {PRESETS.map((p) => (
@@ -317,15 +314,16 @@ export function HeatmapTab() {
                 key={p.hex}
                 title={p.name}
                 onClick={() => handleColor(p.hex)}
-                className={`size-5 cursor-pointer border-2 ${
-                  color === p.hex ? "border-primary" : "border-border/20"
+                aria-pressed={color === p.hex}
+                className={`size-5 cursor-pointer rounded-full ${
+                  color === p.hex ? "ring-2 ring-foreground ring-offset-2 ring-offset-card" : ""
                 }`}
                 style={{ backgroundColor: p.hex }}
               />
             ))}
             <label
               title="Custom color"
-              className="relative flex size-5 cursor-pointer items-center justify-center border-2 border-border bg-card"
+              className="relative flex size-5 cursor-pointer items-center justify-center rounded-full border border-input bg-card"
             >
               <input
                 type="color"
@@ -334,7 +332,7 @@ export function HeatmapTab() {
                 className="size-0 cursor-pointer opacity-0"
               />
               <span
-                  className="size-2.5 border border-border"
+                  className="size-2.5 rounded-full"
                 style={{ backgroundColor: color }}
               />
             </label>
@@ -342,7 +340,7 @@ export function HeatmapTab() {
         </div>
       </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto" ref={scrollToNewest}>
           <div className="inline-flex flex-col gap-1.5">
             <div className="flex">
               <div className="w-8 shrink-0" />
@@ -350,7 +348,7 @@ export function HeatmapTab() {
                 {monthLabels.map((m) => (
                   <span
                     key={`${m.col}-${m.label}`}
-                    className="absolute text-[10px] font-bold text-muted-foreground"
+                    className="absolute text-[11px] font-semibold text-muted-foreground"
                     style={{ left: m.col * PITCH_PX }}
                   >
                     {m.label}
@@ -360,13 +358,13 @@ export function HeatmapTab() {
             </div>
             <div className="flex">
               <div
-                className="relative w-8 shrink-0"
+                className="sticky left-0 z-10 w-8 shrink-0 bg-card"
                 style={{ height: 7 * PITCH_PX - GAP_PX }}
               >
                 {weekLabels.map((w) => (
                   <span
                     key={w.row}
-                    className="absolute flex h-[13px] items-center text-[9px] leading-[13px] font-bold text-muted-foreground"
+                    className="absolute flex h-[13px] items-center text-[11px] leading-[13px] font-semibold text-muted-foreground"
                     style={{ top: w.row * PITCH_PX }}
                   >
                     {w.label}
@@ -386,7 +384,7 @@ export function HeatmapTab() {
                             setHoveredCell({ cell, rect });
                           }}
                           onMouseLeave={() => setHoveredCell(null)}
-                          className="size-[13px] cursor-pointer border-2 border-border/5 bg-muted transition-transform hover:scale-125"
+                          className="size-[13px] cursor-pointer rounded-[3px] bg-muted transition-transform hover:scale-125"
                           style={bg ? { backgroundColor: bg } : undefined}
                         />
                       );
@@ -395,14 +393,14 @@ export function HeatmapTab() {
                 ))}
               </div>
             </div>
-            <div className="flex items-center justify-end gap-1.5 text-[10px] font-bold text-muted-foreground">
+            <div className="flex items-center justify-end gap-1.5 text-[11px] font-semibold text-muted-foreground">
               {legend.map((l) => {
                 const bg = cellColors[l.level];
                 return (
                   <span key={l.level} className="flex items-center gap-1">
                     {l.label && <span>{l.label}</span>}
                     <span
-                      className="size-[11px] border-2 border-border/5 bg-muted"
+                      className="size-[11px] rounded-[3px] bg-muted"
                       style={bg ? { backgroundColor: bg } : undefined}
                     />
                   </span>
@@ -414,17 +412,17 @@ export function HeatmapTab() {
 
         {hoveredCell && (
           <div
-            className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full transform rounded border border-border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-brutal animate-in fade-in-0 zoom-in-95 duration-100"
+            className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full transform rounded border border-border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground animate-in fade-in-0 zoom-in-95 duration-100"
             style={{
               left: `${hoveredCell.rect.left + hoveredCell.rect.width / 2}px`,
               top: `${hoveredCell.rect.top - 8}px`,
             }}
           >
-            <div className="font-bold">
+            <div className="font-semibold">
               {hoveredCell.cell.words.toLocaleString()}{" "}
               {hoveredCell.cell.words === 1 ? "word" : "words"}
             </div>
-            <div className="text-[10px] text-muted-foreground">
+            <div className="text-[11px] text-muted-foreground">
               {hoveredCell.cell.date.toLocaleDateString(undefined, {
                 weekday: "short",
                 year: "numeric",

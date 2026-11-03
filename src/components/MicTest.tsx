@@ -112,7 +112,7 @@ export function MicTest() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1.5">
-        <label className="text-xs font-bold text-muted-foreground uppercase">Microphone Device</label>
+        <label className="text-xs font-semibold text-muted-foreground ">Microphone Device</label>
         <Select value={mic ?? "default"} onValueChange={handleMicChange} disabled={recording || busy}>
           <SelectTrigger className="w-full">
             <SelectValue>{micLabel(mic, mics)}</SelectValue>
@@ -134,7 +134,7 @@ export function MicTest() {
       </div>
 
       <div className="flex items-center justify-between">
-        <span className="text-sm font-bold uppercase tracking-wider">
+        <span className="text-sm font-semibold">
           {testing ? "Speak into the mic…" : "Test your microphone"}
         </span>
         <Button
@@ -143,43 +143,43 @@ export function MicTest() {
           size="sm"
           disabled={busy || (!testing && recording)}
         >
-          {testing ? "■ Stop" : "● Start"}
+          {testing ? "Stop" : "Start"}
         </Button>
       </div>
-      <div className="flex h-8 items-end gap-[3px] border-2 border-border bg-card p-1.5">
+      <div className="flex h-8 items-end gap-[3px] border border-border bg-card p-1.5">
         {Array.from({ length: 24 }, (_, i) => {
           const sample = i / 23;
           const lit = level > sample;
           return (
             <span
               key={i}
-              className={`flex-1 transition-colors duration-75 ${lit ? "bg-primary" : "bg-muted"}`}
+              className={`flex-1 transition-colors duration-75 ${lit ? "bg-brand" : "bg-secondary"}`}
               style={{ height: "100%" }}
             />
           );
         })}
       </div>
-      <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider">
+      <div className="flex items-center justify-between text-xs font-semibold">
         <span className="tabular-nums">Peak {(peak * 100).toFixed(0)}%</span>
         {verdict === "working" && (
-          <span className="flex items-center gap-1.5 border-2 border-primary bg-primary px-2 py-0.5 text-primary-foreground">
-            ✓ Mic working
+          <span className="flex items-center gap-1.5 rounded-sm bg-positive-soft px-2 py-0.5 text-positive">
+            Mic working
           </span>
         )}
         {verdict === "quiet" && (
-          <span className="flex animate-od-blink items-center gap-1.5 border-2 border-border bg-card px-2 py-0.5">
-            ✕ Too quiet
+          <span className="flex animate-od-blink items-center gap-1.5 border border-border bg-card px-2 py-0.5">
+            Too quiet
           </span>
         )}
         {testing && <span className="animate-od-blink text-muted-foreground">Listening…</span>}
       </div>
       {error && (
-        <div className="border-2 border-primary bg-primary px-2 py-1.5 text-xs font-bold text-primary-foreground uppercase">
-          ✕ {error}
+        <div className="rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive ">
+          {error}
         </div>
       )}
       {noAudioHint && (
-        <p className="border-2 border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
+        <p className="border border-dashed border-border px-2 py-1.5 text-xs text-muted-foreground">
           No audio received. On macOS allow the microphone under System Settings →
           Privacy &amp; Security → Microphone, then press Stop and Start again. Also
           check the selected input device in Settings → Microphone.

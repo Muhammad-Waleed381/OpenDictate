@@ -1,6 +1,7 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "@/lib/store";
+import { useTheme } from "@/lib/theme";
 import { useRecording } from "@/lib/useRecording";
 import { useToastStore } from "@/components/ui/toast";
 import { ModelCard } from "@/components/ModelCard";
@@ -12,7 +13,10 @@ import { HistoryTab } from "@/components/tabs/HistoryTab";
 import { SnippetsTab } from "@/components/tabs/SnippetsTab";
 import { SettingsTab } from "@/components/tabs/SettingsTab";
 import { DockApp, MainApp } from "@/App";
+import { UpdatePrompt, UpdateSettings } from "@/components/UpdatePrompt";
 import { deferred, model, settings, status } from "./fixtures";
+import { wordsWorthLearning } from "@/lib/utils";
+import { formatSpan, milestoneCopy, nextMilestone, secondsSaved } from "@/lib/delight";
 
 const ipc = vi.hoisted(() => ({ invoke: vi.fn(), listen: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: ipc.invoke }));
@@ -22,8 +26,12 @@ let unlisteners: ReturnType<typeof vi.fn>[];
 function emit(event: string, payload: unknown) {
   act(() => listeners.get(event)?.forEach((listener) => listener({ payload })));
 }
-function defaultInvoke(command: string) {
+function defaultInvoke(command: string, args?: Record<string, unknown>) {
   switch (command) {
+    case "search_history": {
+      const q = String(args?.query ?? "").toLowerCase();
+      return Promise.resolve(useStore.getState().history.filter((e) => e.text.toLowerCase().includes(q)));
+    }
     case "get_settings": return Promise.resolve({ ...settings });
     case "models_status": return Promise.resolve({ ...status });
     case "models_catalog": return Promise.resolve(useStore.getState().catalog);
@@ -196,6 +204,65 @@ describe("model lifecycle regressions", () => {
     expect(screen.getByRole("button", { name: "Use" })).toBeEnabled();
   });
 
+  describe("update checker", () => {
+    const newer = { current_version: "0.3.3", latest_version: "0.4.0", update_available: true };
+    const latest = { current_version: "0.3.3", latest_version: "0.3.3", update_available: false };
+    const withUpdate = (reply: () => Promise<unknown>) =>
+      ipc.invoke.mockImplementation((cmd: string) =>
+        cmd === "check_for_update" ? reply() : defaultInvoke(cmd));
+
+    it("shows a popup when the app opens on an older version, and Later hides it", async () => {
+      withUpdate(() => Promise.resolve(newer));
+      render(<UpdatePrompt />);
+      const popup = await screen.findByRole("complementary", { name: "Update available" });
+      expect(popup).toHaveTextContent("Version 0.4.0 is out. You have 0.3.3.");
+      fireEvent.click(within(popup).getByRole("button", { name: "Download" }));
+      expect(ipc.invoke).toHaveBeenCalledWith("open_update_page");
+      fireEvent.click(within(popup).getByRole("button", { name: "Later" }));
+      expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    });
+
+    it("stays silent when up to date or when the check fails", async () => {
+      withUpdate(() => Promise.resolve(latest));
+      const { unmount } = render(<UpdatePrompt />);
+      await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith("check_for_update"));
+      expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+      unmount();
+      withUpdate(() => Promise.reject(new Error("offline")));
+      render(<UpdatePrompt />);
+      await act(async () => {});
+      expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    });
+
+    it("reports each outcome of a manual check in Settings", async () => {
+      useStore.setState({ settings });
+      withUpdate(() => Promise.reject(new Error("offline")));
+      render(<UpdateSettings />);
+      fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+      expect(await screen.findByText(/Could not check/)).toBeInTheDocument();
+      withUpdate(() => Promise.resolve(latest));
+      fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+      expect(await screen.findByText("You have the latest version, 0.3.3.")).toBeInTheDocument();
+      withUpdate(() => Promise.resolve(newer));
+      fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+      expect(await screen.findByText(/Version 0.4.0 is available/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+    });
+
+    it("does not ask at all once automatic checks are off", async () => {
+      const off = { ...settings, check_updates: false };
+      ipc.invoke.mockImplementation((cmd: string) => {
+        if (cmd === "get_settings") return Promise.resolve(off);
+        return cmd === "check_for_update" ? Promise.resolve(newer) : defaultInvoke(cmd);
+      });
+      useStore.setState({ settings: off });
+      ipc.invoke.mockClear();
+      render(<MainApp />);
+      await act(async () => {});
+      expect(ipc.invoke).not.toHaveBeenCalledWith("check_for_update");
+    });
+  });
+
   it("B006 prevents a selected model change during recording", () => {
     useStore.setState({ recording: true, catalog: [model("other", { installed: true })] });
     render(<ModelCard />);
@@ -244,7 +311,7 @@ describe("model lifecycle regressions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     view.unmount();
     render(<ModelCard />);
-    expect(screen.getByRole("button", { name: "✕ Cancel" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
     await act(async () => install.resolve());
     expect(screen.queryByText("Connecting…")).not.toBeInTheDocument();
   });
@@ -301,6 +368,10 @@ describe("model lifecycle regressions", () => {
     await act(async () => { await useStore.getState().cancelModel("some-model"); });
     await act(async () => install.reject("model download cancelled"));
     await expect(download).resolves.toBe(false);
+  });
+
+  it("opens in the light theme unless the user chose otherwise", () => {
+    expect(useTheme.getState().pref).toBe("light");
   });
 
   it("does not carry an old audio level into the next recording", () => {
@@ -394,44 +465,44 @@ describe("session and listener regressions", () => {
   it("B001 refuses a microphone test while dictation is active", () => {
     useStore.getState().setRecording(true);
     render(<MicTest />);
-    expect(screen.getByRole("button", { name: "● Start" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
   });
 
   it("B001 performs a microphone-only test without publishing a dictation result", async () => {
     ipc.invoke.mockImplementation((command: string) => command === "stop_recording"
       ? Promise.resolve({ text: "Microphone detected audio", duration_ms: 100 }) : defaultInvoke(command));
     render(<MicTest />);
-    fireEvent.click(screen.getByRole("button", { name: "● Start" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
     await act(async () => {});
     expect(ipc.invoke).toHaveBeenCalledWith("start_recording", { mode: "test" });
     expect(ipc.invoke).not.toHaveBeenCalledWith("cancel_recording");
-    fireEvent.click(screen.getByRole("button", { name: "■ Stop" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     await act(async () => {});
     expect(useStore.getState().lastResult).toBeNull();
-    expect(screen.getByRole("button", { name: "● Start" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
   });
 
   it("B006 resets the mic-test control when a native cancellation closes the session", async () => {
     render(<MicTest />);
-    fireEvent.click(screen.getByRole("button", { name: "● Start" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
     await act(async () => {});
     act(() => useStore.getState().setRecording(false));
-    expect(screen.getByRole("button", { name: "● Start" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
   });
 
   it("B006 does not let an old mic-test control stop a new dictation session", async () => {
     render(<MicTest />);
-    fireEvent.click(screen.getByRole("button", { name: "● Start" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
     await act(async () => {});
     act(() => { useStore.getState().setRecording(false); useStore.getState().setRecording(true); });
-    expect(screen.getByRole("button", { name: "● Start" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start" })).toBeDisabled();
   });
 
   it("B006 cancels a pending mic-test start on unmount without restoring stale recording state", async () => {
     const start = deferred<void>();
     ipc.invoke.mockImplementation((command: string) => command === "start_recording" ? start.promise : defaultInvoke(command));
     const view = render(<MicTest />);
-    fireEvent.click(screen.getByRole("button", { name: "● Start" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
     view.unmount();
     await act(async () => {});
     expect(ipc.invoke).toHaveBeenCalledWith("cancel_recording");
@@ -469,7 +540,8 @@ describe("interaction regressions", () => {
     emit("transcript", { text: "inserted A", injected: true, copied: false });
     expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
     emit("transcript", payload);
-    expect(screen.getByText(`“${payload.text}”`)).toBeInTheDocument();
+    // Once on the stage as it lands, once in Last result. A failure does not land.
+    expect(screen.getAllByText(`“${payload.text}”`)).toHaveLength("error" in payload ? 1 : 2);
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
     expect(screen.queryByText("INSERTED ✓")).not.toBeInTheDocument();
     expect(useStore.getState().lastResult).toMatchObject(payload);
@@ -482,9 +554,9 @@ describe("interaction regressions", () => {
     ipc.invoke.mockImplementation((command: string) => command === "stop_recording"
       ? Promise.resolve({ text: "unconfirmed result", duration_ms: 100 }) : defaultInvoke(command));
     render(<HomeTab />);
-    fireEvent.click(screen.getAllByRole("button", { name: "■ Stop" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "Stop" })[0]);
     await act(async () => {});
-    expect(screen.getByText("“unconfirmed result”")).toBeInTheDocument();
+    expect(screen.getAllByText("“unconfirmed result”")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   });
 
@@ -507,7 +579,7 @@ describe("interaction regressions", () => {
     render(<SettingsTab />);
     const trigger = screen.getByRole("combobox", { name: "Polish provider" });
     fireEvent.click(trigger);
-    const groq = await screen.findByRole("option", { name: /Groq LPU/i });
+    const groq = await screen.findByRole("option", { name: /Groq/i });
     fireEvent.pointerDown(groq, { pointerType: "mouse" });
     fireEvent.click(groq);
     await waitFor(() => expect(useStore.getState().settings?.polish_provider).toBe("off"));
@@ -569,6 +641,165 @@ describe("interaction regressions", () => {
     expect(screen.getByRole("checkbox", { name: "Select dictation 1" })).toBeChecked();
   });
 
+  describe("history beyond the newest page", () => {
+    const entry = (id: number, text = `note ${id}`) => ({ id, text, created_at: "1", duration_ms: 0, source: "dictate" });
+    const newestPage = Array.from({ length: 500 }, (_, i) => entry(1000 - i));
+
+    it("searches the whole database, not only the loaded entries", async () => {
+      useStore.setState({ history: newestPage });
+      ipc.invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+        cmd === "search_history" ? Promise.resolve([entry(3, "Kubernetes rollout")]) : defaultInvoke(cmd, args));
+      render(<HistoryTab />);
+      fireEvent.change(screen.getByRole("textbox", { name: "Search all history" }), { target: { value: "kubernetes" } });
+      expect(await screen.findByText("Kubernetes rollout")).toBeInTheDocument();
+      expect(ipc.invoke).toHaveBeenCalledWith("search_history", { query: "kubernetes" });
+    });
+
+    it("loads older pages on request and stops at the end", async () => {
+      useStore.setState({ history: newestPage });
+      ipc.invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+        cmd === "get_history_before" ? Promise.resolve([entry(400, "an older note")]) : defaultInvoke(cmd, args));
+      const { container } = render(<HistoryTab />);
+      // Only the first rows are drawn; the rest appear as the list end scrolls into view.
+      // Plain DOM queries keep this fast: role queries over 500 rows take a minute in jsdom.
+      const rows = () => container.querySelectorAll("tbody tr").length;
+      expect(rows()).toBe(50);
+      expect(screen.queryByText("Show older dictations")).not.toBeInTheDocument();
+      for (let i = 0; i < 10 && !screen.queryByText("Show older dictations"); i++) {
+        act(() => (globalThis as unknown as { scrollListEnd: () => void }).scrollListEnd());
+      }
+      expect(rows()).toBe(500);
+      fireEvent.click(screen.getByText("Show older dictations"));
+      await waitFor(() => expect(screen.queryByText("Loading…")).not.toBeInTheDocument());
+      expect(ipc.invoke).toHaveBeenCalledWith("get_history_before", { beforeId: 501 });
+      act(() => (globalThis as unknown as { scrollListEnd: () => void }).scrollListEnd());
+      expect(screen.getByText("an older note")).toBeInTheDocument();
+      expect(rows()).toBe(501);
+      // A short page means the end of history: the button does not come back.
+      expect(screen.queryByText("Show older dictations")).not.toBeInTheDocument();
+    });
+
+    it("hides Show older when everything fits on one page", () => {
+      useStore.setState({ history: [entry(1)] });
+      render(<HistoryTab />);
+      expect(screen.queryByRole("button", { name: "Show older dictations" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("sidebar", () => {
+    it("groups the tabs, counts entries without changing link names, and folds with Ctrl+B", async () => {
+      useStore.setState({
+        dictionary: [{ id: 1, word: "OpenDictate", created_at: "1" }, { id: 2, word: "Waleed", created_at: "1" }],
+        models: { ...status, stt_ready: true },
+      });
+      ipc.invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+        cmd === "get_dictionary" ? Promise.resolve(useStore.getState().dictionary)
+          : cmd === "models_status" ? Promise.resolve({ ...status, stt_ready: true })
+          : defaultInvoke(cmd, args));
+      render(<MainApp />);
+      await act(async () => {});
+      const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
+      const words = within(sidebar).getByRole("group", { name: "Words" });
+      expect(within(words).getByRole("button", { name: "Dictionary" })).toHaveTextContent("Dictionary2");
+      expect(within(sidebar).getByRole("button", { name: /^Ready, .*Open Models$/ })).toBeInTheDocument();
+      fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+      expect(within(sidebar).getByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
+      expect(localStorage.getItem("od:sidebar")).toBe("collapsed");
+      fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+      expect(localStorage.getItem("od:sidebar")).toBe("expanded");
+    });
+  });
+
+  describe("delight", () => {
+    it("marks each word milestone once and never for work done before the upgrade", () => {
+      expect(nextMilestone(0, null)).toEqual({ show: null, store: 0 });
+      expect(nextMilestone(12, 0)).toEqual({ show: 1, store: 1 });
+      expect(nextMilestone(900, 1)).toEqual({ show: null, store: 1 });
+      expect(nextMilestone(10_400, 1)).toEqual({ show: 10_000, store: 10_000 });
+      expect(nextMilestone(10_400, 10_000)).toEqual({ show: null, store: 10_000 });
+      // An upgrade with years of words sets the baseline silently.
+      expect(nextMilestone(120_000, null)).toEqual({ show: null, store: 100_000 });
+      // After a stats reset the baseline drops, so milestones can be earned again.
+      expect(nextMilestone(30, 100_000)).toEqual({ show: null, store: 1 });
+    });
+
+    it("describes milestones and time saved in plain numbers", () => {
+      expect(milestoneCopy(10_000)).toEqual({ title: "10,000 words by voice", body: "About 4 hours of typing at 40 words a minute." });
+      expect(milestoneCopy(1_000).body).toBe("About 25 minutes of typing at 40 words a minute.");
+      // 40 words: a minute to type, ten seconds to say.
+      expect(secondsSaved("word ".repeat(40), 10_000)).toBe(50);
+      expect(secondsSaved("hi there", 2_000)).toBeNull();
+      expect(formatSpan(50)).toBe("50 seconds");
+    });
+
+    it("shows the milestone on Home once", async () => {
+      localStorage.setItem("od:milestone-words", "1");
+      useStore.setState({ stats: { daily: [], total_words: 1_050, total_sessions: 9, streak_days: 1, best_day: null, best_words: 0 } });
+      const { unmount } = render(<HomeTab />);
+      const note = await screen.findByRole("status", { name: "Milestone" });
+      expect(note).toHaveTextContent("1,000 words by voice");
+      fireEvent.click(within(note).getByRole("button", { name: "Dismiss" }));
+      expect(screen.queryByRole("status", { name: "Milestone" })).not.toBeInTheDocument();
+      unmount();
+      render(<HomeTab />);
+      await act(async () => {});
+      expect(screen.queryByRole("status", { name: "Milestone" })).not.toBeInTheDocument();
+      localStorage.removeItem("od:milestone-words");
+    });
+
+    it("says what landed on the stage and what it saved", () => {
+      useStore.setState({ settings: { ...settings, voice_actions_enabled: true } });
+      render(<HomeTab />);
+      act(() => useStore.setState({ lastResult: { text: "word ".repeat(40).trim(), duration_ms: 10_000, injected: true } }));
+      expect(screen.getByRole("heading", { name: "Inserted · 40 words" })).toBeInTheDocument();
+      expect(screen.getByText("About 50 seconds quicker than typing it. Undo returns to the previous application, or say “scratch that”.")).toBeInTheDocument();
+    });
+
+    it("puts the real hotkey in the empty Last result", () => {
+      render(<HomeTab />);
+      expect(screen.getAllByLabelText("Global hotkey Ctrl+K")).toHaveLength(2);
+    });
+  });
+
+  describe("learning from corrections", () => {
+    it("suggests names and identifiers, not ordinary word fixes", () => {
+      expect(wordsWorthLearning("open dictate is great", "OpenDictate is great", [])).toEqual(["OpenDictate"]);
+      expect(wordsWorthLearning("I met while ed today", "I met Waleed today", [])).toEqual(["Waleed"]);
+      expect(wordsWorthLearning("edit the file dot json", "edit the file.json and C++", [])).toEqual(["file.json", "C++"]);
+      expect(wordsWorthLearning("put it over their", "put it over there", [])).toEqual([]);
+      expect(wordsWorthLearning("hello. today", "hello. Today", [])).toEqual([]);
+      expect(wordsWorthLearning("use plan light", "use PlanLite", ["planlite"])).toEqual([]);
+      expect(wordsWorthLearning("so im here", "so I'm here", [])).toEqual([]);
+    });
+
+    it("offers the corrected words after an edit and adds the chosen ones", async () => {
+      useStore.setState({ history: [{ id: 1, text: "ship open dictate to sam", created_at: "1", duration_ms: 0, source: "dictate" }] });
+      render(<HistoryTab />);
+      fireEvent.click(screen.getByTitle("Edit"));
+      fireEvent.change(screen.getByRole("textbox", { name: "Edit dictation text" }), {
+        target: { value: "ship OpenDictate to Sam" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      const prompt = await screen.findByRole("region", { name: "Add corrected words to the Dictionary" });
+      fireEvent.click(within(prompt).getByRole("button", { name: "Sam" }));
+      expect(within(prompt).getByRole("button", { name: "Sam" })).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(within(prompt).getByRole("button", { name: "Add 1 word" }));
+      await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith("add_dictionary_word", { word: "OpenDictate" }));
+      expect(ipc.invoke).not.toHaveBeenCalledWith("add_dictionary_word", { word: "Sam" });
+      await waitFor(() => expect(screen.queryByRole("region", { name: /Dictionary/ })).not.toBeInTheDocument());
+    });
+
+    it("does not ask when the edit only fixes ordinary words", async () => {
+      useStore.setState({ history: [{ id: 1, text: "over their", created_at: "1", duration_ms: 0, source: "dictate" }] });
+      render(<HistoryTab />);
+      fireEvent.click(screen.getByTitle("Edit"));
+      fireEvent.change(screen.getByRole("textbox", { name: "Edit dictation text" }), { target: { value: "over there" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(ipc.invoke).toHaveBeenCalledWith("update_history", { id: 1, text: "over there" }));
+      expect(screen.queryByRole("region", { name: /Dictionary/ })).not.toBeInTheDocument();
+    });
+  });
+
   it("B052 sends Test Insert through native snippet expansion", async () => {
     useStore.setState({ snippets: [{ id: 1, trigger: "test", text: "{date}: {clipboard}", created_at: "1" }] });
     render(<SnippetsTab />);
@@ -585,7 +816,7 @@ describe("interaction regressions", () => {
 
   it("B025 leaves Local SLM disabled in the provider menu", async () => {
     render(<SettingsTab />);
-    const polish = screen.getByText("✨ AI Voice Polish").closest("div.rounded-none")!;
+    const polish = screen.getByText("AI voice polish").closest("div.rounded-lg")!;
     fireEvent.click(within(polish as HTMLElement).getByRole("combobox"));
     const option = await screen.findByRole("option", { name: /Local SLM/ });
     expect(option).toHaveAttribute("aria-disabled", "true");

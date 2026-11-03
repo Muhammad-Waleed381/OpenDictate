@@ -58,6 +58,7 @@ export interface Settings {
   groq_api_key?: string | null;
   groq_model?: string | null;
   dock_position?: "bottom_right" | "bottom_center" | "bottom_left" | "top_right" | "top_left";
+  check_updates?: boolean;
 }
 
 export type SettingsPatch = Partial<
@@ -87,6 +88,7 @@ export type SettingsPatch = Partial<
     | "groq_api_key"
     | "groq_model"
     | "dock_position"
+    | "check_updates"
   >
 >;
 
@@ -178,6 +180,20 @@ export interface MicDevice {
 
 export type RecordingMode = "dictate" | "test";
 
+export interface UpdateInfo {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+}
+
+export function checkForUpdate(): Promise<UpdateInfo> {
+  return invoke<UpdateInfo>("check_for_update");
+}
+
+export function openUpdatePage(): Promise<void> {
+  return invoke("open_update_page");
+}
+
 export function listMics(): Promise<MicDevice[]> {
   return invoke<MicDevice[]>("list_mics");
 }
@@ -248,6 +264,16 @@ export function completeOnboarding(): Promise<void> {
 
 export function getHistory(): Promise<HistoryEntry[]> {
   return invoke<HistoryEntry[]>("get_history");
+}
+
+/** Entries older than `beforeId`, newest first, one page at a time. */
+export function getHistoryBefore(beforeId: number): Promise<HistoryEntry[]> {
+  return invoke<HistoryEntry[]>("get_history_before", { beforeId });
+}
+
+/** Searches all history, not only the loaded page. */
+export function searchHistory(query: string): Promise<HistoryEntry[]> {
+  return invoke<HistoryEntry[]>("search_history", { query });
 }
 
 export function deleteHistory(id: number): Promise<void> {

@@ -65,25 +65,25 @@ export function DockButton() {
   const canStop = (isRecording || recording) && !isProcessing;
 
   const live = active || isProcessing;
-  const tint = isInserted ? "ring-emerald-400"
-    : isError ? "ring-rose-400"
-    : isProcessing ? "ring-amber-400"
-    : isRecording ? "ring-rose-500"
-    : isListening ? "ring-sky-400"
+  const tint = isInserted ? "ring-[#A594FF]"
+    : isError ? "ring-[#F354D0]"
+    : isProcessing ? "ring-[#EFECF0]"
+    : isRecording ? "ring-[#F354D0]"
+    : isListening ? "ring-[#A594FF]"
     : "ring-black/20";
 
   let content: ReactNode;
   if (isInserted) {
-    content = <Check className="size-[16px] text-emerald-400" strokeWidth={3} />;
+    content = <Check className="size-[16px] text-[#A594FF]" strokeWidth={3} />;
   } else if (isError) {
-    content = <X className="size-[16px] text-rose-400" strokeWidth={3} />;
+    content = <X className="size-[16px] text-[#F354D0]" strokeWidth={3} />;
   } else if (isProcessing) {
     content = (
       <span className="flex items-end gap-[1.5px]">
         {[0, 1, 2].map((i) => (
           <span
             key={i}
-            className="h-3 w-[2px] animate-od-eq origin-bottom bg-amber-300"
+            className="h-3 w-[2px] animate-od-eq origin-bottom bg-[#EFECF0]"
             style={{
               animationDelay: `${i * 0.15}s`,
               animationDuration: "0.8s",
@@ -98,7 +98,7 @@ export function DockButton() {
         {[0, 1, 2, 3].map((i) => (
           <span
             key={i}
-            className="w-[2px] animate-od-eq origin-bottom bg-rose-400"
+            className="w-[2px] animate-od-eq origin-bottom bg-[#F354D0]"
             style={{
               height: 12,
               animationDelay: `${i * 0.18}s`,
@@ -109,9 +109,9 @@ export function DockButton() {
       </span>
     );
   } else if (isListening) {
-    content = <Mic className="size-[17px] text-sky-400" strokeWidth={2.5} />;
+    content = <Mic className="size-[17px] text-[#A594FF]" strokeWidth={2.5} />;
   } else {
-    content = <Mic className="size-[17px] text-slate-900" strokeWidth={2.5} />;
+    content = <Mic className="size-[17px] text-[#1A1240]" strokeWidth={2.5} />;
   }
 
   const rawLabel =
@@ -132,7 +132,7 @@ export function DockButton() {
         <span
           key={`${state}-${recording}`}
           className={`pointer-events-none absolute inset-0 animate-od-ping rounded-full ${
-            isProcessing ? "bg-amber-400/40" : "bg-rose-500/50"
+            isProcessing ? "bg-[#EFECF0]/40" : "bg-[#F354D0]/50"
           }`}
         />
       )}
@@ -145,7 +145,7 @@ export function DockButton() {
         // on the workspace the user just left.
         onMouseDown={(event) => event.preventDefault()}
         disabled={busy || isProcessing}
-        className={`relative z-10 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 ${live ? "bg-black/90" : "bg-white/90"} ${tint}`}
+        className={`relative z-10 flex size-6 cursor-pointer items-center justify-center rounded-full shadow-lg ring-1 ${live ? "bg-[#1A1240]/95" : "bg-white/90"} ${tint}`}
         aria-label={canStop ? "Stop recording" : "Start recording"}
         title={canStop ? "Stop recording (Ctrl+K)" : "Start recording (Ctrl+K)"}
       >
@@ -156,20 +156,20 @@ export function DockButton() {
 
   const pillElement = pillLabel ? (
     <span
-      className={`flex min-w-0 items-center gap-2 rounded-full px-3 py-1.5 text-[11px] leading-none font-bold tracking-wider text-white shadow-lg ring-1 ${
+      className={`flex min-w-0 items-center gap-2 rounded-full px-3 py-1.5 text-[11px] leading-none font-semibold text-white shadow-lg ring-1 ${
         isRecording
-          ? "bg-black/90 ring-rose-500/80"
+          ? "bg-[#1A1240]/95 ring-[#F354D0]/80"
           : isListening
-            ? "bg-black/90 ring-sky-400/80"
+            ? "bg-[#1A1240]/95 ring-[#A594FF]/80"
             : isProcessing
-              ? "bg-black/90 ring-amber-400/80"
-              : "bg-black/85 ring-white/10"
+              ? "bg-[#1A1240]/95 ring-[#EFECF0]/80"
+              : "bg-[#1A1240]/90 ring-white/10"
       }`}
     >
       {(isRecording || isListening || isProcessing) && (
         <span
           className={`size-2 shrink-0 animate-pulse rounded-full ${
-            isRecording ? "bg-rose-500" : isListening ? "bg-sky-400" : "bg-amber-400"
+            isRecording ? "bg-[#F354D0]" : isListening ? "bg-[#A594FF]" : "bg-[#EFECF0]"
           }`}
         />
       )}
@@ -180,7 +180,7 @@ export function DockButton() {
             <span
               key={i}
               className={`w-[2px] animate-od-eq origin-bottom ${
-                isRecording ? "bg-rose-400" : "bg-amber-400"
+                isRecording ? "bg-[#F354D0]" : "bg-[#EFECF0]"
               }`}
               style={{
                 height: 10,

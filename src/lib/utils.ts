@@ -95,6 +95,38 @@ export function calculateWpm(text: string, durationMs: number): number | null {
   return wpm;
 }
 
+const EDGE_PUNCTUATION = /^[.,!?;:"'“”‘’()[\]{}]+|[.,!?;:"'“”‘’()[\]{}]+$/g;
+
+/**
+ * Words a person typed while correcting a transcript that the recognizer is
+ * likely to get wrong again: names, product names and identifiers. A word
+ * qualifies when it is new to the text, not already in the dictionary, and
+ * looks unusual: a capital after the first letter (OpenDictate, iPhone), a
+ * digit, an inner symbol (file.json, C++), or a capital in mid-sentence (Waleed).
+ * Plain lowercase fixes ("there" for "their") are left alone.
+ */
+export function wordsWorthLearning(before: string, after: string, known: string[]): string[] {
+  const seen = new Set(before.split(/\s+/).map((w) => w.replace(EDGE_PUNCTUATION, "")));
+  const skip = new Set(known.map((w) => w.toLowerCase()));
+  const found: string[] = [];
+  const tokens = after.split(/\s+/).filter(Boolean);
+  tokens.forEach((raw, index) => {
+    const word = raw.replace(EDGE_PUNCTUATION, "");
+    if (word.length < 2 || /['’]/.test(word) || seen.has(word) || skip.has(word.toLowerCase())) return;
+    const startsSentence = index === 0 || /[.!?]["'”’)]*$/.test(tokens[index - 1]);
+    const unusual =
+      /\p{Lu}/u.test(word.slice(1)) ||
+      /\d/.test(word) ||
+      /\p{L}[.\-_+#@/]+\S/u.test(word) ||
+      /[+#]$/.test(word) ||
+      (!startsSentence && /^\p{Lu}/u.test(word));
+    if (!unusual) return;
+    skip.add(word.toLowerCase());
+    found.push(word);
+  });
+  return found.slice(0, 6);
+}
+
 /**
  * Computes aggregate speaking speed statistics across a list of history entries.
  */

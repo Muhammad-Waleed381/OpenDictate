@@ -15,3 +15,16 @@ vi.stubGlobal("ResizeObserver", class {
   unobserve() {}
   disconnect() {}
 });
+
+// jsdom has no IntersectionObserver. Tests call scrollListEnd() to report every
+// observed element as visible, as scrolling to the end of a list would.
+const observers = new Set<{ fire: () => void }>();
+vi.stubGlobal("IntersectionObserver", class {
+  private targets: Element[] = [];
+  private entry = { fire: () => this.callback(this.targets.map((target) => ({ target, isIntersecting: true }))) };
+  constructor(private callback: (entries: { target: Element; isIntersecting: boolean }[]) => void) {}
+  observe(target: Element) { this.targets.push(target); observers.add(this.entry); }
+  unobserve() {}
+  disconnect() { observers.delete(this.entry); }
+});
+(globalThis as { scrollListEnd?: () => void }).scrollListEnd = () => [...observers].forEach((o) => o.fire());

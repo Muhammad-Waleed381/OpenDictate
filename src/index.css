@@ -1,13 +1,31 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/space-grotesk";
+
+/* Geist 1.900 by Vercel, vendored from the official `geist` package (OFL 1.1,
+   see assets/fonts/geist/OFL.txt). The package itself requires Next.js. */
+@font-face {
+    font-family: "Geist";
+    src: url("./assets/fonts/geist/Geist-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Geist Mono";
+    src: url("./assets/fonts/geist/GeistMono-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+}
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
     --font-heading: var(--font-sans);
-    --font-sans: 'Space Grotesk Variable', 'Geist Variable', sans-serif;
+    --font-sans: 'Geist', system-ui, sans-serif;
+    --font-mono: 'Geist Mono', ui-monospace, monospace;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -42,93 +60,133 @@
     --color-background: var(--background);
     --color-brand: var(--brand);
     --color-brand-foreground: var(--brand-foreground);
-    --radius-sm: 0.25rem;
-    --radius-md: 0.375rem;
-    --radius-lg: 0;
-    --radius-xl: 0;
-    --radius-2xl: 0;
-    --radius-3xl: 0;
-    --radius-4xl: 0;
-    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-2xl: 20px;
+    --color-record: var(--record);
+    --color-record-foreground: var(--record-foreground);
+    --color-record-hover: var(--record-hover);
+    --color-record-live: var(--record-live);
+    --color-record-live-foreground: var(--record-live-foreground);
+    --color-stage: var(--stage);
+    --color-stage-foreground: var(--stage-foreground);
+    --color-stage-muted: var(--stage-muted);
+    --color-positive: var(--positive);
+    --color-positive-soft: var(--positive-soft);
+    --color-notice: var(--notice);
+    --color-notice-soft: var(--notice-soft);
     --ease-fluid: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 :root {
     --background: #FFFFFF;
-    --foreground: #000000;
+    --foreground: #1A1240;
     --card: #FFFFFF;
-    --card-foreground: #000000;
+    --card-foreground: #1A1240;
     --popover: #FFFFFF;
-    --popover-foreground: #000000;
-    --primary: #000000;
+    --popover-foreground: #1A1240;
+    --primary: #1A1240;
     --primary-foreground: #FFFFFF;
-    --secondary: #F2F2F2;
-    --secondary-foreground: #000000;
-    --muted: #F2F2F2;
-    --muted-foreground: #525252;
-    --accent: #E8E8E8;
-    --accent-foreground: #000000;
-    --brand: #2545D3;
+    --secondary: #EFECF0;
+    --secondary-foreground: #1A1240;
+    --muted: #EFECF0;
+    --muted-foreground: #5A5370;
+    --accent: #EFECF0;
+    --accent-foreground: #1A1240;
+    --brand: #562FF7;
     --brand-foreground: #FFFFFF;
-    --destructive: #C62828;
+    --destructive: #C4243A;
     --destructive-foreground: #FFFFFF;
-    --border: #000000;
-    --input: #000000;
-    --ring: #2545D3;
-    --chart-1: #000000;
-    --chart-2: #333333;
-    --chart-3: #666666;
-    --chart-4: #999999;
-    --chart-5: #CCCCCC;
-    --radius: 0rem;
-    --sidebar: #FFFFFF;
-    --sidebar-foreground: #000000;
-    --sidebar-primary: #000000;
+    --border: #DCD8E3;
+    --input: #C3BDD0;
+    --ring: #562FF7;
+    --chart-1: #562FF7;
+    --chart-2: #7E60F9;
+    --chart-3: #A390FB;
+    --chart-4: #C7BBFD;
+    --chart-5: #E4DEFE;
+    --radius: 12px;
+    /* A whisper of Marshmallow sets the sidebar apart from the white page; the
+       active item sits on it as a white chip. */
+    --sidebar: #F8F7FA;
+    --sidebar-foreground: #1A1240;
+    --sidebar-primary: #1A1240;
     --sidebar-primary-foreground: #FFFFFF;
-    --sidebar-accent: #E8E8E8;
-    --sidebar-accent-foreground: #000000;
-    --sidebar-border: #000000;
-    --sidebar-ring: #2545D3;
-    --od-shadow: #1a1a1a;
+    --sidebar-accent: #FFFFFF;
+    --sidebar-accent-foreground: #1A1240;
+    --sidebar-border: #E9E6EE;
+    --sidebar-ring: #562FF7;
+    /* Bubblegum is the on-air lamp: only the Record action and a live recording. */
+    --record: #F354D0;
+    --record-hover: #F76FD9;
+    --record-foreground: #2B0524;
+    /* A live recording: the stage, the header lamp. Same pink in light mode. */
+    --record-live: #F354D0;
+    --record-live-foreground: #2B0524;
+    /* The recording stage is Galactic Violet in both themes. */
+    --stage: #562FF7;
+    --stage-foreground: #FFFFFF;
+    --stage-muted: #E8E3FF;
+    --positive: #4520D6;
+    --positive-soft: #E9E3FF;
+    --notice: #8A5300;
+    --notice-soft: #FBEFD9;
 }
 
 .dark {
+    color-scheme: dark;
     --background: #111111;
-    --foreground: #F2F2F2;
-    --card: #1A1A1A;
-    --card-foreground: #F2F2F2;
-    --popover: #1A1A1A;
-    --popover-foreground: #F2F2F2;
-    --primary: #F2F2F2;
+    --foreground: #EFECF0;
+    --card: #1B1B1B;
+    --card-foreground: #EFECF0;
+    --popover: #222222;
+    --popover-foreground: #EFECF0;
+    --primary: #EFECF0;
     --primary-foreground: #111111;
-    --secondary: #262626;
-    --secondary-foreground: #F2F2F2;
-    --muted: #262626;
-    --muted-foreground: #A3A3A3;
-    --accent: #262626;
-    --accent-foreground: #F2F2F2;
-    --brand: #8FA6FF;
-    --brand-foreground: #0A1030;
-    --destructive: #EF5350;
-    --destructive-foreground: #FFFFFF;
-    --border: #3A3A3A;
-    --input: #3A3A3A;
-    --ring: #8FA6FF;
-    --chart-1: #F2F2F2;
-    --chart-2: #C9C9C9;
-    --chart-3: #999999;
-    --chart-4: #666666;
-    --chart-5: #3D3D3D;
-    --radius: 0rem;
-    --sidebar: #161616;
-    --sidebar-foreground: #F2F2F2;
-    --sidebar-primary: #F2F2F2;
+    --secondary: #2A2A2A;
+    --secondary-foreground: #EFECF0;
+    --muted: #222222;
+    --muted-foreground: #B3B0BA;
+    --accent: #2E2E2E;
+    --accent-foreground: #EFECF0;
+    --brand: #A594FF;
+    --brand-foreground: #111111;
+    --destructive: #FF8A9A;
+    --destructive-foreground: #2B0510;
+    --border: #303030;
+    --input: #4D4D4D;
+    --ring: #A594FF;
+    --chart-1: #A594FF;
+    --chart-2: #8571F5;
+    --chart-3: #6A52D8;
+    --chart-4: #4C3AA3;
+    --chart-5: #332768;
+    --radius: 12px;
+    --sidebar: #0C0C0C;
+    --sidebar-foreground: #EFECF0;
+    --sidebar-primary: #EFECF0;
     --sidebar-primary-foreground: #111111;
-    --sidebar-accent: #262626;
-    --sidebar-accent-foreground: #F2F2F2;
-    --sidebar-border: #3A3A3A;
-    --sidebar-ring: #8FA6FF;
-    --od-shadow: rgba(0, 0, 0, 0.55);
+    --sidebar-accent: #1F1F1F;
+    --sidebar-accent-foreground: #EFECF0;
+    --sidebar-border: #222222;
+    --sidebar-ring: #A594FF;
+    /* On a near-black ground, pink sits too close to the violet stage (2.2:1).
+       Dark mode asks to record in acid lime (5.2:1 against the stage) and shows
+       a live recording in the palette's own Marshmallow White. */
+    --record: #C6F24E;
+    --record-hover: #D4F76E;
+    --record-foreground: #172000;
+    --record-live: #EFECF0;
+    --record-live-foreground: #1A1240;
+    --stage: #562FF7;
+    --stage-foreground: #FFFFFF;
+    --stage-muted: #E8E3FF;
+    --positive: #C4B8FF;
+    --positive-soft: #2C2160;
+    --notice: #F0C274;
+    --notice-soft: #33290F;
 }
 
 @layer base {
@@ -150,123 +208,50 @@
     overflow: hidden;
   }
   ::selection {
-    @apply bg-primary text-primary-foreground;
+    background: color-mix(in srgb, var(--brand) 28%, transparent);
     }
-}
-
-@layer components {
-  .brutal {
-    @apply border-2 border-border;
-    box-shadow: 4px 4px 0 0 var(--od-shadow);
-  }
-  .brutal-sm {
-    @apply border-2 border-border;
-    box-shadow: 2px 2px 0 0 var(--od-shadow);
-  }
-  .brutal-lg {
-    @apply border-2 border-border;
-    box-shadow: 8px 8px 0 0 var(--od-shadow);
-  }
-  .brutal-pressed {
-    transform: translate(2px, 2px);
-    box-shadow: 0 0 0 0 var(--od-shadow);
-  }
-  .dark .brutal,
-  .dark .brutal-sm,
-  .dark .brutal-lg {
-    box-shadow: 4px 4px 12px var(--od-shadow);
-  }
-  .dark .brutal-pressed {
-    transform: none;
-    box-shadow: none;
-  }
-  .brutal-inset {
-    box-shadow: inset 3px 3px 0 0 var(--accent);
-  }
-  .hatch {
-    background-image: repeating-linear-gradient(
-      45deg,
-      #000 0 2px,
-      transparent 2px 8px
-    );
-  }
-  .scanlines {
-    background-image: repeating-linear-gradient(
-      0deg,
-      rgba(0, 0, 0, 0.05) 0 1px,
-      transparent 1px 4px
-    );
-  }
-  .halftone {
-    background-image: radial-gradient(#000 1px, transparent 1px);
-    background-size: 8px 8px;
+  body { font-feature-settings: "tnum" 0; }
+  * { scrollbar-width: thin; scrollbar-color: var(--input) transparent; }
+  input, textarea { caret-color: var(--brand); accent-color: var(--brand); }
+  :focus-visible { outline-color: var(--ring); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
 @keyframes od-blink {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-
-@keyframes od-shimmer {
-  from { background-position: 0 0; }
-  to { background-position: 32px 0; }
+  50% { opacity: 0.35; }
 }
 
 @keyframes od-pop {
-  0% { transform: scale(0.94); }
-  60% { transform: scale(1.03); }
-  100% { transform: scale(1); }
-}
-
-@keyframes od-slide-up {
-  from { transform: translateY(10px); opacity: 0; }
+  from { transform: scale(0.97); opacity: 0; }
   to { transform: none; opacity: 1; }
 }
 
-@keyframes od-ants {
-  to { background-position: 24px 0; }
-}
-
-@keyframes od-bounce-y {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
+@keyframes od-slide-up {
+  from { transform: translateY(4px); opacity: 0; }
+  to { transform: none; opacity: 1; }
 }
 
 @utility animate-od-blink {
-  animation: od-blink 1.2s steps(2, start) infinite;
+  animation: od-blink 1.6s ease-in-out infinite;
 }
 
 @utility animate-od-shimmer {
-  background-image: repeating-linear-gradient(
-    -45deg,
-    transparent 0 8px,
-    rgba(0, 0, 0, 0.12) 8px 16px
-  );
-  background-size: 32px 100%;
-  animation: od-shimmer 0.8s linear infinite;
+  animation: od-blink 1.2s ease-in-out infinite;
 }
 
 @utility animate-od-pop {
-  animation: od-pop 0.35s var(--ease-spring) both;
+  animation: od-pop 0.35s var(--ease-fluid) both;
 }
 
 @utility animate-od-slide-up {
-  animation: od-slide-up 0.3s var(--ease-fluid) both;
-}
-
-@utility animate-od-ants {
-  background-image: repeating-linear-gradient(
-    90deg,
-    #000 0 8px,
-    transparent 8px 12px
-  );
-  background-size: 24px 100%;
-  animation: od-ants 0.6s linear infinite;
-}
-
-@utility animate-od-bounce-y {
-  animation: od-bounce-y 0.9s var(--ease-fluid) infinite;
+  animation: od-slide-up 0.2s var(--ease-fluid) both;
 }
 
 @keyframes od-eq {
@@ -296,16 +281,4 @@
 
 @utility animate-od-ping {
   animation: od-ping 1.4s var(--ease-fluid) infinite;
-}
-
-@utility shadow-brutal {
-  box-shadow: 3px 3px 0 0 var(--od-shadow);
-}
-
-@utility shadow-brutal-hover {
-  box-shadow: 1px 1px 0 0 var(--od-shadow);
-}
-
-@utility shadow-brutal-none {
-  box-shadow: 0 0 0 0 var(--od-shadow);
 }

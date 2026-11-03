@@ -1,3 +1,4 @@
+import { Check, Info, X } from "lucide-react";
 import { create } from "zustand";
 import { cn } from "@/lib/utils";
 
@@ -38,26 +39,23 @@ export const toast = {
 const KIND_STYLES: Record<ToastKind, string> = {
   success: "bg-card text-card-foreground",
   error: "bg-destructive text-destructive-foreground",
-  info: "bg-primary text-primary-foreground",
+  info: "bg-card text-card-foreground",
 };
 
-const KIND_MARK: Record<ToastKind, string> = {
-  success: "✓",
-  error: "✕",
-  info: "›",
-};
+const KIND_MARK = { success: Check, error: X, info: Info } satisfies Record<ToastKind, unknown>;
 
 function ToastRow({ item }: { item: ToastItem }) {
+  const Mark = KIND_MARK[item.kind];
   return (
     <button
       onClick={() => useToastStore.getState().dismiss(item.id)}
       className={cn(
-        "pointer-events-auto flex w-full max-w-sm cursor-pointer items-start gap-2 rounded-md border-2 border-border px-3 py-2 text-left text-xs font-bold uppercase tracking-wide shadow-brutal animate-od-slide-up",
+        "pointer-events-auto flex w-full max-w-sm cursor-pointer items-start gap-2 rounded-md border border-border px-3 py-2 text-left text-xs font-semibold animate-od-slide-up",
         KIND_STYLES[item.kind],
       )}
       role="status"
     >
-      <span aria-hidden>{KIND_MARK[item.kind]}</span>
+      <Mark className="mt-0.5 size-4 shrink-0" aria-hidden />
       <span className="min-w-0 break-words">{item.message}</span>
     </button>
   );

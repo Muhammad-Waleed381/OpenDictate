@@ -5,17 +5,15 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const badgeVariants = cva(
-  "group/badge inline-flex h-6 w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-none border-2 border-border px-2 py-0.5 text-xs font-bold uppercase tracking-wide whitespace-nowrap transition-all duration-150 ease-spring focus-visible:ring-[3px] focus-visible:ring-ring has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive [&>svg]:pointer-events-none [&>svg]:size-3!",
+  "group/badge inline-flex h-6 w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-sm border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-colors duration-150 ease-fluid focus-visible:ring-[3px] focus-visible:ring-ring has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive [&>svg]:pointer-events-none [&>svg]:size-3!",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground shadow-[2px_2px_0_0_var(--od-shadow)] [a]:hover:shadow-none [a]:hover:translate-x-[2px] [a]:hover:translate-y-[2px]",
-        secondary:
-          "bg-secondary text-secondary-foreground shadow-[2px_2px_0_0_var(--od-shadow)] [a]:hover:shadow-none [a]:hover:translate-x-[2px] [a]:hover:translate-y-[2px]",
+        default: "bg-positive-soft text-positive",
+        secondary: "bg-secondary text-secondary-foreground",
         destructive:
-          "bg-primary text-primary-foreground shadow-[2px_2px_0_0_var(--od-shadow)] [a]:hover:shadow-none [a]:hover:translate-x-[2px] [a]:hover:translate-y-[2px]",
-        outline:
-          "border-border bg-background text-foreground shadow-[2px_2px_0_0_var(--od-shadow)] [a]:hover:bg-accent",
+          "bg-primary text-primary-foreground [a]: [a]:",
+        outline: "border-input bg-transparent text-muted-foreground",
         ghost:
           "border-border bg-transparent text-foreground shadow-none hover:bg-accent",
         link: "border-transparent bg-transparent text-primary underline-offset-4 hover:underline shadow-none",

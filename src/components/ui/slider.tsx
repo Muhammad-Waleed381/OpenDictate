@@ -31,10 +31,11 @@ function Slider({
       value={value}
       onChange={(e) => onChange(Number(e.target.value))}
       className={cn(
-        "h-2 w-full cursor-pointer appearance-none rounded-full border-2 border-border bg-secondary outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-border [&::-webkit-slider-thumb]:bg-brand",
+        "h-2 w-full cursor-pointer appearance-none rounded-full bg-secondary outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-card [&::-webkit-slider-thumb]:bg-brand",
         className,
       )}
       style={{
+        // taste-skill-allow: a hard-stop track fill, the only way to fill a native range.
         background: `linear-gradient(to right, var(--brand) ${pct}%, var(--secondary) ${pct}%)`,
         ...style,
       }}

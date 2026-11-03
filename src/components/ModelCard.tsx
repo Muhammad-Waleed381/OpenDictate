@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "@/components/ui/toast";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
-import { Loader2 } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
@@ -304,10 +304,10 @@ export function ModelCard() {
           <button
             type="button"
             onClick={() => setSearchQuery("")}
-            className="absolute right-2.5 flex size-5 items-center justify-center text-xs font-bold text-muted-foreground hover:text-foreground cursor-pointer"
+            className="absolute right-2.5 flex size-5 items-center justify-center text-xs font-semibold text-muted-foreground hover:text-foreground cursor-pointer"
             aria-label="Clear search"
           >
-            ✕
+            <X className="size-3.5" aria-hidden />
           </button>
         )}
       </div>
@@ -317,10 +317,10 @@ export function ModelCard() {
           <button
             type="button"
             onClick={() => setSelectedCompany(null)}
-            className={`inline-flex items-center gap-1.5 border px-2.5 py-1 text-xs font-bold tracking-wider uppercase transition-colors cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
               selectedCompany === null
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-border bg-card text-foreground hover:bg-accent"
+                ? "border-transparent bg-muted text-foreground"
+                : "border-border bg-card text-muted-foreground hover:bg-accent"
             }`}
           >
             All
@@ -332,10 +332,10 @@ export function ModelCard() {
                 key={comp}
                 type="button"
                 onClick={() => setSelectedCompany(isSelected ? null : comp)}
-                className={`inline-flex items-center gap-1.5 border px-2.5 py-1 text-xs font-bold tracking-wider uppercase transition-colors cursor-pointer ${
+                className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
                   isSelected
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-card text-foreground hover:bg-accent"
+                    ? "border-transparent bg-muted text-foreground"
+                    : "border-border bg-card text-muted-foreground hover:bg-accent"
                 }`}
               >
                 <CompanyLogo company={comp} className="size-3.5 shrink-0" />
@@ -346,16 +346,16 @@ export function ModelCard() {
         </div>
       )}
 
-      <div className="flex border-2 border-border">
+      <div className="flex w-fit max-w-full gap-0.5 rounded-md bg-secondary p-0.5">
         {(["streaming", "non-streaming"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setView(tab)}
-            className={`min-w-0 flex-1 truncate border-border px-2 py-2 text-xs font-bold tracking-widest uppercase ${
+            className={`min-w-0 cursor-pointer truncate rounded-sm px-3 py-1.5 text-[13px] font-medium transition-colors ${
               view === tab
-                ? "bg-primary text-primary-foreground"
-                : "bg-card text-foreground hover:bg-accent"
-            } ${tab === "non-streaming" ? "border-l-2" : ""}`}
+                ? "bg-card text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
           >
              {SECTION_LABELS[tab]}
           </button>
@@ -365,7 +365,7 @@ export function ModelCard() {
       {(tabModels.length > 0 || (searchQuery.trim() && catalog.length > 0)) && (
         <div className="flex flex-col gap-2">
           <div className="flex flex-col">
-            <h3 className="text-xs font-bold uppercase tracking-widest">
+            <h3 className="text-xs font-semibold">
               Speech-to-text engines
             </h3>
             <p className="mb-2 text-xs text-muted-foreground">{SECTION_HINTS[view]}</p>
@@ -384,59 +384,45 @@ export function ModelCard() {
                 return (
                   <div
                     key={model.id}
-                    className={`flex flex-col gap-2 border-2 p-3 ${
+                    className={`flex flex-col gap-2 rounded-lg border p-3 ${
                       model.available
                         ? isActive
-                          ? "border-border bg-primary text-primary-foreground"
+                          ? "border-brand bg-card ring-1 ring-brand"
                           : "border-border bg-card"
-                        : "border-muted bg-muted"
-                    } ${i > 0 ? "border-t-0" : ""}`}
+                        : "border-border bg-muted"
+                    } ${i > 0 ? "mt-2" : ""}`}
                   >
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span
-                        className={`flex size-5 shrink-0 items-center justify-center border-2 text-[10px] font-bold ${
-                          model.available
-                            ? isActive
-                              ? "border-primary-foreground bg-primary-foreground text-primary"
-                              : "border-primary bg-primary text-primary-foreground"
-                            : "border-muted-foreground/50 text-muted-foreground"
-                        }`}
-                      >
-                        ASR
-                      </span>
-                      <span className="text-sm font-bold tracking-wide uppercase">
+                      
+                      <span className="text-sm font-semibold ">
                         {model.name}
                       </span>
                       {model.company && (
                         <span
-                          className={`inline-flex items-center gap-1 border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
-                            isActive
-                              ? "border-primary-foreground/40 bg-primary-foreground/15 text-primary-foreground"
-                              : "border-border bg-muted/60 text-foreground"
-                          }`}
+                          className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
                         >
                           <CompanyLogo company={model.company} className="size-3 shrink-0" />
                           <span>{model.company}</span>
                         </span>
                       )}
                       {model.id === "nemo-streaming-fastconformer-ctc-en-80ms" && (
-                        <span className="border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-500 uppercase tracking-wider">
-                          ★ Recommended (Streaming Speed)
+                        <span className="rounded-sm bg-notice-soft px-2 py-0.5 text-[11px] font-semibold text-notice">
+                          Recommended (Streaming Speed)
                         </span>
                       )}
                       {model.id === "parakeet-tdt-ctc-110m-int8" && (
-                        <span className="border border-emerald-500/50 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-500 uppercase tracking-wider">
-                          ★ Recommended (Default / Balanced)
+                        <span className="rounded-sm bg-positive-soft px-2 py-0.5 text-[11px] font-semibold text-positive">
+                          Recommended (Default / Balanced)
                         </span>
                       )}
                       {model.id === "whisper-turbo-en" && (
-                        <span className="border border-sky-500/50 bg-sky-500/10 px-2 py-0.5 text-[10px] font-bold text-sky-500 uppercase tracking-wider">
-                          ★ Recommended (High Accuracy)
+                        <span className="rounded-sm bg-secondary px-2 py-0.5 text-[11px] font-semibold text-secondary-foreground">
+                          Recommended (High Accuracy)
                         </span>
                       )}
                       <span
-                        className={`ml-auto min-w-0 truncate text-[11px] font-bold tracking-wider uppercase tabular-nums ${
-                          isActive ? "text-primary-foreground/70" : "text-muted-foreground"
+                        className={`ml-auto min-w-0 truncate text-[11px] font-semibold tabular-nums ${
+                          "text-muted-foreground"
                         }`}
                       >
                         {size !== null
@@ -448,18 +434,14 @@ export function ModelCard() {
                       {model.installed ? (
                         <>
                           <span
-                            className={`border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
-                              isActive
-                                ? "border-primary-foreground text-primary bg-primary-foreground"
-                                : "border-primary bg-primary text-primary-foreground"
-                            }`}
+                            className="rounded-sm bg-positive-soft px-1.5 py-0.5 text-xs font-medium text-positive"
                           >
-                            ✓ Installed
+                            Installed
                           </span>
                           <Button
                             size="sm"
                             variant="ghost"
-                            className={isActive ? "text-primary-foreground hover:bg-primary-foreground/20 hover:text-primary-foreground" : "text-muted-foreground"}
+                            className="text-muted-foreground"
                             onClick={() => handleDelete(model.id)}
                             disabled={recording || busy}
                           >
@@ -474,13 +456,13 @@ export function ModelCard() {
                             disabled={cancelling}
                             onClick={() => handleCancelDownload(model.id)}
                           >
-                            {cancelling ? "Cancelling…" : "✕ Cancel"}
+                            {cancelling ? "Cancelling…" : "Cancel"}
                           </Button>
                         ) : (
                           <Button
                             size="sm"
                             variant={isActive ? "outline" : "default"}
-                            className={isActive ? "border-primary-foreground text-primary-foreground shadow-none" : ""}
+                            className={""}
                             onClick={() => handleDownload(model.id)}
                             disabled={anyDownloading}
                           >
@@ -488,13 +470,13 @@ export function ModelCard() {
                           </Button>
                         )
                       ) : (
-                        <span className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground">
+                        <span className="text-[11px] font-semibold text-muted-foreground">
                           Coming soon
                         </span>
                       )}
                       {model.installed && (
                         model.engine_key != null && isActive ? (
-                          <span className="ml-auto animate-od-blink border border-primary-foreground px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase">
+                          <span className="ml-auto animate-od-blink border border-primary-foreground px-1.5 py-0.5 text-[11px] font-semibold ">
                             In use
                           </span>
                         ) : (
@@ -519,7 +501,7 @@ export function ModelCard() {
                     )}
                     {progress ? (
                       <div className="flex flex-col gap-1">
-                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
+                        <div className="flex items-center justify-between text-[11px] font-semibold tabular-nums">
                           <span>
                             {cancelling ? "Cancelling…" : progress.total > 0 && progress.received >= progress.total ? "Installing…" : "Downloading…"}
                             {progress.speedBytesPerSec && progress.speedBytesPerSec > 0
@@ -543,13 +525,13 @@ export function ModelCard() {
                       </div>
                     ) : busy ? (
                       <div className="flex flex-col gap-1">
-                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider">
+                        <div className="flex items-center justify-between text-[11px] font-semibold">
                           <span className="flex items-center gap-1.5">
                             <Loader2 className="size-3 animate-spin" />
                             {cancelling ? "Cancelling…" : "Connecting…"}
                           </span>
                         </div>
-                        <div className="h-4 w-full border-2 border-border bg-background overflow-hidden">
+                        <div className="h-4 w-full border border-border bg-background overflow-hidden">
                           <div className="h-full w-full bg-primary/20 animate-od-shimmer" />
                         </div>
                       </div>
@@ -559,7 +541,7 @@ export function ModelCard() {
               })}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center border-2 border-dashed border-border p-6 text-center">
+            <div className="flex flex-col items-center justify-center border border-dashed border-border p-6 text-center">
               <p className="text-xs text-muted-foreground">
                 No models match “<span className="font-semibold text-foreground">{searchQuery}</span>”
               </p>
@@ -589,20 +571,20 @@ export function ModelCard() {
       )}
 
       {modelsStatus?.gpu_active && (
-        <span className="w-fit border-2 border-primary bg-primary px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-primary-foreground">
-          GPU ✓ {modelsStatus.gpu_mode}
+        <span className="w-fit rounded-sm bg-positive-soft px-1.5 py-0.5 text-xs font-medium text-positive">
+          GPU: {modelsStatus.gpu_mode}
         </span>
       )}
       {captionModel && (
-        <div className="flex flex-col gap-2 border-2 border-dashed border-border bg-card p-3">
+        <div className="flex flex-col gap-2 border border-dashed border-border bg-card p-3">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="border border-border px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-muted-foreground">
+            <span className="border border-border px-1.5 py-0.5 text-[11px] font-semibold text-muted-foreground">
               Built-in
             </span>
-            <span className="text-sm font-bold uppercase tracking-wide">{captionModel.name}</span>
+            <span className="text-sm font-semibold">{captionModel.name}</span>
             {captionModel.installed ? (
-              <span className="border border-border bg-primary px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase text-primary-foreground">
-                ✓ Ready
+              <span className="rounded-sm bg-positive-soft px-1.5 py-0.5 text-xs font-medium text-positive">
+                Ready
               </span>
             ) : captionBusy ? (
               <Button
@@ -613,7 +595,7 @@ export function ModelCard() {
                 disabled={captionCancelling}
                 onClick={() => handleCancelDownload(captionModel.id)}
               >
-                {captionCancelling ? "Cancelling…" : "✕ Cancel"}
+                {captionCancelling ? "Cancelling…" : "Cancel"}
               </Button>
             ) : (
               <span className="ml-auto">
@@ -625,7 +607,7 @@ export function ModelCard() {
           </div>
           {captionProgress ? (
             <div className="flex flex-col gap-1">
-              <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider tabular-nums">
+              <div className="flex items-center justify-between text-[11px] font-semibold tabular-nums">
                 <span>
                   {captionCancelling ? "Cancelling…" : captionProgress.total > 0 && captionProgress.received >= captionProgress.total ? "Installing…" : "Downloading…"}
                   {captionProgress.speedBytesPerSec && captionProgress.speedBytesPerSec > 0
@@ -649,19 +631,19 @@ export function ModelCard() {
             </div>
           ) : captionBusy ? (
             <div className="flex flex-col gap-1">
-              <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider">
+              <div className="flex items-center justify-between text-[11px] font-semibold">
                 <span className="flex items-center gap-1.5">
                   <Loader2 className="size-3 animate-spin" />
                   {captionCancelling ? "Cancelling…" : "Connecting…"}
                 </span>
               </div>
-              <div className="h-4 w-full border-2 border-border bg-background overflow-hidden">
+              <div className="h-4 w-full border border-border bg-background overflow-hidden">
                 <div className="h-full w-full bg-primary/20 animate-od-shimmer" />
               </div>
             </div>
           ) : null}
           <p className="text-xs text-muted-foreground">
-            Powers live captions during dictation — works with every model. Auto-fetched in the
+            Powers live captions during dictation and works with every model. Auto-fetched in the
             background; safe to delete (it re-downloads on demand).
           </p>
         </div>
@@ -675,7 +657,7 @@ export function ModelCard() {
           <div className="flex items-center gap-2">
             {downloadAllStatus ? (
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-muted-foreground uppercase">
+                <span className="text-xs font-semibold text-muted-foreground ">
                   Downloading {downloadAllStatus.current} of {downloadAllStatus.total} ({downloadAllStatus.name})…
                 </span>
                 <Button size="sm" variant="destructive" onClick={handleCancelAll}>
@@ -692,8 +674,8 @@ export function ModelCard() {
       </div>
 
       {error && (
-        <div className="border-2 border-primary bg-primary px-2 py-1.5 text-xs font-bold text-primary-foreground uppercase">
-          ✕ {error}
+        <div className="rounded-md bg-destructive/10 px-3 py-2 text-[13px] text-destructive ">
+          {error}
         </div>
       )}
       <p className="text-xs text-muted-foreground">

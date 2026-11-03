@@ -337,7 +337,15 @@ export const useStore = create<OpenDictateStore>()((set, get) => ({
       await Promise.all([
         api.getModelsStatus().catch(() => null),
         api.getModelsCatalog().catch(() => []),
-        api.getHistory().catch(() => []),
+        // History is shown as soon as it arrives on first load instead of
+        // waiting for the slowest call, such as a stuck audio server.
+        api
+          .getHistory()
+          .then((history) => {
+            if (!get().hydrated) set({ history });
+            return history;
+          })
+          .catch(() => []),
         api.getDictionary().catch(() => []),
         api.listSnippets().catch(() => []),
         api.listMics().catch(() => []),

@@ -143,9 +143,9 @@ fn glyph(status: &str) -> Vec<u8> {
     canvas.circle(11.0 * SS, 11.0 * SS, 11.0 * SS, backdrop);
 
     match status {
-        "listening" | "recording" => mic(&mut canvas, [1.0, 0.30, 0.30, 1.0]),
-        "transcribing" => mic(&mut canvas, [1.0, 0.69, 0.13, 1.0]),
-        "inserted" => check(&mut canvas, [0.20, 0.83, 0.60, 1.0]),
+        "listening" | "recording" => mic(&mut canvas, [0.95, 0.33, 0.82, 1.0]),
+        "transcribing" => mic(&mut canvas, [0.65, 0.58, 1.0, 1.0]),
+        "inserted" => check(&mut canvas, [0.65, 0.58, 1.0, 1.0]),
         "error" => cross(&mut canvas, [1.0, 0.32, 0.32, 1.0]),
         _ => mic(&mut canvas, [1.0, 1.0, 1.0, 1.0]),
     }

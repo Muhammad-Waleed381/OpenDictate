@@ -111,7 +111,7 @@ export function DictionaryTab() {
           <Button variant="outline" onClick={handleExport} disabled={dictionary.length === 0}>
             Export dictionary
           </Button>
-          <label className="inline-flex cursor-pointer items-center border-2 border-border bg-card px-3 py-2 text-xs font-bold uppercase shadow-brutal hover:bg-primary hover:text-primary-foreground">
+          <label className="inline-flex h-9 cursor-pointer items-center rounded-md border border-input bg-card px-4 text-sm font-medium transition-colors hover:bg-accent">
             Import dictionary
             <input type="file" accept=".txt,.csv" className="sr-only" onChange={handleImport} />
           </label>
@@ -126,24 +126,25 @@ export function DictionaryTab() {
             placeholder="Search dictionary terms…"
             className="max-w-xs"
           />
-          <span className="text-xs font-bold uppercase text-muted-foreground tabular-nums">
+          <span className="text-xs font-semibold text-muted-foreground tabular-nums">
             Showing {filteredDictionary.length} of {dictionary.length} words
           </span>
         </div>
       )}
 
       {dictionary.length === 0 ? (
-        <div className="border-2 border-dashed border-border p-6 text-center">
-          <p className="text-sm font-bold uppercase tracking-wider">
+        <div className="rounded-lg border border-dashed border-border p-6 text-center text-pretty">
+          <p className="text-sm font-semibold">
             No custom words yet
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Add words to improve recognition for names, jargon, and acronyms.
+            Add the names, jargon and acronyms the recognizer gets wrong. Correcting a transcript
+            in History offers its new names here too.
           </p>
         </div>
       ) : filteredDictionary.length === 0 ? (
-        <div className="border-2 border-dashed border-border p-6 text-center">
-          <p className="text-sm font-bold uppercase tracking-wider">
+        <div className="rounded-lg border border-dashed border-border p-6 text-center text-pretty">
+          <p className="text-sm font-semibold">
             No words match “{searchQuery}”
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -157,7 +158,7 @@ export function DictionaryTab() {
               {entry.word}
               <button
                 onClick={() => handleRemove(entry.word)}
-                className="flex size-4 items-center justify-center border border-border bg-card text-xs font-bold transition-colors hover:bg-destructive hover:text-destructive-foreground"
+                className="flex size-4 items-center justify-center border border-border bg-card text-xs font-semibold transition-colors hover:bg-destructive hover:text-destructive-foreground"
                 aria-label={`Remove ${entry.word}`}
               >
                 ×

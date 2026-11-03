@@ -5,6 +5,8 @@ import { formatHotkey, DEFAULT_HOTKEY } from "@/lib/utils";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { MicTest } from "@/components/MicTest";
+import { Check } from "lucide-react";
+import { Mark } from "@/components/Mark";
 import { ModelCard } from "@/components/ModelCard";
 import { toast } from "@/components/ui/toast";
 
@@ -81,10 +83,8 @@ export function Onboarding() {
         <div className="flex flex-col gap-4 p-5 pb-4">
           <DialogHeader>
             <div className="flex items-center gap-2">
-              <span className="flex size-6 shrink-0 items-center justify-center border-2 border-primary bg-primary text-xs font-bold text-primary-foreground">
-                OD
-              </span>
-              <DialogTitle>Setup — 3 quick steps</DialogTitle>
+              <Mark />
+              <DialogTitle>Set up in 3 steps</DialogTitle>
             </div>
             <DialogDescription>
               Test your microphone, choose how speech is recognized, and learn your shortcut.
@@ -100,18 +100,18 @@ export function Onboarding() {
                 <div key={label} className="flex min-w-0 flex-1 items-center">
                   <div className="flex min-w-0 flex-col items-center gap-1.5">
                     <span
-                      className={`flex size-8 shrink-0 items-center justify-center border-2 border-primary text-xs font-bold transition-all duration-200 ease-spring ${
+                      className={`flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition-colors duration-200 ease-fluid ${
                         complete
-                          ? "bg-primary text-primary-foreground"
+                          ? "bg-brand text-brand-foreground"
                           : active
-                            ? "bg-primary text-primary-foreground shadow-brutal"
-                            : "bg-card text-muted-foreground"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-secondary text-muted-foreground"
                       }`}
                     >
-                      {complete ? "✓" : `0${n}`}
+                      {complete ? <Check className="size-4" aria-hidden /> : n}
                     </span>
                     <span
-                      className={`max-w-full truncate text-[10px] font-bold uppercase tracking-wider ${
+                      className={`max-w-full truncate text-[11px] font-semibold ${
                         active ? "text-foreground" : "text-muted-foreground"
                       }`}
                     >
@@ -121,7 +121,7 @@ export function Onboarding() {
                   {i < STEPS.length - 1 && (
                     <span
                       className={`mx-2 mb-5 h-0.5 min-w-2 flex-1 ${
-                        complete || (active && n === step) ? "bg-primary" : "bg-muted-foreground/40"
+                        complete || (active && n === step) ? "bg-brand" : "bg-input"
                       }`}
                     />
                   )}
@@ -132,11 +132,11 @@ export function Onboarding() {
         </div>
 
         <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-1">
-          <div className="flex flex-col gap-4 border-2 border-border bg-card p-4 shadow-brutal">
+          <div className="flex flex-col gap-4 border border-border bg-card p-4">
             {step === 1 && <MicTest />}
             {step === 2 && <ModelCard />}
             {step === 2 && vadMissing && (
-              <div className="mt-3 flex items-center justify-between gap-2 border-2 border-border p-2 text-xs">
+              <div className="mt-3 flex items-center justify-between gap-2 border border-border p-2 text-xs">
                 <span>Speech detection is missing. It is required to continue.</span>
                 <Button size="sm" variant="outline" onClick={handleRetryVad} disabled={vadBusy}>
                   {vadBusy ? "Downloading…" : "Retry"}
@@ -145,7 +145,7 @@ export function Onboarding() {
             )}
             {step === 3 && (
               <div className="flex flex-col items-center gap-4 py-2">
-                <span className="border-2 border-primary bg-primary px-4 py-2 text-lg font-bold tracking-widest text-primary-foreground uppercase shadow-brutal">
+                <span className="rounded-md bg-secondary px-4 py-2 text-lg font-semibold text-foreground ">
                   {formatHotkey(settings?.hotkey ?? DEFAULT_HOTKEY)}
                 </span>
                 <p className="text-center text-sm">
@@ -158,7 +158,7 @@ export function Onboarding() {
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-between gap-2 border-t-2 border-border bg-muted p-4">
+        <div className="mt-4 flex items-center justify-between gap-2 border-t border-border bg-muted p-4">
           <Button
             variant="ghost"
             onClick={() => setStep((s) => Math.max(1, s - 1))}

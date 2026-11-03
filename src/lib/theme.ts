@@ -7,13 +7,15 @@ interface ThemeStore {
   setPref: (pref: ThemePref) => void;
 }
 
-const STORAGE_KEY = "od:theme";
+// A new key: the white theme is the default look, so installs that had saved
+// "system" under the old key open light once. Dark and System stay available.
+const STORAGE_KEY = "od:theme-v2";
 
 function loadPref(): ThemePref {
   const value = localStorage.getItem(STORAGE_KEY);
   return value === "light" || value === "dark" || value === "system"
     ? value
-    : "system";
+    : "light";
 }
 
 export const useTheme = create<ThemeStore>()((set) => ({
