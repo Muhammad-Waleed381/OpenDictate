@@ -3515,7 +3515,7 @@ dependencies = [
 
 [[package]]
 name = "opendictate"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "core-foundation 0.9.4",
@@ -3547,7 +3547,7 @@ dependencies = [
 
 [[package]]
 name = "opendictate-core"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "bzip2 0.5.2",
  "chrono",
