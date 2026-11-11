@@ -222,6 +222,37 @@ describe("model lifecycle regressions", () => {
       expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
     });
 
+    it("installs in place when this copy can update itself, and falls back to the page on failure", async () => {
+      const installable = { ...newer, can_install: true, download_size: 1000 };
+      let reject: (e: Error) => void = () => {};
+      ipc.invoke.mockImplementation((cmd: string) => {
+        if (cmd === "check_for_update") return Promise.resolve(installable);
+        if (cmd === "install_update") return new Promise((_, r) => (reject = r));
+        return defaultInvoke(cmd);
+      });
+      render(<UpdatePrompt />);
+      const popup = await screen.findByRole("complementary", { name: "Update available" });
+      expect(within(popup).queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+      fireEvent.click(within(popup).getByRole("button", { name: "Update now" }));
+      expect(ipc.invoke).toHaveBeenCalledWith("install_update");
+      // While it runs there is nothing to click, only progress.
+      expect(await within(popup).findByText("Downloading…")).toBeInTheDocument();
+      expect(within(popup).queryByRole("button", { name: "Later" })).not.toBeInTheDocument();
+      await act(async () => reject(new Error("the download did not match its checksum")));
+      expect(await within(popup).findByRole("alert")).toHaveTextContent("checksum");
+      fireEvent.click(within(popup).getByRole("button", { name: "Download" }));
+      expect(ipc.invoke).toHaveBeenCalledWith("open_update_page");
+    });
+
+    it("offers Download and install in Settings only when the update can be installed", async () => {
+      useStore.setState({ settings });
+      withUpdate(() => Promise.resolve({ ...newer, can_install: true }));
+      render(<UpdateSettings />);
+      fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Download and install" }));
+      expect(ipc.invoke).toHaveBeenCalledWith("install_update");
+    });
+
     it("stays silent when up to date or when the check fails", async () => {
       withUpdate(() => Promise.resolve(latest));
       const { unmount } = render(<UpdatePrompt />);

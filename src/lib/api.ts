@@ -188,6 +188,24 @@ export interface UpdateInfo {
   current_version: string;
   latest_version: string;
   update_available: boolean;
+  /** True when this copy can download and install the update itself. */
+  can_install?: boolean;
+  download_size?: number | null;
+}
+
+export interface UpdateProgress {
+  stage: "downloading" | "verifying" | "installing";
+  downloaded: number;
+  total: number;
+}
+
+/** Downloads, checks and installs the newest release, then restarts the app. */
+export function installUpdate(): Promise<void> {
+  return invoke("install_update");
+}
+
+export function onUpdateProgress(cb: (p: UpdateProgress) => void): Promise<UnlistenFn> {
+  return listen<UpdateProgress>("update-progress", (event) => cb(event.payload));
 }
 
 export function checkForUpdate(): Promise<UpdateInfo> {

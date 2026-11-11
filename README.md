@@ -68,7 +68,7 @@ Cloud dictation tools require sending raw audio across the internet, paying recu
 - ✂️ **Snippet Expansion** — Expand boilerplate text templates on the fly by saying `"insert snippet <trigger>"`.
 - 🪄 **Optional AI Voice Polish** — Clean up disfluencies, remove filler words ("um", "ah"), or auto-format raw thoughts into bullet points using local SLMs or cloud LLMs (Groq).
 - 📅 **History & Yearly Heatmap** — Full searchable history stored in a local SQLite database with GitHub-style annual activity heatmap.
-- 🔒 **100% Private & Offline** — No accounts, no subscriptions, and no telemetry. After model downloads, the only automatic network call is a version check against GitHub when the app opens, which you can turn off in Settings.
+- 🔒 **100% Private & Offline** — No accounts, no subscriptions, and no telemetry. After model downloads, the only automatic network call is a version check against GitHub when the app opens, which you can turn off in Settings. Updates are downloaded and installed only when you click Update. The app fetches the installer for your platform from this repository's GitHub release, checks its SHA-256 digest, then installs it and restarts.
 
 ---
 

@@ -72,6 +72,7 @@ pub fn run() {
             commands::undo_last_insert,
             commands::warmup_model,
             update::check_for_update,
+            update::install_update,
             update::open_update_page,
             commands::word_stats,
             commands::reset_word_stats,
