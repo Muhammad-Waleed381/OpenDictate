@@ -729,6 +729,8 @@ mod tests {
         .unwrap();
         let loaded = load_settings(&conn);
         assert_eq!(loaded.dock_position, "bottom_right");
+        // Settings saved before the visibility option existed keep the dock.
+        assert_eq!(loaded.dock_visibility, "always");
     }
 
     #[test]

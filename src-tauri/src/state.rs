@@ -34,6 +34,7 @@ pub struct SettingsPatch {
     pub groq_api_key: Option<String>,
     pub groq_model: Option<String>,
     pub dock_position: Option<String>,
+    pub dock_visibility: Option<String>,
     pub check_updates: Option<bool>,
 }
 
@@ -95,6 +96,9 @@ pub struct Settings {
     pub groq_model: Option<String>,
     #[serde(default = "default_dock_position")]
     pub dock_position: String,
+    /// When the dock is on screen: `always`, `while_dictating` or `never`.
+    #[serde(default = "default_dock_visibility")]
+    pub dock_visibility: String,
 }
 
 fn default_check_updates() -> bool {
@@ -153,6 +157,10 @@ fn default_dock_position() -> String {
     "bottom_right".to_string()
 }
 
+fn default_dock_visibility() -> String {
+    "always".to_string()
+}
+
 /// macOS reserves the Ctrl+Alt/Option row for input-source switching and treats
 /// Cmd as the primary modifier, so `ctrl+alt+space` is both unidiomatic and
 /// liable to collide there. Cmd+Space (Spotlight) and Cmd+Option+Space (Finder
@@ -196,6 +204,7 @@ impl Default for Settings {
             groq_api_key: None,
             groq_model: default_groq_model(),
             dock_position: default_dock_position(),
+            dock_visibility: default_dock_visibility(),
             check_updates: default_check_updates(),
             streaming_rtf_x100: 0,
             streaming_rtf_version: String::new(),

@@ -3,6 +3,7 @@ import * as api from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/toast";
 
@@ -13,10 +14,67 @@ function openUpdatePage() {
   api.openUpdatePage().catch((e) => toast.error(`Could not open the download page: ${String(e)}`));
 }
 
+type InstallState =
+  | { kind: "idle" }
+  | { kind: "working"; stage: api.UpdateProgress["stage"]; downloaded: number; total: number }
+  | { kind: "failed"; message: string };
+
+/** Runs the in-app install and follows its progress. */
+function useInstall() {
+  const [state, setState] = useState<InstallState>({ kind: "idle" });
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    api
+      .onUpdateProgress((p) => {
+        if (active) setState({ kind: "working", ...p });
+      })
+      .then((off) => (active ? (unlisten = off) : off()))
+      .catch(() => {});
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const start = () => {
+    setState({ kind: "working", stage: "downloading", downloaded: 0, total: 0 });
+    // On success the app restarts, so there is nothing to do afterwards.
+    api.installUpdate().catch((e) => setState({ kind: "failed", message: String(e) }));
+  };
+
+  return { state, start };
+}
+
+function progressText(state: Extract<InstallState, { kind: "working" }>): string {
+  if (state.stage === "installing") return "Installing. The app will restart.";
+  if (state.total > 0) {
+    return `Downloading… ${Math.min(100, Math.round((state.downloaded / state.total) * 100))}%`;
+  }
+  return "Downloading…";
+}
+
+function InstallProgress({ state }: { state: Extract<InstallState, { kind: "working" }> }) {
+  const percent =
+    state.stage === "installing"
+      ? 100
+      : state.total > 0
+        ? Math.min(100, (state.downloaded / state.total) * 100)
+        : null;
+  return (
+    <div className="flex flex-col gap-1.5" role="status">
+      <Progress value={percent} aria-label="Update progress" />
+      <p className="text-xs text-muted-foreground">{progressText(state)}</p>
+    </div>
+  );
+}
+
 /** Asks once when the app opens, then quietly: a failed check is not worth a message. */
 export function UpdatePrompt() {
   const [update, setUpdate] = useState<api.UpdateInfo | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const install = useInstall();
 
   useEffect(() => {
     let active = true;
@@ -49,14 +107,28 @@ export function UpdatePrompt() {
           Version {update.latest_version} is out. You have {update.current_version}.
         </p>
       </div>
-      <div className="flex justify-end gap-2">
-        <Button size="sm" variant="ghost" onClick={() => setDismissed(update.latest_version)}>
-          Later
-        </Button>
-        <Button size="sm" onClick={openUpdatePage}>
-          Download
-        </Button>
-      </div>
+      {install.state.kind === "working" && <InstallProgress state={install.state} />}
+      {install.state.kind === "failed" && (
+        <p className="text-xs text-destructive" role="alert">
+          {install.state.message}
+        </p>
+      )}
+      {install.state.kind !== "working" && (
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setDismissed(update.latest_version)}>
+            Later
+          </Button>
+          {update.can_install && install.state.kind !== "failed" ? (
+            <Button size="sm" onClick={install.start}>
+              Update now
+            </Button>
+          ) : (
+            <Button size="sm" onClick={openUpdatePage}>
+              Download
+            </Button>
+          )}
+        </div>
+      )}
     </aside>
   );
 }
@@ -70,6 +142,7 @@ type CheckState =
 export function UpdateSettings() {
   const settings = useStore((s) => s.settings);
   const [check, setCheck] = useState<CheckState>({ kind: "idle" });
+  const install = useInstall();
 
   const runCheck = () => {
     setCheck({ kind: "checking" });
@@ -106,15 +179,29 @@ export function UpdateSettings() {
           </p>
         </div>
         {available ? (
-          <Button size="sm" onClick={openUpdatePage}>
-            Download
-          </Button>
+          install.state.kind === "working" ? null : check.kind === "done" &&
+            check.info.can_install &&
+            install.state.kind !== "failed" ? (
+            <Button size="sm" onClick={install.start}>
+              Download and install
+            </Button>
+          ) : (
+            <Button size="sm" onClick={openUpdatePage}>
+              Download
+            </Button>
+          )
         ) : (
           <Button size="sm" variant="outline" disabled={check.kind === "checking"} onClick={runCheck}>
             Check for updates
           </Button>
         )}
       </div>
+      {install.state.kind === "working" && <InstallProgress state={install.state} />}
+      {install.state.kind === "failed" && (
+        <p className="text-xs text-destructive" role="alert">
+          {install.state.message} You can still download it from the release page.
+        </p>
+      )}
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-col gap-1">
           <Label htmlFor="check-updates">Check when the app opens</Label>

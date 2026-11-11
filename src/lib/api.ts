@@ -24,6 +24,8 @@ export interface ModelInfo {
   streaming: boolean;
 }
 
+export type DockVisibility = "always" | "while_dictating" | "never";
+
 export type DockPosition =
   | "bottom_right"
   | "bottom_center"
@@ -58,6 +60,7 @@ export interface Settings {
   groq_api_key?: string | null;
   groq_model?: string | null;
   dock_position?: "bottom_right" | "bottom_center" | "bottom_left" | "top_right" | "top_left";
+  dock_visibility?: DockVisibility;
   check_updates?: boolean;
 }
 
@@ -88,6 +91,7 @@ export type SettingsPatch = Partial<
     | "groq_api_key"
     | "groq_model"
     | "dock_position"
+    | "dock_visibility"
     | "check_updates"
   >
 >;
@@ -184,6 +188,24 @@ export interface UpdateInfo {
   current_version: string;
   latest_version: string;
   update_available: boolean;
+  /** True when this copy can download and install the update itself. */
+  can_install?: boolean;
+  download_size?: number | null;
+}
+
+export interface UpdateProgress {
+  stage: "downloading" | "verifying" | "installing";
+  downloaded: number;
+  total: number;
+}
+
+/** Downloads, checks and installs the newest release, then restarts the app. */
+export function installUpdate(): Promise<void> {
+  return invoke("install_update");
+}
+
+export function onUpdateProgress(cb: (p: UpdateProgress) => void): Promise<UnlistenFn> {
+  return listen<UpdateProgress>("update-progress", (event) => cb(event.payload));
 }
 
 export function checkForUpdate(): Promise<UpdateInfo> {

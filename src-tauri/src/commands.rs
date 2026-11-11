@@ -493,6 +493,14 @@ fn patched_settings(
             current.dock_position = position;
         }
     }
+    if let Some(visibility) = settings.dock_visibility {
+        if matches!(
+            visibility.as_str(),
+            "always" | "while_dictating" | "never"
+        ) {
+            current.dock_visibility = visibility;
+        }
+    }
     Ok(current)
 }
 
@@ -606,6 +614,9 @@ fn apply_settings(
         let _ = app.emit("dock-position", next.dock_position.clone());
         crate::dock::reposition(app);
     }
+    if previous.dock_visibility != next.dock_visibility {
+        crate::dock::apply_visibility(app);
+    }
     let _ = app.emit("settings-changed", serde_json::json!({}));
     Ok(())
 }
@@ -664,6 +675,32 @@ mod settings_session_tests {
             }
         )
         .is_err());
+    }
+
+    #[test]
+    fn dock_visibility_accepts_only_known_modes() {
+        let defaults = crate::state::Settings::default();
+        assert_eq!(defaults.dock_visibility, "always");
+        for mode in ["always", "while_dictating", "never"] {
+            let patched = patched_settings(
+                defaults.clone(),
+                crate::state::SettingsPatch {
+                    dock_visibility: Some(mode.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(patched.dock_visibility, mode);
+        }
+        let ignored = patched_settings(
+            defaults,
+            crate::state::SettingsPatch {
+                dock_visibility: Some("sometimes".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ignored.dock_visibility, "always");
     }
 
     #[test]

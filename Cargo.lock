@@ -3515,7 +3515,7 @@ dependencies = [
 
 [[package]]
 name = "opendictate"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "core-foundation 0.9.4",
@@ -3535,6 +3535,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -3547,7 +3548,7 @@ dependencies = [
 
 [[package]]
 name = "opendictate-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bzip2 0.5.2",
  "chrono",

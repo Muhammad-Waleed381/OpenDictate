@@ -105,7 +105,9 @@ fn release_dock_focus(win: &tauri::WebviewWindow) {
     }
     let _ = win.hide();
     std::thread::sleep(Duration::from_millis(60));
-    let _ = win.show();
+    if crate::dock::should_show(win.app_handle()) {
+        let _ = win.show();
+    }
 }
 
 /// Watches for OpenDictate taking the activation or the keyboard focus and

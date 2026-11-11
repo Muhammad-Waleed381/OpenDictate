@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 pub const DOCK_SIZE: f64 = 29.0;
@@ -8,6 +8,40 @@ const TOLERANCE: i32 = 2;
 static LAST_ASSERT_MS: AtomicU64 = AtomicU64::new(0);
 static CAPTION_WIDTH: AtomicU32 = AtomicU32::new(0);
 static LAST_SHAPED: AtomicU32 = AtomicU32::new(0);
+/// True from the moment a dictation session shows a state until the dock
+/// returns to `hidden`. Only matters for the `while_dictating` visibility.
+static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Decides whether the dock window belongs on screen for a visibility
+/// setting. `always` is the default; `while_dictating` follows the session;
+/// `never` keeps the window off screen so the display shows nothing static.
+pub(crate) fn visible_for(visibility: &str, session_active: bool) -> bool {
+    match visibility {
+        "never" => false,
+        "while_dictating" => session_active,
+        _ => true,
+    }
+}
+
+/// Whether the dock should be on screen right now, from the saved setting.
+pub fn should_show(app: &AppHandle) -> bool {
+    let visibility = app
+        .try_state::<crate::state::AppState>()
+        .and_then(|s| s.settings.lock().ok().map(|s| s.dock_visibility.clone()))
+        .unwrap_or_else(|| "always".to_string());
+    visible_for(&visibility, SESSION_ACTIVE.load(Ordering::Relaxed))
+}
+
+/// Shows or hides the dock to match the setting and the session. Re-applies
+/// the Linux window hints, which the window manager can drop on a re-map.
+pub fn apply_visibility(app: &AppHandle) {
+    let app = app.clone();
+    let inner = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        LAST_ASSERT_MS.store(0, Ordering::Relaxed);
+        ensure_on_main(&inner);
+    });
+}
 
 pub fn window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window("dock")
@@ -96,7 +130,11 @@ pub fn init(app: &AppHandle) {
         let _ = win.set_always_on_top(true);
         #[cfg(target_os = "linux")]
         make_non_focusable(app);
-        show_if_hidden(&win);
+        if should_show(app) {
+            show_if_hidden(&win);
+        } else {
+            hide_if_visible(&win);
+        }
     }
     #[cfg(target_os = "linux")]
     shape_input(app);
@@ -119,6 +157,13 @@ fn show_if_hidden(win: &WebviewWindow) {
         _ => {
             let _ = win.show();
         }
+    }
+}
+
+/// Hides the dock only when it is actually visible.
+fn hide_if_visible(win: &WebviewWindow) {
+    if let Ok(true) = win.is_visible() {
+        let _ = win.hide();
     }
 }
 
@@ -200,6 +245,10 @@ pub fn ensure(app: &AppHandle) {
 /// pill content is aligned so it hugs the corner regardless.
 fn apply_dock_size(app: &AppHandle) {
     if let Some(win) = window(app) {
+        if !should_show(app) {
+            hide_if_visible(&win);
+            return;
+        }
         let width = current_width();
         let _ = win.set_always_on_top(true);
         show_if_hidden(&win);
@@ -341,6 +390,11 @@ pub fn set_state(app: &AppHandle, status: &str, message: Option<&str>) {
         "state": status,
         "message": message,
     });
+    // `hidden` is the resting state; every other state belongs to a session.
+    let active = status != "hidden";
+    if SESSION_ACTIVE.swap(active, Ordering::Relaxed) != active {
+        apply_visibility(app);
+    }
     emit_dock_event(app, "overlay-state", payload.clone());
     let _ = app.emit("overlay-state", payload);
     crate::tray::apply_state_icon(app, status);
@@ -349,6 +403,18 @@ pub fn set_state(app: &AppHandle, status: &str, message: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visibility_modes() {
+        for active in [false, true] {
+            assert!(visible_for("always", active));
+            assert!(!visible_for("never", active));
+        }
+        assert!(!visible_for("while_dictating", false));
+        assert!(visible_for("while_dictating", true));
+        // An unknown value must never hide the on-screen mic control.
+        assert!(visible_for("bogus", false));
+    }
 
     #[test]
     fn test_bottom_right_standard_1080p_with_taskbar() {
