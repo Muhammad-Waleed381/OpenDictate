@@ -205,6 +205,12 @@ const DOCK_POSITIONS: Record<string, string> = {
   top_left: "Top left",
 };
 
+const DOCK_VISIBILITY: Record<api.DockVisibility, string> = {
+  always: "Always",
+  while_dictating: "Only while dictating",
+  never: "Never",
+};
+
 const micLabel = (mic: string | null, mics: api.MicDevice[]): string => {
   if (mic === null) return "System default";
   const found = mics.find((m) => m.id === mic);
@@ -215,6 +221,7 @@ export function SettingsTab() {
   const mics = useStore((s) => s.mics);
   const mic = useStore((s) => s.mic);
   const settings = useStore((s) => s.settings);
+  const dockVisibility: api.DockVisibility = settings?.dock_visibility ?? "always";
   const [savingInputTarget, setSavingInputTarget] = useState(false);
   const themePref = useTheme((s) => s.pref);
   const setThemePref = useTheme((s) => s.setPref);
@@ -498,6 +505,21 @@ export function SettingsTab() {
     }
   };
 
+  const handleDockVisibilityChange = async (value: string | null) => {
+    if (!value) return;
+    const current = useStore.getState().settings;
+    if (!current) return;
+    const visibility = value as api.DockVisibility;
+    useStore.getState().patchSettings({ dock_visibility: visibility });
+    try {
+      await api.setSettings({ dock_visibility: visibility });
+    } catch {
+      const latest = await api.getSettings().catch(() => null);
+      if (latest) useStore.getState().setSettings(latest);
+      toast.error("Could not save the dock visibility, so it was reverted");
+    }
+  };
+
   const handleDockPositionChange = async (position: string | null) => {
     if (!position) return;
     const current = useStore.getState().settings;
@@ -557,6 +579,29 @@ export function SettingsTab() {
 
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-col gap-1">
+          <Label htmlFor="dock-visibility">Dock visibility</Label>
+          <p className="text-xs text-muted-foreground">
+            {dockVisibility === "never"
+              ? "The dock stays hidden. Use your hotkey or the tray icon to dictate."
+              : dockVisibility === "while_dictating"
+                ? "The dock appears when you start dictating and hides afterwards, so nothing stays on screen."
+                : "Keep the floating dock on screen at all times."}
+          </p>
+        </div>
+        <Select value={dockVisibility} onValueChange={handleDockVisibilityChange}>
+          <SelectTrigger id="dock-visibility" className="w-52">
+            <SelectValue>{DOCK_VISIBILITY[dockVisibility]}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="always">Always</SelectItem>
+            <SelectItem value="while_dictating">Only while dictating</SelectItem>
+            <SelectItem value="never">Never</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-1">
           <Label htmlFor="dock-position">Dock placement</Label>
           <p className="text-xs text-muted-foreground">
             Choose where the floating dock pill anchors on screen.
@@ -565,6 +610,7 @@ export function SettingsTab() {
         <Select
           value={settings?.dock_position ?? "bottom_right"}
           onValueChange={handleDockPositionChange}
+          disabled={dockVisibility === "never"}
         >
           <SelectTrigger id="dock-position" className="w-52">
             <SelectValue>{DOCK_POSITIONS[settings?.dock_position ?? "bottom_right"] ?? "Bottom right"}</SelectValue>
