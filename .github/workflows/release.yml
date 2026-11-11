@@ -89,56 +89,23 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "OpenDictate ${{ github.ref_name }}"
           releaseBody: |
-            OpenDictate ${{ github.ref_name }} is a big one: a new look, faster transcription, an update check, history search, and a long list of fixes to hands-free mode and voice commands.
+            OpenDictate ${{ github.ref_name }} can now install its own updates, and you can choose when the dock is on screen.
 
-            ### New look
-            - A violet and pink theme, with a solid dark mode. In dark mode the Record button is lime and the recording panel turns Marshmallow white.
-            - The app now uses Geist and Geist Mono, bundled with the app.
-            - A new sidebar: links grouped into Dictation, Words and Setup, counts next to History, Dictionary and Snippets, and a status line at the bottom that shows whether a model is ready. Ctrl+B (Cmd+B on a Mac) collapses it.
-            - After a dictation lands, Home shows what was inserted, how much typing time it saved, and the odd word-count milestone.
+            ### Install updates from the app
+            - When a newer version is out, "Update now" (in the pop-up) and "Download and install" (in Settings) fetch the right installer for your computer, install it and restart the app.
+            - It handles the Windows setup, the macOS app, and Linux AppImage, `.deb` and `.rpm` installs. Each download is checked against the SHA-256 checksum GitHub publishes for it before anything is installed.
+            - If your copy can't update itself (for example an MSI install), the button opens the download page as before.
+            - Updates are only downloaded when you click. The app still only checks for a new version when it opens, and you can turn that off.
+            - On Linux `.deb` and `.rpm` installs you will be asked for your password.
 
-            ### Faster transcription
-            - Short Whisper clips are padded with silence instead of decoding a long window. On a laptop i5, a 13 s clip on Whisper Turbo dropped from about 12.6 s to 8-10 s, and Whisper Base from about 3 s to 2 s or less.
-            - Streaming models finish about a third faster after you stop talking.
-            - Live captions and wake words use fewer threads, and the caption model loads when the app starts.
-
-            ### Update check
-            - Settings has a "Check for updates" button, and the app tells you when a newer version is out. This is the only time the app goes online on its own, and you can turn it off.
-
-            ### History
-            - Search now covers every dictation you have saved, not just the latest ones.
-            - Older dictations load in pages, and History opens much faster with a long history.
-            - When you fix a word in History, the app offers to add it to your Dictionary.
-
-            ### Hands-free and voice commands
-            - Ordinary sentences no longer trigger commands, and if a command can't run, your words are typed instead of lost.
-            - Editing commands are safer in terminals and other focused apps. "git push" and "git pull" are only typed, never run.
-            - Speech detection no longer cuts off the start or end of what you said, and the Silero VAD model is actually used now.
-            - Hands-free works with streaming models, survives the microphone disconnecting, and keeps the dock in step with the listener.
-            - Setting it up in Settings is fixed: the wake-word download, phrase checks, and live sensitivity and timeout changes.
-
-            ### Changed voice commands
-            Some commands were renamed so everyday speech doesn't set them off:
-            - `prompt <text>` is now `send prompt <text>`
-            - `ask <text>` is now `ask claude|cursor|codex|chatgpt <text>`
-            - `google <query>` is now `google for <query>`, and `search <query>` is now `search for <query>`
-            - `uppercase <text>` is now `all caps <text>`
-            - `snippet <name>` is now `insert snippet <name>` or `paste snippet <name>`
-            - `open`, `focus` and `go to` only work for known apps. For other apps, say `switch to <app>` or `open app <app>`.
-
-            ### Other fixes
-            - Text cleanup no longer changes words you dictated.
-            - Better audio capture and resampling, and long recordings are handled properly.
-            - Transcripts and settings are no longer lost when the app closes or restarts.
-            - Clearing history keeps your stats. Reset keeps onboarding and your Groq key.
-            - Hold-to-talk is turned off on GNOME, where it can't work reliably.
-            - Fixes to Settings, the mic test, model downloads and onboarding.
-            - The main window now runs under a strict content security policy.
+            ### Dock visibility
+            - New "Dock visibility" setting: Always (as before), Only while dictating, or Never. It's useful on OLED screens, where a pill that never moves can burn in.
+            - The hotkey, the tray icon and notifications still work when the dock is hidden.
 
             ### Installers
             - Windows: `.msi` / `.exe` (NSIS) installers
             - macOS: universal `.dmg` (Apple Silicon + Intel)
-            - Linux: `.deb` and `.AppImage`
+            - Linux: `.deb`, `.rpm` and `.AppImage`
 
             Models download inside the app on first run. Speech recognition always runs on your own machine.
           releaseDraft: false
