@@ -60,11 +60,12 @@ function comboFromEvent(e: KeyboardEvent): string | null {
   return [...mods, name].join("+");
 }
 
+// The CUDA build is the only one that can use a GPU, and it exists for
+// Linux and Windows, so CoreML is not offered.
 const GPU_MODES = [
   { value: "off", label: "Off (CPU)" },
   { value: "auto", label: "Auto" },
   { value: "cuda", label: "CUDA (NVIDIA)" },
-  { value: "coreml", label: "CoreML (Apple)" },
 ] as const;
 
 function HotkeyCapture() {
@@ -186,15 +187,25 @@ function HotkeyCapture() {
   );
 }
 
+// Every language the multilingual models accept: Whisper Turbo takes all of
+// them, Cohere Transcribe takes all but Hindi and Urdu.
 const LANGUAGE_NAMES: Record<string, string> = {
+  ar: "Arabic",
+  zh: "Chinese",
+  nl: "Dutch",
   en: "English",
-  es: "Spanish",
   fr: "French",
   de: "German",
-  pt: "Portuguese",
-  it: "Italian",
-  ur: "Urdu",
+  el: "Greek",
   hi: "Hindi",
+  it: "Italian",
+  ja: "Japanese",
+  ko: "Korean",
+  pl: "Polish",
+  pt: "Portuguese",
+  es: "Spanish",
+  ur: "Urdu",
+  vi: "Vietnamese",
 };
 
 const DOCK_POSITIONS: Record<string, string> = {
@@ -222,6 +233,7 @@ export function SettingsTab() {
   const mic = useStore((s) => s.mic);
   const settings = useStore((s) => s.settings);
   const dockVisibility: api.DockVisibility = settings?.dock_visibility ?? "always";
+  const gpuBuild = useStore((s) => s.models?.gpu_build ?? false);
   const [savingInputTarget, setSavingInputTarget] = useState(false);
   const themePref = useTheme((s) => s.pref);
   const setThemePref = useTheme((s) => s.setPref);
@@ -1016,14 +1028,11 @@ export function SettingsTab() {
             </SelectTrigger>
             <SelectContent className="w-full">
               <SelectItem value="auto">Auto (system default)</SelectItem>
-              <SelectItem value="en">English</SelectItem>
-              <SelectItem value="es">Spanish</SelectItem>
-              <SelectItem value="fr">French</SelectItem>
-              <SelectItem value="de">German</SelectItem>
-              <SelectItem value="pt">Portuguese</SelectItem>
-              <SelectItem value="it">Italian</SelectItem>
-              <SelectItem value="ur">Urdu</SelectItem>
-              <SelectItem value="hi">Hindi</SelectItem>
+              {Object.entries(LANGUAGE_NAMES).map(([code, name]) => (
+                <SelectItem key={code} value={code}>
+                  {name}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
@@ -1064,30 +1073,53 @@ export function SettingsTab() {
         />
       </div>
 
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="gpu">GPU acceleration</Label>
-          <p className="text-xs text-muted-foreground">
-            Experimental. Engines silently fall back to CPU when a provider is
-            unavailable, and changes apply from the next dictation.
-          </p>
+      {gpuBuild ? (
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="gpu">GPU acceleration</Label>
+            <p className="text-xs text-muted-foreground">
+              Runs speech models on your NVIDIA GPU. Needs the NVIDIA driver, CUDA 12 and
+              cuDNN 9. Falls back to the CPU when the GPU can't be used. Changes apply from
+              the next dictation.
+            </p>
+          </div>
+          <Select value={settings?.gpu || "auto"} onValueChange={handleGpuChange}>
+            <SelectTrigger id="gpu" className="w-40">
+              <SelectValue>
+                {GPU_MODES.find((m) => m.value === (settings?.gpu || "auto"))?.label ?? "Auto"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {GPU_MODES.map((m) => (
+                <SelectItem key={m.value} value={m.value}>
+                  {m.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-        <Select value={settings?.gpu ?? "off"} onValueChange={handleGpuChange}>
-          <SelectTrigger className="w-40">
-            <SelectValue>
-              {GPU_MODES.find((m) => m.value === (settings?.gpu ?? "off"))?.label ??
-                "Off (CPU)"}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {GPU_MODES.map((m) => (
-              <SelectItem key={m.value} value={m.value}>
-                {m.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      ) : (
+        !IS_MAC && (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-col gap-1">
+              <Label>GPU acceleration</Label>
+              <p className="text-xs text-muted-foreground">
+                This version runs on the CPU. To use an NVIDIA GPU, install the CUDA version of
+                OpenDictate from the releases page.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                api.openUpdatePage().catch((e) => toast.error(`Could not open the releases page: ${String(e)}`))
+              }
+            >
+              Get the CUDA version
+            </Button>
+          </div>
+        )
+      )}
 
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-col gap-1">

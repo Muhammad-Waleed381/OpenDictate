@@ -8,6 +8,8 @@ export interface ModelsStatus {
   kws_ready: boolean;
   gpu_mode: string;
   gpu_active: boolean;
+  /** True in the CUDA build; the standard build can only use the CPU. */
+  gpu_build?: boolean;
   streaming_rtf_x100: number;
 }
 

@@ -1,7 +1,9 @@
 name: Release
 
 # Builds signed-free installers for all three platforms on version tags.
-# Windows: NSIS .exe + MSI. macOS: universal .dmg/.app. Linux: .deb/.AppImage.
+# Windows: NSIS .exe + MSI. macOS: universal .dmg/.app. Linux: .deb/.rpm/.AppImage.
+# CUDA builds for NVIDIA GPUs: a Linux .deb and a Windows NSIS setup, linked
+# against the CUDA build of sherpa-onnx and named with a "-cuda" suffix.
 #
 # Local cross-compilation is not possible (sherpa-onnx builds C++ per
 # platform), so CI is the only place these artifacts are produced.
@@ -29,7 +31,16 @@ jobs:
             args: ""
           - platform: ubuntu-22.04
             args: ""
+          - platform: windows-latest
+            cuda: true
+            args: "--bundles nsis --features gpu-shared -- --no-default-features"
+            assetNamePattern: "[name]_[version]_[arch]-cuda[setup][ext]"
+          - platform: ubuntu-22.04
+            cuda: true
+            args: "--bundles deb --features gpu-shared -- --no-default-features"
+            assetNamePattern: "[name]_[version]_[arch]-cuda[setup][ext]"
 
+    name: build (${{ matrix.platform }}${{ matrix.cuda && ', cuda' || '' }})
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +69,8 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
+          # The CUDA build links different native libraries.
+          key: ${{ matrix.cuda && 'cuda' || 'cpu' }}
 
       - name: Install Linux system deps
         if: matrix.platform == 'ubuntu-22.04'
@@ -77,6 +90,10 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Stage the CUDA libraries
+        if: matrix.cuda
+        uses: ./.github/actions/cuda-libs
 
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
@@ -106,8 +123,11 @@ jobs:
             - Windows: `.msi` / `.exe` (NSIS) installers
             - macOS: universal `.dmg` (Apple Silicon + Intel)
             - Linux: `.deb`, `.rpm` and `.AppImage`
+            - NVIDIA GPU (CUDA): `_amd64-cuda.deb` for Linux and `_x64-cuda-setup.exe` for Windows. They need the NVIDIA driver, CUDA 12 and cuDNN 9.
 
             Models download inside the app on first run. Speech recognition always runs on your own machine.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+          # Empty for the standard builds, which keep Tauri's file names.
+          assetNamePattern: ${{ matrix.assetNamePattern }}

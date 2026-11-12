@@ -1,0 +1,66 @@
+name: CUDA libraries
+description: >
+  Downloads the CUDA 12 / cuDNN 9 build of sherpa-onnx that matches the
+  version in Cargo.lock and prepares it for a `--features gpu-shared` build:
+  sets SHERPA_ONNX_LIB_DIR and adds the runtime libraries to the installer
+  (Linux .deb under /usr/lib/opendictate, Windows DLLs next to the exe).
+
+runs:
+  using: composite
+  steps:
+    - name: Download and stage the CUDA libraries
+      shell: bash
+      run: |
+        set -euo pipefail
+        PY=$(command -v python3 || command -v python)
+        version=$(awk '/^name = "sherpa-onnx-sys"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)
+        test -n "$version" || { echo "sherpa-onnx-sys version not found in Cargo.lock" >&2; exit 1; }
+        base="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${version}"
+        case "$RUNNER_OS" in
+          Linux) archive="sherpa-onnx-v${version}-cuda-12.x-cudnn-9.x-linux-x64-gpu.tar.bz2" ;;
+          Windows) archive="sherpa-onnx-v${version}-cuda-12.x-cudnn-9.x-win-x64-cuda.tar.bz2" ;;
+          *) echo "There is no CUDA build for $RUNNER_OS" >&2; exit 1 ;;
+        esac
+
+        root="$RUNNER_TEMP/cuda-libs"
+        echo "Downloading $archive"
+        curl -fL --retry 3 --connect-timeout 30 --max-time 1800 "$base/$archive" -o "$RUNNER_TEMP/cuda.tar.bz2"
+        "$PY" scripts/extract-gpu-libs.py "$RUNNER_TEMP/cuda.tar.bz2" "$root"
+        rm -f "$RUNNER_TEMP/cuda.tar.bz2"
+
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          api=$(find "$root" -name 'libsherpa-onnx-c-api.so' -print -quit)
+          test -n "$api" || { echo "libsherpa-onnx-c-api.so missing from $archive" >&2; exit 1; }
+          libdir=$(dirname "$api")
+          test -e "$libdir/libonnxruntime.so" || { echo "libonnxruntime.so missing next to the C API" >&2; exit 1; }
+          # The app's RUNPATH only covers its direct dependencies. Each bundled
+          # library must also find its neighbours, such as the CUDA provider.
+          while IFS= read -r -d '' library; do
+            patchelf --set-rpath '$ORIGIN' "$library"
+          done < <(find "$libdir" -maxdepth 1 -type f -name '*.so*' -print0)
+          echo "SHERPA_ONNX_LIB_DIR=$libdir" >> "$GITHUB_ENV"
+          echo "OPENDICTATE_LINUX_RPATH=/usr/lib/opendictate" >> "$GITHUB_ENV"
+          SHERPA_ONNX_LIB_DIR="$libdir" "$PY" scripts/inject-linux-libs.py
+        else
+          api=$(find "$root" -name 'sherpa-onnx-c-api.lib' -print -quit)
+          test -n "$api" || { echo "sherpa-onnx-c-api.lib missing from $archive" >&2; exit 1; }
+          libdir=$(dirname "$api")
+          # The DLLs may sit in bin/ instead of lib/. Gather them beside the
+          # import libraries, where the build and the installer look.
+          while IFS= read -r -d '' dll; do
+            [ -e "$libdir/$(basename "$dll")" ] || cp "$dll" "$libdir/"
+          done < <(find "$root" -name '*.dll' -not -path "$libdir/*" -print0)
+          if [ ! -f "$libdir/onnxruntime.lib" ]; then
+            # sherpa-onnx-sys links onnxruntime by name, but the app never
+            # calls it directly, so the CPU build's import library is enough.
+            echo "onnxruntime.lib missing; taking it from the CPU shared build"
+            curl -fL --retry 3 "$base/sherpa-onnx-v${version}-win-x64-shared-MD-Release-lib.tar.bz2" -o "$RUNNER_TEMP/cpu-lib.tar.bz2"
+            "$PY" scripts/extract-gpu-libs.py "$RUNNER_TEMP/cpu-lib.tar.bz2" "$RUNNER_TEMP/cpu-lib"
+            cp "$(find "$RUNNER_TEMP/cpu-lib" -name 'onnxruntime.lib' -print -quit)" "$libdir/"
+          fi
+          test -f "$libdir/onnxruntime.dll" || { echo "onnxruntime.dll missing from $archive" >&2; exit 1; }
+          winlib=$(cygpath -w "$libdir")
+          echo "SHERPA_ONNX_LIB_DIR=$winlib" >> "$GITHUB_ENV"
+          SHERPA_ONNX_LIB_DIR="$winlib" "$PY" scripts/inject-windows-libs.py
+        fi
+        ls -la "$libdir"

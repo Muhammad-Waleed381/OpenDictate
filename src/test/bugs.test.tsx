@@ -347,6 +347,32 @@ describe("model lifecycle regressions", () => {
     expect(screen.queryByText("Connecting…")).not.toBeInTheDocument();
   });
 
+  it("points the CPU build to the CUDA version instead of offering GPU modes it cannot use", () => {
+    useStore.setState({ models: { ...status, gpu_build: false } });
+    render(<SettingsTab />);
+    expect(screen.queryByRole("combobox", { name: "GPU acceleration" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Get the CUDA version" }));
+    expect(ipc.invoke).toHaveBeenCalledWith("open_update_page");
+  });
+
+  it("offers Off, Auto and CUDA in the CUDA build, defaulting to Auto", async () => {
+    useStore.setState({ models: { ...status, gpu_build: true }, settings: { ...settings, gpu: "" } });
+    render(<SettingsTab />);
+    const gpu = screen.getByRole("combobox", { name: "GPU acceleration" });
+    expect(gpu).toHaveTextContent("Auto");
+    fireEvent.click(gpu);
+    expect(await screen.findByRole("option", { name: "CUDA (NVIDIA)" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /CoreML/ })).not.toBeInTheDocument();
+  });
+
+  it("lists every language Cohere Transcribe accepts", async () => {
+    render(<SettingsTab />);
+    fireEvent.click(screen.getByRole("combobox", { name: "Language" }));
+    for (const name of ["Arabic", "Chinese", "Dutch", "Greek", "Japanese", "Korean", "Polish", "Vietnamese", "Urdu", "Hindi"]) {
+      expect(await screen.findByRole("option", { name })).toBeInTheDocument();
+    }
+  });
+
   it("offers the KWS download instead of failing when Handsfree is enabled without it", async () => {
     let ready = false;
     ipc.invoke.mockImplementation((command: string) => {

@@ -101,6 +101,7 @@ pub fn models_status(state: State<AppState>) -> ModelsStatus {
             .load(std::sync::atomic::Ordering::SeqCst),
         gpu_mode: current_gpu_mode(&state),
         gpu_active: state.gpu_active.load(std::sync::atomic::Ordering::SeqCst),
+        gpu_build: crate::state::GPU_BUILD,
     }
 }
 

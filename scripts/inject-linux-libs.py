@@ -21,7 +21,15 @@ libdir = os.environ.get("SHERPA_ONNX_LIB_DIR")
 if not libdir or not os.path.isdir(libdir):
     sys.exit("SHERPA_ONNX_LIB_DIR is not set or not a directory")
 
-sos = sorted(set(glob.glob(os.path.join(libdir, "*.so")) + glob.glob(os.path.join(libdir, "*.so.*"))))
+# Shipped with the CUDA archive but never loaded: TensorRT needs its own
+# runtime, and the app only uses the C API.
+SKIP = ("tensorrt", "cxx-api")
+
+sos = sorted(
+    path
+    for path in set(glob.glob(os.path.join(libdir, "*.so")) + glob.glob(os.path.join(libdir, "*.so.*")))
+    if not any(skip in os.path.basename(path).lower() for skip in SKIP)
+)
 if not sos:
     sys.exit(f"no .so files found in {libdir}")
 

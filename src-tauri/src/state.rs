@@ -41,8 +41,9 @@ pub struct SettingsPatch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub hotkey: String,
-    /// Execution-provider mode: "off" (default) | "auto" | "cuda" | "coreml".
-    #[serde(default)]
+    /// Execution-provider mode: "off" | "auto" | "cuda" | "coreml". Defaults
+    /// to "auto" in the CUDA build and "off" everywhere else.
+    #[serde(default = "default_gpu")]
     pub gpu: String,
     pub mic: Option<String>,
     pub engine: String,
@@ -99,6 +100,14 @@ pub struct Settings {
     /// When the dock is on screen: `always`, `while_dictating` or `never`.
     #[serde(default = "default_dock_visibility")]
     pub dock_visibility: String,
+}
+
+/// True in the CUDA build of the app (`--features gpu-shared`), which links
+/// the GPU-enabled sherpa-onnx libraries. The standard build is CPU only.
+pub const GPU_BUILD: bool = cfg!(feature = "gpu-shared");
+
+fn default_gpu() -> String {
+    if GPU_BUILD { "auto" } else { "off" }.to_string()
 }
 
 fn default_check_updates() -> bool {
@@ -179,7 +188,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             hotkey: default_hotkey(),
-            gpu: "off".to_string(),
+            gpu: default_gpu(),
             mic: None,
             engine: "parakeet".to_string(),
             language: "auto".to_string(),
@@ -247,6 +256,8 @@ pub struct ModelsStatus {
     pub gpu_mode: String,
     /// True when an STT engine is actually running on a non-CPU provider.
     pub gpu_active: bool,
+    /// True in the CUDA build; the standard build can only use the CPU.
+    pub gpu_build: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
