@@ -5,35 +5,46 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Muhammad-Waleed381/OpenDictate/releases"><img src="https://img.shields.io/github/v/release/Muhammad-Waleed381/OpenDictate?color=blue&label=release" alt="Release"></a>
+  <a href="https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest"><img src="https://img.shields.io/github/v/release/Muhammad-Waleed381/OpenDictate?color=blue&label=release" alt="Release"></a>
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen" alt="Platforms">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-black.svg" alt="License"></a>
   <a href="https://tauri.app"><img src="https://img.shields.io/badge/Built%20with-Tauri%202-blue?logo=tauri" alt="Tauri"></a>
-  <img src="https://img.shields.io/badge/Rust-1.80+-orange?logo=rust" alt="Rust">
   <a href="https://github.com/Muhammad-Waleed381/OpenDictate/stargazers"><img src="https://img.shields.io/github/stars/Muhammad-Waleed381/OpenDictate?style=social" alt="Stars"></a>
 </p>
 
 <p align="center">
-  <a href="https://opendictate.vercel.app"><strong>🌐 Website</strong></a> &nbsp;•&nbsp;
-  <a href="https://opendictate.vercel.app/docs"><strong>📖 Tutorial & User Guide</strong></a> &nbsp;•&nbsp;
-  <a href="https://github.com/Muhammad-Waleed381/OpenDictate/releases"><strong>⚡ Releases</strong></a> &nbsp;•&nbsp;
-  <a href="CONTRIBUTING.md"><strong>🤝 Contributing</strong></a>
+  <a href="https://opendictate.vercel.app"><strong>Website</strong></a> &nbsp;•&nbsp;
+  <a href="https://opendictate.vercel.app/docs"><strong>User guide</strong></a> &nbsp;•&nbsp;
+  <a href="https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest"><strong>Download</strong></a> &nbsp;•&nbsp;
+  <a href="CONTRIBUTING.md"><strong>Contributing</strong></a>
 </p>
 
 <p align="center">
-  <img src="revamp-main.png" alt="OpenDictate Dashboard and Models Hub" width="800">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/home-dark.png">
+    <img src="docs/screenshots/home.png" alt="OpenDictate home screen right after a dictation was inserted" width="820">
+  </picture>
 </p>
 
 ---
 
-## ⚡ Instant Downloads (v0.3.0)
+## Download
 
-Get the latest installer for your operating system directly from [Releases](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest):
+Get the installer for your system from the [latest release](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest).
 
-| 🪟 Windows (Experimental) | 🍎 macOS | 🐧 Linux |
+| Windows | macOS | Linux |
 | :---: | :---: | :---: |
-| [**Download Setup (.exe)**](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest) / [.msi](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest) | [**Download DMG (.dmg)**](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest) | [**Download AppImage**](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest) / [.deb](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest) |
-| *Windows 10 / 11 (x64)* | *Universal (Apple Silicon & Intel)* | *Ubuntu / Debian / Fedora / Arch* |
+| `-setup.exe` (recommended) or `.msi` | Universal `.dmg` | `.AppImage`, `.deb` or `.rpm` |
+| Windows 10 / 11, x64 | Apple Silicon and Intel | x86_64 |
+| **NVIDIA GPU:** `_x64-cuda-setup.exe` | | **NVIDIA GPU:** `_amd64-cuda.deb` |
+
+The `-cuda` installers run speech models on an NVIDIA GPU. They need the NVIDIA driver, CUDA 12 and cuDNN 9, and fall back to the CPU without them. See [GPU acceleration](#gpu-acceleration).
+
+On first launch a three-step setup picks your microphone, downloads a speech model (about 104 MB for the default) and sets your shortcut.
+
+The installers are not code-signed yet, so Windows SmartScreen and macOS Gatekeeper may warn you the first time you open the app.
+
+Once installed, OpenDictate tells you when a new version is out and can install it for you. See [Updates](#updates).
 
 ---
 
@@ -45,156 +56,157 @@ Cloud dictation tools require sending raw audio across the internet, paying recu
 | :--- | :---: | :---: | :---: | :---: |
 | **Pricing** | **100% Free & Open Source (MIT)** | \$12 – \$20 / month | \$8 / month or \$199 | Built-in |
 | **Privacy & Cloud** | **100% Local (Zero Cloud Required)** | Cloud API dependency | Local (Mac only) | Cloud / Telemetry |
-| **Platform Support** | **Linux, macOS, Windows (Exp)** | Mac & Windows | macOS only | Single OS |
-| **AI Speech Models** | **Whisper, FastConformer, Parakeet** | Proprietary Cloud | Whisper | Proprietary |
+| **Platform Support** | **Linux, macOS, Windows** | Mac & Windows | macOS only | Single OS |
+| **AI Speech Models** | **Whisper, FastConformer, Parakeet, Omnilingual, Cohere** | Proprietary Cloud | Whisper | Proprietary |
 | **Voice Actions / Coding** | **Yes** (Casing, navigation, undo, edit) | Partial | Partial | Basic |
 | **Custom Dictionary** | **Yes** (Hotword boosting) | Yes | Yes | Limited |
 | **Telemetry / Tracking** | **Zero Telemetry** | Analytics tracked | Basic analytics | OS telemetry |
 
 ---
 
-## ✨ Features
+## Features
 
-- 🎙️ **One Hotkey, Anywhere** — Global shortcut (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> on Windows/Linux, <kbd>⌘</kbd>+<kbd>⇧</kbd>+<kbd>Space</kbd> on macOS) triggers dictation; the recognized text is injected into whichever text field or application currently has focus.
-- 🏎️ **Live Streaming Transcription** — NVIDIA FastConformer CTC transcribes in 80 ms steps while you speak. On a 4-core laptop CPU your text is ready about 0.3 s after you stop. See [measured speed](#-speech-to-text-model-catalog).
-- 🎮 **Voice Actions & Voice Coding** — Control your text hands-free with voice commands:
-  - *Formatting*: Say `"all caps <text>"`, `"camel case <text>"`, `"snake case <text>"`, `"title case <text>"`.
-  - *Editing*: Say `"scratch that"` (Undo), `"delete word"`, `"delete line"`, `"clear all"`.
-  - *Structure*: Say `"new line"`, `"new paragraph"`, `"tab"`, `"bullet point"`.
-  - *Workflow*: Say `"send prompt <query>"`, `"ask claude <query>"`, `"submit"`, `"interrupt"`, `"switch to <app>"`, `"open <url>"`.
-- 🎛️ **Dedicated Models Hub** — 1-click model download and management with real-time disk storage metrics and hardware accelerator indicators (`CPU`, `CUDA`, `CoreML`).
-- ⚡ **Live Floating Dock & Real-Time Captions** — Minimal floating pill dock showing audio waveform meter, recording status, and real-time live captions while you speak. Choose where it sits, show it only while dictating, or hide it entirely (the hotkey and tray icon keep working) in Settings → Dock visibility.
-- 📖 **Custom Vocabulary & Hotwords** — Add company names, technical jargon, code symbols, and acronyms to the built-in dictionary for boosted recognition accuracy.
-- ✂️ **Snippet Expansion** — Expand boilerplate text templates on the fly by saying `"insert snippet <trigger>"`.
+### Dictation
+- **One shortcut everywhere.** <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> on Windows and Linux, <kbd>⌘</kbd>+<kbd>⇧</kbd>+<kbd>Space</kbd> on macOS. You can change it in Settings.
+- **Toggle or hold-to-talk.** Press once to start and again to stop, or hold the keys while you speak. Hold-to-talk isn't available on GNOME, where shortcuts only report the key press.
+- **Double-tap shortcuts on macOS.** Double-tap Fn, ⌘, ⌃, ⌥ or ⇧ to start dictating.
+- **Hands-free mode.** Say a wake phrase ("hey dictate" or "computer" by default) to start. OpenDictate goes back to sleep after a period of silence that you choose, or when you say "go to sleep".
+- **Live captions.** A small floating dock shows what you're saying as you say it.
+- **Undo.** Take back the last insert with the Undo button, the tray menu, or by saying "scratch that".
+
+### Voice commands
+Commands work when you say them on their own. Ordinary sentences are typed as text. You can turn commands off in Settings.
+
+| What you want | Say |
+| :--- | :--- |
+| Undo | "scratch that", "undo that" |
+| Delete | "delete word", "delete line", "clear all" |
+| New line / paragraph / tab | "new line", "new paragraph", "tab" |
+| Bullet | "bullet point" |
+| Change case | "all caps …", "camel case …", "snake case …", "title case …" |
+| Browser tabs and scrolling | "new tab", "close tab", "next tab", "previous tab", "scroll down", "scroll up" |
+| Send to a chat or AI tool | "send prompt …", "ask claude …" (or cursor, codex, chatgpt), "send", "submit" |
+| Stop a running command | "interrupt", "stop process" |
+| Open things | "search for …", "google for …", "open website …", "switch to Slack", "open app Figma" |
+| Snippets | "insert snippet sig", "paste snippet standup" |
+
+`git push`, `git pull` and other risky commands are only ever typed, never run. Say "send" to run them yourself. The full list is under **Settings → Voice commands → View voice commands**.
+
+### Words
+- **Dictionary.** Add names, jargon and acronyms. Your spelling and capitalization are applied to every transcript, and streaming models that support it are also biased toward your terms. Import and export as a text file.
+- **Snippets.** Save text you type often and insert it by voice. Templates can use `{date}`, `{time}`, `{datetime}` and `{clipboard}`. Import and export as JSON.
+- **Spoken punctuation** (optional). Say "comma", "period", "question mark" or "exclamation point" and get the symbol.
 - 🪄 **Optional AI Voice Polish** — Clean up disfluencies, remove filler words ("um", "ah"), or auto-format raw thoughts into bullet points using local SLMs or cloud LLMs (Groq).
-- 📅 **History & Yearly Heatmap** — Full searchable history stored in a local SQLite database with GitHub-style annual activity heatmap.
-- 🔒 **100% Private & Offline** — No accounts, no subscriptions, and no telemetry. After model downloads, the only automatic network call is a version check against GitHub when the app opens, which you can turn off in Settings. Updates are downloaded and installed only when you click Update. The app fetches the installer for your platform from this repository's GitHub release, checks its SHA-256 digest, then installs it and restarts.
+
+### History and activity
+- **History.** Every dictation with its time, length and speed. Search all of it, edit an entry, copy or re-insert it, and export to JSON or CSV. When you fix a word in History, the app offers to add it to your Dictionary.
+- **Activity.** Words transcribed, number of dictations, day streak, best day, average speed compared with typing, and a year-long heatmap.
+
+### Comfort and control
+- **Dock visibility.** Show the dock always, only while dictating, or never. "Only while dictating" or "Never" is a good choice on OLED screens. You can also pick which corner it sits in.
+- **Terminal mode.** Set the input target to "Shell (Bash, Zsh)" and editing commands use terminal-friendly keys. Undo is turned off there, because Ctrl+Z would suspend the running program.
+- **Light, dark or system theme**, a collapsible sidebar (<kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>B</kbd>), optional sounds, start with your computer, and a tray menu.
+- 🔒 **100% Private & Offline** — No accounts, no subscriptions, and no telemetry. After model downloads, the only automatic network call is a version check against GitHub when the app opens, which you can turn off in Settings.
+
+<p align="center">
+  <img src="docs/screenshots/dock.png" alt="The floating dock showing a live caption" width="260">
+</p>
 
 ---
 
-## 📚 Tutorials & Documentation
+## Screenshots
 
-Looking for step-by-step setup guides, voice coding cheat sheets, or troubleshooting tips?
-
-👉 **[Read the Full Documentation & Tutorial at opendictate.vercel.app/docs](https://opendictate.vercel.app/docs)**
-
-- 🚀 **[Quickstart Guide](https://opendictate.vercel.app/docs#quickstart)** — 0 to Voice in 60 seconds on Linux, macOS, and Windows.
-- 🎮 **[Voice Commands Reference](https://opendictate.vercel.app/docs#voice-commands)** — Complete list of casing modifiers, editing keys, and navigation macros.
-- 🤖 **[Hardware Acceleration](https://opendictate.vercel.app/docs#models)** — Choosing between FastConformer, Parakeet TDT, and Whisper.
-- ❓ **[Troubleshooting & FAQs](https://opendictate.vercel.app/docs#troubleshooting)** — Linux `/dev/uinput` configuration and macOS permissions.
-
----
-
-## 📸 App Showcase
-
-| **Local Neural Models Hub** | **Productivity & Words Heatmap** |
+| History | Activity |
 | :---: | :---: |
-| <img src="docs/screenshots/models.png" alt="OpenDictate Models Hub" width="450"> | <img src="docs/screenshots/activity.png" alt="OpenDictate Activity Heatmap" width="450"> |
-| *Manage local Whisper & Parakeet models with CUDA GPU acceleration* | *Track your typing speed, streak days, and yearly activity* |
-
-| **Voice Snippets & Templates** | **Searchable Dictation History** |
-| :---: | :---: |
-| <img src="docs/screenshots/snippets.png" alt="OpenDictate Snippets" width="450"> | <img src="docs/screenshots/history.png" alt="OpenDictate History" width="450"> |
-| *Expand multi-line boilerplates instantly by voice trigger* | *Local SQLite database of all transcribed utterances* |
+| <img src="docs/screenshots/history.png" alt="History tab with search, export and per-entry actions" width="440"> | <img src="docs/screenshots/activity.png" alt="Activity tab with stats and a year-long heatmap" width="440"> |
+| **Models** | **Settings** |
+| <img src="docs/screenshots/models.png" alt="Models tab listing local speech models" width="440"> | <img src="docs/screenshots/settings.png" alt="Settings tab with updates, appearance and dock options" width="440"> |
+| **Dictionary** | **Snippets** |
+| <img src="docs/screenshots/dictionary.png" alt="Dictionary tab" width="440"> | <img src="docs/screenshots/snippets.png" alt="Snippets tab with placeholders" width="440"> |
 
 ---
 
-## 💻 Platform Support
+## Speech models
 
-| Platform | Status | Input Injection | Autostart Support | Package Types |
-| :--- | :---: | :--- | :--- | :--- |
-| **Linux** | ✅ Supported | Persistent `/dev/uinput` device | XDG Autostart (`.desktop`) | `.AppImage`, `.deb`, `.rpm` |
-| **macOS** | ✅ Supported | `CGEvent` & Native Modifiers | LaunchAgent Plist | Universal `.dmg` (Apple Silicon & Intel) |
-| **Windows** | 🧪 Experimental | `SendInput` API (Enigo) | Windows Registry (`Run`) | `.exe` (NSIS), `.msi` |
+Pick and download models in the **Models** tab. They come from the [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) model releases and run on your CPU.
 
----
+Speeds were measured on a 4-core laptop CPU (Intel Core i5-8350U, no GPU) with real speech, as time spent per second of audio. **0.1× means 10 seconds of speech takes about 1 second.** Newer CPUs are faster. To time models on your own machine, run `cargo run --release -p opendictate-core --example bench_inference -- <16 kHz wav>`.
 
-## 🤖 Speech-to-Text Model Catalog
+### Transcribe after you stop speaking
 
-OpenDictate supports a wide variety of state-of-the-art open speech models to match your hardware.
+| Model | From | Download | Languages | Speed | Notes |
+| :--- | :--- | :---: | :--- | :---: | :--- |
+| **Parakeet TDT 110M (int8)** | NVIDIA | ~104 MB | English | ~0.03× | **Default.** Fast and accurate on modest CPUs. |
+| Parakeet TDT 0.6B v3 | NVIDIA | ~487 MB | Multilingual | ~0.1× | Higher accuracy, several languages. |
+| Parakeet Unified En 0.6B | NVIDIA | ~501 MB | English | ~0.12× | Punctuation and casing built in. |
+| Whisper Tiny (en) | OpenAI | ~118 MB | English | Not measured | Smallest Whisper. |
+| Whisper Base (en) | OpenAI | ~209 MB | English | ~0.15× | |
+| Whisper Small (en) | OpenAI | ~636 MB | English | Not measured | |
+| Whisper Turbo (Large v3) | OpenAI | ~564 MB | Multilingual | ~0.6–0.8× | Large v3 accuracy. Slow without a GPU. |
+| Whisper Medium (en) | OpenAI | ~1.9 GB | English | Not measured | |
+| Omnilingual ASR 300M | Meta | ~293 MB | 1600+ languages | Not measured | For languages other models don't cover. |
+| Cohere Transcribe 2B (int8) | Cohere | ~1.7 GB | 14 languages | Not measured | Arabic, Chinese, Dutch, English, French, German, Greek, Italian, Japanese, Korean, Polish, Portuguese, Spanish, Vietnamese. |
 
-Speeds below were measured on a 4-core laptop CPU (Intel Core i5-8350U, no GPU) with real speech, as time spent per second of audio: **0.1× means 10 seconds of speech is transcribed in about 1 second**. Expect faster results on newer CPUs. "Not measured" means we have not timed that model yet. To time models on your own machine, run `cargo run --release -p opendictate-core --example bench_inference -- <16 kHz wav>`.
+The language picker in Settings applies to Whisper and Cohere. The other models work out the language themselves or only support English.
 
-### Offline Accuracy Models
-| Model | Size | Speed (4-core laptop) | Best For |
-| :--- | :---: | :---: | :--- |
-| **Parakeet TDT 110M (int8)** | ~104 MB | ~0.03× | **Default.** Fast, accurate English on modest CPUs. |
-| **Parakeet TDT 0.6B v3** | ~487 MB | ~0.1× | Highest single-pass accuracy; multilingual support. |
-| **Parakeet Unified EN 0.6B** | ~501 MB | ~0.12× | Unified punctuation and casing out of the box. |
-| **Whisper Tiny (en)** | ~118 MB | Not measured | Ultra-lightweight Whisper model for low RAM systems. |
-| **Whisper Base (en)** | ~209 MB | ~0.15× | Balanced Whisper model for standard desktop use. |
-| **Whisper Small (en)** | ~636 MB | Not measured | High accuracy Whisper model. |
-| **Whisper Turbo (Large v3)** | ~564 MB | ~0.6–0.8× | Large v3 accuracy at a fraction of its cost; slow without a GPU. |
-| **Whisper Medium (en)** | ~1.9 GB | Not measured | Maximum Whisper accuracy for high-spec workstations. |
+### Transcribe while you speak
 
-### Streaming & Real-Time Models
-| Model | Size | Speed (4-core laptop) | Purpose |
-| :--- | :---: | :---: | :--- |
-| **FastConformer CTC (Streaming)** | ~110 MB | ~0.25×, text ~0.3 s after you stop | Low-latency streaming recognition in 80 ms steps. |
-| **Parakeet Unified 0.6B Streaming** | ~501 MB | ~4–5× | High-accuracy streaming. Too slow for live use on this CPU; needs a GPU or a much faster processor. The Models tab measures your machine and warns you. |
-| **Zipformer EN 20M** | ~29 MB | ~0.03× | Internal live caption engine. |
-| **Silero VAD v4** | ~1.7 MB | ~0.01× | Voice activity and silence detection. |
+| Model | From | Download | Speed | Notes |
+| :--- | :--- | :---: | :---: | :--- |
+| FastConformer 80ms (Streaming) | NVIDIA | ~125 MB | ~0.25× | Text is ready about 0.3 s after you stop. |
+| Parakeet Unified 0.6B (Streaming) | NVIDIA | ~501 MB | ~4–5× | Too slow for live use on this laptop; needs a fast CPU or a GPU. The Models tab measures your machine and warns you. |
 
----
+### Helper models
 
-## 🏗️ Architecture & How It Works
+These download on their own when needed.
 
-```
-Microphone ──► Audio Capture (cpal / PulseAudio) ──► Shared Ring Buffer
-                                                        │
-         ┌──────────────────────────────────────────────┼────────────────────────────────────────┐
-         ▼                                              ▼                                        ▼
-   Live Captions                                Silence Detection                        Audio Level Meter
-(Zipformer 20M Streaming)                    (Silero VAD v4 / Energy)                       (Floating Dock)
-                                                        │
-                                                        ▼
-                                           Accuracy Speech Recognition
-                                       (Whisper / FastConformer / Parakeet)
-                                                        │
-                                                        ▼
-                                            Text Normalization & Rules
-                                        (Punctuation / Dictionary Hotwords)
-                                                        │
-                                                        ▼
-                                           Optional AI Polish / Snippet
-                                                        │
-                                                        ▼
-                                            Synthetic Input Injection
-                                          (uinput / SendInput / CGEvent)
-```
+| Model | Download | Used for |
+| :--- | :---: | :--- |
+| Zipformer EN 20M | ~29 MB | Live captions in the dock (English). |
+| Silero VAD v4 | ~0.6 MB | Detecting when you start and stop speaking. |
+| Zipformer 3.3M (KWS) | ~16 MB | Wake phrases in hands-free mode. |
+
+### GPU acceleration
+
+The standard installers run models on the CPU, which is fast enough for the default model on any recent machine. For the larger models, the **CUDA installers** (`_amd64-cuda.deb` for Linux, `_x64-cuda-setup.exe` for Windows) run them on an NVIDIA GPU:
+
+1. Install the NVIDIA driver, the CUDA 12 runtime and cuDNN 9.
+2. Install the `-cuda` package from the [latest release](https://github.com/Muhammad-Waleed381/OpenDictate/releases/latest).
+3. Leave **Settings → GPU acceleration** on **Auto**, or pick **CUDA**.
+
+The Models tab shows `GPU: cuda` while a model runs on the GPU. If the GPU can't be used, the app falls back to the CPU. Details are in [docs/GPU.md](docs/GPU.md).
 
 ---
 
-## 🛠️ Building From Source
+## Platform notes
 
-### Prerequisites
-- **Node.js 20+** and **npm**
-- **Rust stable** (with Cargo)
-- **CMake** and C++ compiler (for native `sherpa-onnx` bindings)
+| | Windows | macOS | Linux |
+| :--- | :--- | :--- | :--- |
+| **Status** | Supported | Supported | Supported |
+| **Typing into apps** | Clipboard + Ctrl+V | Clipboard + ⌘V | Clipboard + Ctrl+V (Ctrl+Shift+V in terminal mode) |
+| **Start with system** | Registry `Run` key | LaunchAgent | XDG autostart entry |
+| **Packages** | `.exe` (NSIS), `.msi` | Universal `.dmg` | `.AppImage`, `.deb`, `.rpm` |
 
-### Development Setup
+**Linux**
+- To send keystrokes, OpenDictate tries a virtual keyboard on `/dev/uinput` first, then `ydotool`, `wtype` and `xdotool`. At least one of them has to work on your system. See the [troubleshooting guide](https://opendictate.vercel.app/docs#troubleshooting) for `/dev/uinput` access.
+- It copies text with `wl-copy`, `xclip` or `xsel`, whichever is installed.
+- On GNOME the shortcut is registered as a GNOME custom keyboard shortcut, and it toggles dictation.
+- "switch to <app>" uses `wmctrl`, `xdotool`, `swaymsg` or `gtk-launch`.
 
-```bash
-# 1. Clone repository
-git clone https://github.com/Muhammad-Waleed381/OpenDictate.git
-cd OpenDictate
+**macOS**
+- Allow microphone access when asked, and give OpenDictate Accessibility access (System Settings → Privacy & Security → Accessibility) so it can paste into other apps and use double-tap shortcuts.
 
-# 2. Install dependencies
-npm install
+**Windows**
+- "switch to <app>" can only switch to apps that are already open. It doesn't launch them.
+- An `.msi` install can't update itself. Use the `-setup.exe` installer if you want one-click updates.
 
-# 3. Run in development mode
-npm run tauri dev
+---
 
-# 4. Build release binaries
-npm run tauri build
-```
+## Updates
 
-#### Linux System Dependencies (Ubuntu / Debian)
-```bash
-sudo apt update
-sudo apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-                    patchelf libasound2-dev libpulse-dev libudev-dev libgtk-3-dev cmake build-essential
-```
+When a new version is out, OpenDictate shows a prompt. If your copy can update itself, **Update now** downloads the installer for your system, checks it against the SHA-256 checksum published with the GitHub release, installs it and restarts. On Linux `.deb` and `.rpm` installs you'll be asked for your password. The CUDA version always updates to the next CUDA version. If your copy can't update itself, the button opens the download page.
+
+The app checks for updates when it opens and every 12 hours while it runs. You can turn that off under **Settings → Updates**.
 
 ---
 
@@ -207,14 +219,77 @@ OpenDictate is built on strict local-first principles:
 
 ---
 
-## 🤝 Contributing
+## How it works
 
-We welcome contributions from everyone! Whether you are fixing bugs, adding new speech models, improving voice actions, or refining the UI, please check out our [**Contributing Guide (CONTRIBUTING.md)**](CONTRIBUTING.md) to get started with prerequisites, architecture details, and local development.
+```
+Microphone ──► Audio capture (PulseAudio / ALSA on Linux, cpal elsewhere)
+                    │
+     ┌──────────────┼───────────────────────────┐
+     ▼              ▼                           ▼
+Live captions   Speech detection            Wake phrase spotting
+(Zipformer 20M) (Silero VAD, energy gate)   (hands-free mode)
+                    │
+                    ▼
+            Speech recognition
+  (Parakeet, Whisper, FastConformer, Omnilingual, Cohere)
+                    │
+                    ▼
+     Voice commands, snippets, spoken punctuation,
+          dictionary spelling, optional AI polish
+                    │
+                    ▼
+       Clipboard + paste shortcut into the active app
+ (uinput / ydotool / wtype / xdotool on Linux, enigo on Windows and macOS)
+```
+
+The app is a [Tauri 2](https://tauri.app) desktop app: a React and TypeScript interface (`src/`), a Rust backend (`src-tauri/`), and a Rust core for audio, models and text processing (`crates/opendictate-core/`) built on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx).
 
 ---
 
-## 📜 License & Disclaimers
+## Building from source
 
-This project is licensed under the [MIT License](LICENSE) © Muhammad Waleed.
+### Prerequisites
+- **Node.js** and npm (CI uses Node 24)
+- **Rust** stable
+- **CMake** and a C++ compiler, for the native sherpa-onnx bindings
+
+On Ubuntu or Debian, also install:
+
+```bash
+sudo apt update
+sudo apt install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+  libasound2-dev libpulse-dev libudev-dev libgtk-3-dev pkg-config cmake build-essential
+```
+
+### Run and build
+
+```bash
+git clone https://github.com/Muhammad-Waleed381/OpenDictate.git
+cd OpenDictate
+npm install
+
+npm run tauri dev     # run the app in development mode
+npm test              # frontend tests (Vitest)
+cargo test --workspace  # Rust tests
+npm run tauri build   # build installers for your platform
+```
+
+Release installers for all three platforms are built by GitHub Actions when a `v*` tag is pushed.
+
+To refresh the screenshots in this README, build the frontend, serve it with `npx vite preview --port 4173`, and run `node scripts/take-screenshots.mjs`. The script uses a mocked backend, so no install is needed.
+
+---
+
+## Contributing
+
+Bug fixes, new models, voice commands and UI work are all welcome. Read the [contributing guide](CONTRIBUTING.md) to get started.
+
+---
+
+## License
+
+[MIT](LICENSE) © Muhammad Waleed.
+
+Model names belong to their respective owners (NVIDIA, OpenAI, Meta, Cohere, Silero, Next-gen Kaldi). Each model is distributed under its own license.
 
 > *All product names, logos, and brands mentioned (such as Wispr Flow, Superwhisper, Apple Dictation, Windows Speech Recognition) are property of their respective owners. All company, product, and service names used in this document are for identification and comparative purposes only. Use of these names does not imply any endorsement or affiliation.*
