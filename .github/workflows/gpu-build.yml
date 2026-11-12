@@ -1,37 +1,40 @@
-name: GPU build (experimental)
+name: CUDA build (dry run)
 
-# Builds an NVIDIA-CUDA-flavored Linux artifact by linking sherpa-onnx
-# against prebuilt GPU-enabled shared libraries instead of the default
-# static CPU build. Dispatch-only and fully parameterized: it never runs
-# as part of tagged releases until acceleration is verified on real
-# hardware.
-#
-# You must supply `libs_url`: a tar.bz2 (or tar.gz/zip) of a sherpa-onnx
-# shared-library build compiled WITH `-DSHERPA_ONNX_ENABLE_CUDA=ON`,
-# matching the version pinned in crates/opendictate-core/Cargo.toml
-# (shared `.so` libraries are required).
-# k2-fsa publishes such archives alongside their releases (names like
-# `sherpa-onnx-v<ver>-linux-x64-shared-cuda-lib.tar.bz2`). The extracted
-# directory must contain `libsherpa-onnx-c-api.so` / `libonnxruntime.so`.
+# Builds the same CUDA installers as the Release workflow (Linux .deb and
+# Windows NSIS setup, linked against the CUDA build of sherpa-onnx) without
+# publishing anything. Run it on a branch to check the CUDA packaging before
+# tagging a release; the installers are attached to the run as artifacts.
 
 on:
   workflow_dispatch:
-    inputs:
-      libs_url:
-        description: "URL of a CUDA-enabled sherpa-onnx shared-lib archive"
-        required: true
 
 jobs:
-  cuda-linux:
-    runs-on: ubuntu-22.04
+  cuda:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            bundles: deb
+            artifact: opendictate-linux-cuda
+            path: target/release/bundle/deb/*.deb
+          - platform: windows-latest
+            bundles: nsis
+            artifact: opendictate-windows-cuda
+            path: target/release/bundle/nsis/*-setup.exe
+
+    name: cuda (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Linux deps
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libasound2-dev libpulse-dev cmake bzip2
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf libasound2-dev libpulse-dev libudev-dev libgtk-3-dev pkg-config cmake \
+            build-essential bzip2
 
       - uses: actions/setup-node@v4
         with:
@@ -40,35 +43,24 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Download GPU libraries
-        env:
-          GPU_LIBS_URL: ${{ inputs.libs_url }}
-        run: |
-          mkdir -p "$HOME/gpu-libs"
-          curl -fL --connect-timeout 30 --max-time 1800 "$GPU_LIBS_URL" -o /tmp/libs.archive
-          python3 scripts/extract-gpu-libs.py /tmp/libs.archive "$HOME/gpu-libs"
-          find "$HOME/gpu-libs" -name "*.so" | sed -n '1,20p'
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: cuda
 
-      - name: Build with CUDA libraries
-        run: |
-          GPU_API_LIB=$(find "$HOME/gpu-libs" -name 'libsherpa-onnx-c-api.so' -print -quit)
-          test -n "$GPU_API_LIB" || { echo "shared sherpa-onnx C API library missing" >&2; exit 1; }
-          export SHERPA_ONNX_LIB_DIR="$(dirname "$GPU_API_LIB")"
-          export OPENDICTATE_LINUX_RPATH=/usr/lib/opendictate
-          # RUNPATH on the app only resolves direct dependencies. Each bundled
-          # library must also find its own adjacent runtime dependencies.
-          while IFS= read -r -d '' GPU_LIBRARY; do
-            patchelf --set-rpath '$ORIGIN' "$GPU_LIBRARY"
-          done < <(find "$SHERPA_ONNX_LIB_DIR" -maxdepth 1 -type f -name '*.so*' -print0)
-          python3 scripts/inject-linux-libs.py
-          npm ci
-          npm run tauri -- build --bundles deb --features gpu-shared -- --no-default-features
+      - run: npm ci
+
+      - name: Stage the CUDA libraries
+        uses: ./.github/actions/cuda-libs
+
+      - name: Build
         shell: bash
+        run: npm run tauri -- build --bundles ${{ matrix.bundles }} --features gpu-shared -- --no-default-features
 
-      - name: Upload artifact
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: opendictate-linux-cuda
+          name: ${{ matrix.artifact }}
           if-no-files-found: error
-          path: |
-            target/release/bundle/deb/*.deb
+          path: ${{ matrix.path }}

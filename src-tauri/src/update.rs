@@ -75,17 +75,28 @@ enum Method {
 }
 
 /// Picks the release asset that replaces an install made with `method`.
-fn pick_asset<'a>(method: &Method, arch: &str, assets: &'a [Asset]) -> Option<&'a Asset> {
+///
+/// `cuda` is true in the CUDA build. It only ships as the Linux `.deb` and
+/// the Windows setup, named with a `-cuda` suffix, and each build only ever
+/// updates to its own kind so a GPU install never drops to the CPU build.
+fn pick_asset<'a>(
+    method: &Method,
+    arch: &str,
+    cuda: bool,
+    assets: &'a [Asset],
+) -> Option<&'a Asset> {
     let find = |matches: &dyn Fn(&str) -> bool| assets.iter().find(|a| matches(&a.name));
-    match (method, arch) {
-        (Method::WindowsSetup, "x86_64") => find(&|n| n.ends_with("_x64-setup.exe")),
+    match (method, arch, cuda) {
+        (Method::WindowsSetup, "x86_64", false) => find(&|n| n.ends_with("_x64-setup.exe")),
+        (Method::WindowsSetup, "x86_64", true) => find(&|n| n.ends_with("_x64-cuda-setup.exe")),
         // The macOS archive is universal: one build for Intel and Apple silicon.
-        (Method::MacBundle(_), _) => find(&|n| n.ends_with(".app.tar.gz")),
-        (Method::AppImage(_), "x86_64") => {
+        (Method::MacBundle(_), _, false) => find(&|n| n.ends_with(".app.tar.gz")),
+        (Method::AppImage(_), "x86_64", false) => {
             find(&|n| n.ends_with(".AppImage") && n.contains("amd64"))
         }
-        (Method::Deb, "x86_64") => find(&|n| n.ends_with("_amd64.deb")),
-        (Method::Rpm, "x86_64") => find(&|n| n.ends_with(".x86_64.rpm")),
+        (Method::Deb, "x86_64", false) => find(&|n| n.ends_with("_amd64.deb")),
+        (Method::Deb, "x86_64", true) => find(&|n| n.ends_with("_amd64-cuda.deb")),
+        (Method::Rpm, "x86_64", false) => find(&|n| n.ends_with(".x86_64.rpm")),
         _ => None,
     }
 }
@@ -184,7 +195,12 @@ fn fetch_latest_release() -> Result<LatestRelease, String> {
 /// The asset this install would use, only when its download can be checked.
 fn installable(release: &LatestRelease) -> Option<(Method, &Asset, String)> {
     let method = detect_method()?;
-    let asset = pick_asset(&method, std::env::consts::ARCH, &release.assets)?;
+    let asset = pick_asset(
+        &method,
+        std::env::consts::ARCH,
+        crate::state::GPU_BUILD,
+        &release.assets,
+    )?;
     if !asset.browser_download_url.starts_with(DOWNLOAD_PREFIX) {
         return None;
     }
@@ -512,6 +528,8 @@ mod tests {
             "OpenDictate_0.4.0_x64-setup.exe",
             "OpenDictate_0.4.0_x64_en-US.msi",
             "OpenDictate_universal.app.tar.gz",
+            "OpenDictate_0.4.0_amd64-cuda.deb",
+            "OpenDictate_0.4.0_x64-cuda-setup.exe",
         ]
         .map(asset)
         .to_vec()
@@ -521,7 +539,7 @@ mod tests {
     fn each_install_method_gets_its_own_package() {
         let assets = release_assets();
         let name = |method: Method, arch: &str| {
-            pick_asset(&method, arch, &assets).map(|a| a.name.clone())
+            pick_asset(&method, arch, false, &assets).map(|a| a.name.clone())
         };
         assert_eq!(
             name(Method::WindowsSetup, "x86_64").as_deref(),
@@ -549,12 +567,32 @@ mod tests {
     }
 
     #[test]
+    fn the_cuda_build_only_updates_to_cuda_packages() {
+        let assets = release_assets();
+        let name = |method: Method| {
+            pick_asset(&method, "x86_64", true, &assets).map(|a| a.name.clone())
+        };
+        assert_eq!(
+            name(Method::Deb).as_deref(),
+            Some("OpenDictate_0.4.0_amd64-cuda.deb")
+        );
+        assert_eq!(
+            name(Method::WindowsSetup).as_deref(),
+            Some("OpenDictate_0.4.0_x64-cuda-setup.exe")
+        );
+        // No CUDA build exists for these, so the app falls back to the page.
+        assert!(name(Method::Rpm).is_none());
+        assert!(name(Method::AppImage("/a.AppImage".into())).is_none());
+        assert!(name(Method::MacBundle("/Applications/OpenDictate.app".into())).is_none());
+    }
+
+    #[test]
     fn architectures_without_a_build_get_no_package() {
         let assets = release_assets();
         for method in [Method::WindowsSetup, Method::Deb, Method::Rpm] {
-            assert!(pick_asset(&method, "aarch64", &assets).is_none());
+            assert!(pick_asset(&method, "aarch64", false, &assets).is_none());
         }
-        assert!(pick_asset(&Method::Deb, "x86_64", &[]).is_none());
+        assert!(pick_asset(&Method::Deb, "x86_64", false, &[]).is_none());
     }
 
     #[test]

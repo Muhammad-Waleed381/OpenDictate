@@ -1,51 +1,67 @@
-# GPU acceleration (experimental)
+# GPU acceleration
 
-OpenDictate runs speech models on CPU by default. There is early,
-opt-in support for GPU execution providers via ONNX Runtime.
+OpenDictate ships in two builds:
+
+- **Standard build** (every platform): speech models run on the CPU. It links
+  the static CPU build of sherpa-onnx and cannot use a GPU.
+- **CUDA build** (Linux `.deb`, Windows setup): links the CUDA 12 / cuDNN 9
+  build of sherpa-onnx, so models can run on an NVIDIA GPU. Release assets end
+  in `_amd64-cuda.deb` and `_x64-cuda-setup.exe`.
+
+The CUDA build bundles sherpa-onnx and ONNX Runtime with its CUDA provider.
+The machine still needs the NVIDIA driver, the CUDA 12 runtime and cuDNN 9
+installed; without them it falls back to the CPU.
+
+There is no macOS GPU build. CoreML measured no speed-up (see below), and
+Apple Silicon CPUs are already fast with these models.
 
 ## How it works
 
-- **Settings → GPU acceleration** (`settings.gpu`):
-  - `off` *(default)* — CPU only, exactly as always
-  - `auto` — attempts CUDA on Linux/Windows; macOS stays CPU until CoreML
-    is validated
-  - `cuda` / `coreml` — explicit requests
-- Engine construction **always falls back to CPU** when a GPU provider
-  cannot be created (no drivers, missing libraries, unsupported model).
-  A GPU build on a machine without an NVIDIA GPU behaves identically to
-  the standard build.
-- The Models page shows a `GPU ✓ <provider>` chip whenever an engine is
-  actually running off-CPU.
+- **Settings → GPU acceleration** (`settings.gpu`), shown in the CUDA build:
+  - `auto` *(default in the CUDA build)*: CUDA when an NVIDIA GPU is found
+  - `cuda`: explicit request
+  - `off` *(default in the standard build)*: CPU only
+- The standard build shows a link to the CUDA download instead of the setting
+  (on Windows and Linux; macOS shows nothing).
+- Engine construction **always falls back to CPU** when a GPU provider cannot
+  be created (no drivers, missing libraries, unsupported model).
+- The Models page shows a `GPU: <provider>` chip whenever an engine is actually
+  running off-CPU.
 - Changing the setting drops cached engines, so it applies from the next
-  dictation — no restart needed. The tiny live-caption zipformer stays on
-  CPU deliberately.
+  dictation, with no restart. The live-caption zipformer stays on CPU.
+- The in-app updater keeps each build on its own kind: the CUDA build only
+  installs `-cuda` assets, and the standard build never does.
 
-## Building a GPU installer
+## How the CUDA build is made
 
-Standard release installers use static CPU libraries. The dispatch-only
-`.github/workflows/gpu-build.yml` builds an experimental Linux `.deb` from a
-CUDA-enabled **shared** sherpa-onnx archive matching the pinned crate version.
-Provide its URL as the workflow's `libs_url` input. The workflow accepts zip,
-tar.gz and tar.bz2 content, packages runtime `.so` libraries under
-`/usr/lib/opendictate`, and builds with the matching runtime search path.
+The Release workflow builds it on every `v*` tag, next to the standard
+installers. `.github/actions/cuda-libs` downloads the sherpa-onnx CUDA archive
+that matches the `sherpa-onnx-sys` version in `Cargo.lock`, points
+`SHERPA_ONNX_LIB_DIR` at it, and adds the runtime libraries to the installer:
 
-Locally, from the repository root:
+- Linux: `scripts/inject-linux-libs.py` adds the `.so` files to the `.deb`
+  under `/usr/lib/opendictate`, and `src-tauri/build.rs` gives the binary a
+  matching RUNPATH (from `OPENDICTATE_LINUX_RPATH`).
+- Windows: `scripts/inject-windows-libs.py` adds the DLLs to
+  `bundle.resources`, which installs them next to the executable.
+
+The TensorRT provider and the C++ API libraries are left out, since the app
+never loads them. To check the packaging without publishing, run the
+**CUDA build (dry run)** workflow (`gpu-build.yml`) on a branch; it attaches
+both installers to the run.
+
+Locally on Linux, with the CUDA archive extracted:
 
 ```bash
-export SHERPA_ONNX_LIB_DIR=/path/to/extracted/shared-cuda-libs
+export SHERPA_ONNX_LIB_DIR=/path/to/extracted/lib
 export OPENDICTATE_LINUX_RPATH=/usr/lib/opendictate
 python3 scripts/inject-linux-libs.py
 npm run tauri -- build --bundles deb --features gpu-shared -- --no-default-features
 ```
 
-`inject-linux-libs.py` updates `src-tauri/tauri.conf.json` for that local package;
-review that generated mapping before committing configuration changes. Keep
-CPU and shared features mutually exclusive. The explicit `--no-default-features`
-argument is passed to Cargo, disabling the app's default `cpu-static` feature.
-
-GPU archives can be large and must include the dependent runtime libraries.
-Actual acceleration and installer startup still require validation on matching
-GPU hardware; a successful package build does not establish either result.
+The inject scripts edit `src-tauri/tauri.conf.json`; don't commit that change.
+Keep the CPU and shared features mutually exclusive: `--no-default-features`
+is passed to Cargo to turn off the default `cpu-static` feature.
 
 ## Status / verification matrix
 
